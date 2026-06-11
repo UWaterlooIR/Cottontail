@@ -1,29 +1,39 @@
 ---
 name: project-cottontail-overview
-description: What Cottontail is, where the active work is, and the authoritative docs
+description: What Cottontail is, how to build/test it, and the authoritative docs for this fork
 metadata:
   type: project
 ---
 
-Cottontail is the C++20 reference implementation of **Annotative Indexing** (Charles
-L. A. Clarke, IRRJ 2025; paper at docs/Annotative-Indexing-IRRJ-Clarke-2025.md).
-Bazel build (deps: nlohmann_json, googletest, rules_cc — Boost dependency from the
-paper era is gone). Moving from research project toward a usable library + Python
-wrapper; "no rush, want a good release."
+Cottontail is the C++20 reference implementation of **Annotative Indexing** (paper:
+docs/Annotative-Indexing-IRRJ-Clarke-2025.{md,pdf}). This is a **fork** of Charles
+L. A. Clarke's repo, now owned by the user (see [[user-mark-smucker]]). Goal: get
+*this* version building/tested/running cleanly — **not** continuing Clarke's
+in-progress Fiver/Hazel `PostingIterator` integration.
 
-Core model: annotation = <feature,(p,q),value>; query via τ/ρ hoppers (code:
-Hopper::tau/rho + backwards uat/ohr); GCL operators in src/gcl.h mirror paper Figure 2.
-Warren groups components; implementations: SimpleWarren (static burrow), Fiver (mutable
-transaction shard = paper's "update Warren"), Bigwig (dynamic, Fiver shards + Fluffle
-state), Hazel (immutable single-file shard). null_feature=0 means erased/unindexed.
+**Authoritative doc is `/CLAUDE.md`** (build, test, contribute, architecture). The
+top-level `AGENTS.md` is just a pointer to it. Clarke's old agent material
+(his `AGENTS.md`, the whole `ai/` dir: architecture/plan/log/notes/hazel-* /
+improvements) was moved to `archive/` and is **non-authoritative** — do not treat
+`archive/ai/plan.md` as a task list. The one kept technical reference is the Hazel
+on-disk format spec at `docs/hazel-format.md`.
 
-Authoritative/agent docs live in ai/: architecture.md (do NOT edit without permission),
-plan.md (next coding step — often a discussion gate, not authorization), notes.md,
-log.md, hazel*.md. AGENTS.md rule: agents run compile/build checks only (make building
-/ bazel build //...) — no tests, ranking, evals, or benchmarks unless explicitly asked.
+Build/test (verified 2026-06-11, bazel 9.1.1 via bazelisk + gcc 13.3;
+`.bazelversion` pins 9.1.1; deps nlohmann_json/googletest/rules_cc via MODULE.bazel;
+system zlib `-lz` + pthreads):
+- Build (excludes Boost targets): `bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example`
+- Test (green): `bazel test -c dbg //test:tests //test:hazel_test`
+- **Boost wrinkle:** a bare `//...` / `make building` fails only on `apps/walk.{cc,h}`
+  (last `boost/filesystem` use) + its 3 dependents. Fix = port walk to
+  std::filesystem (preferred) or install libboost-filesystem-dev.
 
-Active work (as of 2026-06): a PostingIterator-style raw posting-list path over both
-SimplePosting (Fiver) and CacheRecord (Hazel), wired into Bigwig Fiver-only first,
-before Hazel joins the live mixed-shard query path. This is the paper's stated
-near-term goal of optimizing low-level Hopper ops to close the BM25 gap with Lucene.
-See [[user-mark-smucker]].
+Core model: annotation `<feature,(p,q),value>`; query via τ/ρ hoppers
+(Hopper::tau/rho + reverse uat/ohr); GCL operators in src/gcl.h. Warren groups
+components; implementations: SimpleWarren (static burrow), Fiver (mutable txn
+shard), Bigwig (dynamic, Fiver shards + Fluffle), Hazel (immutable single-file
+shard). null_feature=0 = erased/unindexed. meadowlark/ = higher-level "meadow"
+layer; ranking in src/ranking.cc + src/ranker.cc.
+
+Workflow: **feature branches + PRs, never commit directly to main** (the user
+endorsed this; an earlier memory/.claude commit went to main before the rule was
+set — fine, going forward we branch). See [[memory-location]] for where memory lives.
