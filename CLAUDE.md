@@ -7,6 +7,56 @@ authoritative — do not treat them as a task list. The immediate goal of this f
 is to get *this* version building, tested, and running cleanly; it is **not**
 continuing Clarke's in-progress Fiver/Hazel integration work.
 
+## Boundaries — read this first (hard rule)
+
+Agents (Claude or any other) must operate **only within this repository
+directory**. Do not read, list, write, execute against, or otherwise access
+anything outside the repo root **without explicit, specific permission from the
+user for that exact action**.
+
+Outside the repo includes — but is not limited to:
+
+- the home directory and dotfiles (`~`, `~/.ssh`, `~/.config`, `~/.local`,
+  `~/.aws`, shell history, etc.);
+- **credentials of any kind** — SSH keys, GPG keys, API tokens, password/credential
+  stores, browser or cloud auth files. Never inspect, copy, or print these. Ever.
+- other repositories, other users' files, and system files.
+
+This also covers actions that reach outside the repo even if launched from inside
+it: installing software, modifying global/user config, pushing to remotes, or
+calling external network services. Each such action needs its own explicit
+go-ahead.
+
+Rules:
+
+1. If something outside the repo seems necessary, **stop and ask first**, stating
+   exactly what you want to access and why. Wait for an explicit yes.
+2. Permission for one outside action does **not** generalize to others. Ask again
+   for the next one.
+3. When in doubt, treat it as outside and ask.
+
+(Granted exceptions so far this project: installing bazelisk to `~/.local/bin` and
+using the `gh` CLI — both explicitly authorized by the user. Nothing else.)
+
+## Working agreements with Claude
+
+**An agent must hold an explicitly approved plan before making any change to the
+repository.**
+
+Rules:
+
+1. Reading, exploring, and summarizing never require a plan or approval.
+2. "Familiarize yourself with X", "look at Y", "what does Z do?" — these are
+   exploration tasks. They do not authorize any edits, commits, or pushes.
+3. Before creating, editing, moving, or deleting any file — or running any commit
+   or push — the agent must state its plan explicitly and wait for the human to
+   approve it.
+4. Once a plan is approved, the agent may execute it in full without asking about
+   each individual step.
+5. After completing work, the agent flags anything noticed during execution that
+   was not part of the approved plan — but does not act on it without a new
+   approval.
+
 ## What this is
 
 Cottontail is the C++ reference implementation of **Annotative Indexing**, a
