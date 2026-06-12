@@ -451,3 +451,110 @@ build above:
 - Decide `--gcl` default ordering (document order vs. always `ssr`-ranked) and document it.
 - Confirm large-`--buffer` behavior on the target host (open-file-descriptor count at the
   final merge scales with corpus/buffer; raise the buffer to keep it bounded).
+
+---
+
+## 11. Testing (required — keep the suite green)
+
+Both programs must ship with committed regression tests. The project uses **googletest**
+(`test/BUILD`, `src/cottontail.h`); follow these conventions exactly.
+
+### 11.1 Make it testable: thin CLIs over a small library
+
+The single most important rule. Put the real work in a small `cc_library` (e.g.
+`apps/jsonl_core.{h,cc}`) exposing functions like:
+
+```cpp
+bool jsonl_index(const IndexOptions &opts, IndexSummary *summary, std::string *error);
+std::vector<Hit> jsonl_query(Warren &warren, const QuerySpec &spec, std::string *error);
+```
+
+`main()` in each CLI is then a thin argv/JSON wrapper. Tests link the library and call
+these functions directly — fast, deterministic, no subprocess. Do **not** bury the logic
+in `main()`.
+
+### 11.2 Where tests live and how they join the build
+
+- The aggregate target `//test:tests` **globs `test/**/*.cc`**, so adding `test/jsonl.cc`
+  is automatically included — no BUILD edit needed for the test source itself.
+- Prefer a **dedicated `cc_test`** target `//test:jsonl_test` (mirror `//test:hazel_test`
+  in `test/BUILD`: its own `srcs`, `data`, `linkopts = ["-lz","-pthread"]`,
+  deps `//src:cottontail` + `@googletest//:gtest_main`). Dedicated targets isolate
+  failures and declare their own fixtures.
+- Commit the new suite into the green gate: `bazel test -c dbg //test:tests
+  //test:hazel_test //test:jsonl_test` must pass before any PR (see §Contributing in
+  `/CLAUDE.md`).
+
+> **Gotcha — tests must be C++.** `.gitignore` ignores `*.sh` and `*.py` repo-wide, so a
+> shell/Python CLI test will **not** be committed and cannot serve as the regression net.
+> This is why §11.1 (library factoring) is mandatory: test the library in C++, not the
+> binary via a script.
+
+### 11.3 Fixtures (tiny, committed under `test/jsonl/`, listed in the target's `data`)
+
+- `sample.jsonl` — a few rows with known `docid`/`contents` **and** extra fields
+  (`id`, `mode`, …) present, so the suite can prove they are ignored.
+- `sample.jsonl.gz` — the same rows gzip'd, to verify the decompression path is identical.
+- `malformed.jsonl` — a blank line, a non-JSON line, and a line missing `contents`.
+
+Build into a temporary `Working::mkdir` directory; reference fixtures by relative path
+(`"test/jsonl/sample.jsonl"`), which Bazel resolves via runfiles.
+
+### 11.4 Assertion matrix (the regressions to lock down)
+
+1. **Build accounting** — exact `rows_indexed` / `rows_skipped`; burrow opens as
+   `SimpleWarren`.
+2. **Retrieval + docid** — an obvious query returns the expected row; its `docid`
+   (recovered via the `:docno` hopper) is correct.
+3. **Field projection (negative test)** — a token appearing **only** in an ignored field
+   (e.g. a unique `id`/`mode` value) returns **zero** hits. This proves only
+   `contents`+`docid` are indexed.
+4. **gzip == plaintext** — `sample.jsonl` and `sample.jsonl.gz` give identical results.
+5. **Skip / strict** — malformed/missing-field lines are skipped and counted (exit 0);
+   `--strict` makes them fatal.
+6. **GCL semantics** — `(>> :item (^ a b))` and `(... a b)` match exactly the expected
+   docs on the fixture; assert counts.
+7. **`--explain`** — per-term `df` matches the fixture; `parsed_ok:false` + error message
+   on a malformed expression.
+8. **JSON output contract** — parse stdout and assert the §4.4 field names/shape (a
+   renamed field is a breaking change worth catching).
+9. **Empty results** — a no-match query yields an empty array and exit `0`, not an error.
+10. **Exit codes & error shape** — usage error → exit `1`; runtime error (missing/corrupt
+    burrow, malformed `--gcl`) → exit `2` with a single stderr `{"error","where"}` object;
+    success (including empty results) → exit `0`. (Contract from §2.)
+11. **Batch mode** — `--batch` preserves input order, emits one object per input line with
+    an `input_index`, and a malformed input line yields a per-line `{"input_index","error"}`
+    object **without aborting** the batch. (Contract from §4.6.)
+12. **`--full-text` vs snippet** — default returns the best-passage snippet (≤
+    `--snippet-chars`) with `text: null`; `--full-text` returns the full row body. (§4.3.)
+
+Items 1–9 are library-level (call the §11.1 functions directly). Items 10–12 are
+process-boundary behaviors — see §11.6.
+
+### 11.5 Determinism caveats (so tests don't flake)
+
+- `SimpleBuilder` uses worker threads for sort/flush, but the final merged index is
+  deterministic — the index itself is safe to assert on.
+- The flaky spot is **ranking ties**: rows with equal cover-density scores may swap order.
+  Assert on **set membership / presence of expected docids**, or use a fixture where the
+  top results have **distinct** scores — do not assert an exact order across tied results.
+- The gzip-equivalence test depends on `zcat` being available to `inhale()`. Keep it in
+  its **own** test case so a sandbox lacking `zcat` can't sink the rest of the suite.
+
+### 11.6 One CLI end-to-end test (the process boundary)
+
+The §11.1 library tests cover logic, but a few behaviors exist only at the process
+boundary — exit codes, the stderr `{"error","where"}` object, stdout JSON framing, and
+`--batch` JSONL (assertion-matrix items 10–12). Cover them with **one** small C++
+`cc_test` that runs the **built binary**:
+
+- Declare the binary as a Bazel **`data`** dependency of the test target (e.g.
+  `data = ["//apps:cottontail-jsonl-query"]`) and locate it via runfiles.
+- Invoke it with `popen`/`fork+exec`, capturing stdout, stderr, and the exit status;
+  parse the captured streams as JSON and assert their shape.
+- Keep it minimal: one happy path, one usage error (exit `1`), one runtime error
+  (exit `2`, with the stderr error object), and one `--batch` case (order preserved,
+  one malformed line isolated).
+
+This is the **only committable way** to test the CLI surface, because `.sh`/`.py`
+harnesses are gitignored (§11.2). Everything else stays at the library level.
