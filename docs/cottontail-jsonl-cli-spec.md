@@ -428,19 +428,30 @@ reading only the query terms' postings on demand (no collection scan); a working
 
 ## 9. Measured behavior (sets expectations for full scale)
 
-On the ClimbMix corpus (`/share/corpora/climbmix-400b-corpus-jsonl/`, gzip'd JSONL shards,
-~86k rows / ~96 MB compressed each; full corpus ~6,500 shards), with the no-precompute
-build above:
+Measured on the ClimbMix corpus (`/share/corpora/climbmix-400b-corpus-jsonl/`, gzip'd
+JSONL shards, ~86k rows / ~96 MB compressed each; full corpus ~6,500 shards), with the
+no-precompute build above. The headline numbers are from a **100-shard run (8,460,288
+documents)**:
 
-- **Build:** ~32 s/shard, external-memory, ~2 GB RSS at default buffer; burrow ~188 MB/shard.
-- **Query:** single-to-low-double-digit **milliseconds** (e.g. `icover` ~3 ms, `ssr`
-  ~0 ms, containment count ~20 ms) — and stays in that range as the index grows, because
-  only query-term postings are read.
-- **Extrapolation to ~6,500 shards:** build ~58 h (one-time), disk ~1.2 TB, queries still
-  ~ms, ~560 M documents. **Feasible as a structured/ranked grep tool.**
-- For contrast, adding the (out-of-scope) BM25 `tf_idf_annotations` precompute cost ~164
-  s/shard (~12 days extrapolated) and more than doubled index size — which is why §0.2
-  excludes it.
+- **Build:** ~27 s/shard (sub-linear with a large `--buffer`; ~32 s/shard at default).
+  External-memory: peak RSS tracks the **buffer size, not the corpus** (a 1 Gi-record
+  buffer used ~34 GB regardless of doc count). Burrow ~175 MB/shard. 100 shards: ~44 min,
+  17.6 GB.
+- **Query latency scales with the query terms' document frequency, not corpus size** —
+  the cover-density rankers advance the full posting lists of the query terms.
+  Measured `icover` for two *common* terms: ~3 ms at 257 K docs (df ~2 K) → **71 ms at
+  8.46 M docs** (df ~65 K–87 K). At 8.46 M docs: `ssr` ~9 ms, containment count ~31 ms,
+  GCL proximity ~25 ms, `df` lookups instant.
+- **Set expectations accordingly:** **precise queries — rare/specific terms, phrases,
+  structured proximity/containment — stay fast (ms) at any scale** (few postings). A
+  **broad common-term *ranked* query is second-scale at the full ~560 M-doc corpus**
+  (extrapolating the df growth). `--top-k` pruning helps but does not change the trend;
+  WAND-style top-k skipping would, but it needs the BM25 stats this project excludes.
+  This is the right trade for a precise "grep" tool; flag it in `--help`.
+- **Extrapolation to ~6,500 shards:** build ~48 h (one-time), disk ~1.1 TB, ~560 M
+  documents, RAM bounded by `--buffer`. **Feasible.**
+- For contrast, the (out-of-scope) BM25 `tf_idf_annotations` precompute cost ~164 s/shard
+  (~12 days extrapolated) and more than doubled index size — which is why §0.2 excludes it.
 
 ---
 

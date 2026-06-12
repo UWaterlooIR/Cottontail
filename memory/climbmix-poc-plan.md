@@ -70,6 +70,18 @@ opt-in `--bm25`. Verified on 3 shards (257k rows): build 97 s, all queries
 GCL operator tokens: `^`=ALL_OF, `+`=ONE_OF, `...`/`<>`=FOLLOWED_BY,
 `<<`=CONTAINED_IN, `>>`=CONTAINING. Container tag `:item`, id tag `:docno`.
 
-**Verdict so far:** as a structured/ranked grep tool, SimpleWarren scales to 6500
-shards (build ~58 h, queries stay ms, disk ~1.2 TB). A 100-shard no-stats run is
-running for the full-scale confirmation (`Scrapheap/poc-100-nostats.log`).
+**100-shard no-stats result (2026-06-12):** 8,460,288 rows, build 2,662 s
+(~27 s/shard, sub-linear — large buffer helped), burrow 17.6 GB (~175 MB/shard),
+peak RSS 34 GB (= the 1 G-record buffer, NOT corpus-driven → confirms
+external-memory). Queries at 8.46 M docs: icover 71 ms, ssr 9 ms, containment
+count 31 ms, GCL proximity 25 ms; df instant.
+
+**Verdict:** build + disk scale fine to 6500 shards (~48 h build, ~1.1 TB).
+**Query nuance (corrects earlier "stays ms"):** cover-density rankers (icover/ssr)
+touch ~all postings of the query terms, so latency scales with query-term **df**,
+not corpus size directly. icover went 3 ms (257 K docs) → 71 ms (8.46 M docs) for
+common terms. Extrapolated to 560 M docs, common-term icover is ~seconds; rare/
+specific/phrase queries (the agent's typical precise grep) stay fast. Acceptable
+for a grep tool, but worth validating; if common-term ranked latency matters,
+that's the optimization target (depth pruning already helps; WAND-style would
+need the BM25 stats we dropped).
