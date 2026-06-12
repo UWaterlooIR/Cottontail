@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{ echo \"# Project memory (in-repo). Index from memory/MEMORY.md — read the linked files for details:\"; echo; cat \"${CLAUDE_PROJECT_DIR:-.}/memory/MEMORY.md\"; } 2>/dev/null",
+            "statusMessage": "Loading in-repo project memory"
+          }
+        ]
+      }
+    ]
+  }
+}

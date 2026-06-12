@@ -1,0 +1,4 @@
+{"id":"IGNORE_1","docid":"doc-001","contents":"the quick brown fox jumps over the lazy dog","mode":"a","row_number":1}
+{"id":"zzqueryonly","docid":"doc-002","contents":"a quick red fox runs very fast","source_file":"f.jsonl"}
+{"docid":"doc-003","contents":"the lazy dog sleeps all day long","mode":"b"}
+{"docid":"doc-004","contents":"elephants disappeared from the middle east long ago"}

@@ -507,3 +507,51 @@ cc_binary(
       "-pthread",
     ],
 )
+
+cc_binary(
+    name = "climbmix-poc",
+    srcs = [
+        "climbmix-poc.cc",
+    ],
+    deps = [
+        "//src:cottontail",
+    ],
+)
+
+cc_library(
+    name = "jsonl_core",
+    srcs = [
+        "jsonl_core.cc",
+    ],
+    hdrs = [
+        "jsonl_core.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//src:cottontail",
+    ],
+)
+
+cc_binary(
+    name = "cottontail-jsonl-index",
+    srcs = [
+        "cottontail-jsonl-index.cc",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":jsonl_core",
+        "//src:cottontail",
+    ],
+)
+
+cc_binary(
+    name = "cottontail-jsonl-query",
+    srcs = [
+        "cottontail-jsonl-query.cc",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":jsonl_core",
+        "//src:cottontail",
+    ],
+)
