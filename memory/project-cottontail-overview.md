@@ -31,7 +31,7 @@ Core model: annotation `<feature,(p,q),value>`; query via τ/ρ hoppers
 (Hopper::tau/rho + reverse uat/ohr); GCL operators in src/gcl.h. Warren groups
 components; implementations: SimpleWarren (static burrow), Fiver (mutable txn
 shard), Bigwig (dynamic, Fiver shards + Fluffle), Hazel (immutable single-file
-shard). null_feature=0 = erased/unindexed. meadowlark/ = higher-level "meadow"
+shard — **WIP, not ready for use**, see [[hazel-not-ready]]). null_feature=0 = erased/unindexed. meadowlark/ = higher-level "meadow"
 layer; ranking in src/ranking.cc + src/ranker.cc.
 
 Workflow: **feature branches + PRs, never commit directly to main** (the user

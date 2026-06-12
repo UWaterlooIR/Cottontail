@@ -111,7 +111,9 @@ bazel test -c dbg //test:tests //test:hazel_test
 ```
 
 - `//test:tests` — aggregate googletest suite (~40s).
-- `//test:hazel_test` — dedicated Hazel shard regression.
+- `//test:hazel_test` — dedicated Hazel shard regression. **A passing
+  `hazel_test` is a narrow regression check, not a sign Hazel is ready — Hazel is
+  a work in progress and not ready for use (see the Warren table below).**
 
 `test/BUILD` defines the targets. The Makefile's `make testing` runs `bazel test
 ...` (all test targets).
@@ -124,7 +126,8 @@ Real binaries (build then run from `bazel-bin/apps/`):
 - `//apps:rank` — batch TREC-style ranking (BM25); `--statistics`, `--verbose`.
 - `//apps:fluffy` — interactive GCL query shell over a burrow or Hazel shard.
 - `//apps:fiver2hazel` — convert live Fiver shards to immutable Hazel shards
-  (`--convert` / `--merge`).
+  (`--convert` / `--merge`). **Hazel is a work in progress and not ready for use
+  — don't build on this path (see the Warren table below).**
 
 `*.burrow` and `*.meadow` directories are local working indexes and are gitignored.
 
@@ -150,7 +153,7 @@ Warren implementations:
 | `SimpleWarren` | Static flat-file burrow, single-transaction batch update. |
 | `Fiver` | Mutable in-memory transaction shard (an "update Warren"). |
 | `Bigwig` | Dynamic Warren over `Fiver` shards + shared `Fluffle` state. |
-| `Hazel` | Immutable single-file shard built from Fivers (format: `docs/hazel-format.md`). |
+| `Hazel` | Immutable single-file shard built from Fivers (format: `docs/hazel-format.md`). **⚠️ Work in progress — not ready for use** (per Charlie Clarke, 2026-06-12). Don't build features on the Hazel path; prefer `SimpleWarren` or `Bigwig`. |
 
 `meadowlark/` is a higher-level layer (a "meadow" = Bigwig + UTF-8 tokenizer +
 JSON featurizer + zlib/post compression) with pluggable **foragers** (annotation
