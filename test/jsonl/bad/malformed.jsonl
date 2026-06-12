@@ -1,0 +1,5 @@
+{"docid":"m-1","contents":"valid alpha content"}
+
+this line is not valid json at all
+{"docid":"m-2"}
+{"docid":"m-3","contents":"valid beta content"}

@@ -215,13 +215,14 @@ of the process.
 - **`--text "<words>"`** — convenience mode. Words are tokenized with the burrow's
   tokenizer and run through **cover-density ranking** (`icover_ranking(warren, words,
   ":item")` by default). This is the "just retrieve, ranked" path; no operator knowledge
-  required and **no precomputed stats involved**.
+  required and **no precomputed stats involved**. (`icover` needs ≥2 terms; a one-word
+  query falls back to `ssr` so single-word "grep" still ranks.)
 - **`--gcl "<expr>"`** — structured mode. The expression is passed **through to the
   engine's GCL parser unchanged** (`hopper_from_gcl`), exposing the full operator set
-  (Boolean, phrase/region, proximity, containment, negation — see §7). Results are the
-  `:item` documents satisfying the expression; with `--rank ssr` they are ranked by
-  cover density (`ssr_ranking(warren, expr, ":item")`), otherwise returned in document
-  order. Do not invent or restrict operators — surface what the engine supports.
+  (Boolean, phrase/region, proximity, containment, negation — see §7). The matching
+  `:item` documents are ranked by cover density (`ssr_ranking(warren, expr, ":item")`); a
+  malformed expression is a reported error (exit 2), not a silent empty result. Do not
+  invent or restrict operators — surface what the engine supports.
 - **`--ranker <icover|ssr|tiered>`** — optional ranker selection for `--text`
   (default `icover`). All three are cover-density / proximity rankers requiring no
   precompute. (There is intentionally no BM25/LMD/PRF option — see §0.2.)
@@ -459,9 +460,13 @@ documents)**:
 
 - Decide whether `char_start`/`char_end` into the original `contents` are cheaply
   recoverable; if so, populate them in `best_passage` (otherwise passage text suffices).
-- Decide `--gcl` default ordering (document order vs. always `ssr`-ranked) and document it.
 - Confirm large-`--buffer` behavior on the target host (open-file-descriptor count at the
   final merge scales with corpus/buffer; raise the buffer to keep it bounded).
+
+> Status: implemented in `apps/cottontail-jsonl-index.cc`,
+> `apps/cottontail-jsonl-query.cc`, and the shared `apps/jsonl_core.{h,cc}` library, with
+> regression tests in `test/jsonl.cc` + `test/jsonl_cli.cc` (`//test:jsonl_test`). The POC
+> `apps/climbmix-poc.cc` remains as the timing/scaling probe.
 
 ---
 
