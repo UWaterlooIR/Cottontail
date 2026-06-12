@@ -1,19 +1,21 @@
 ---
 name: pr-jsonl-cli
-description: GitHub PR for the JSONL CLI / SimpleWarren grep-tool work on branch setup/claude-md-and-build
+description: Status of the JSONL CLI / SimpleWarren grep-tool work — PR #1 merged, now on branch claude/tool-agent
 metadata:
   type: reference
 ---
 
-The branch `setup/claude-md-and-build` has an open PR:
-**https://github.com/UWaterlooIR/Cottontail/pull/1** (created from the Claude Code
-UI on 2026-06-12). Reference this PR for the work in
-[[climbmix-poc-plan]] (Hazel-not-ready docs, the SimpleWarren grep-tool POC, the
-revised JSONL CLI spec, and the implemented `cottontail-jsonl-index`/`-query` CLIs
-+ `//test:jsonl_test`).
+The JSONL CLI / SimpleWarren grep-tool work (see [[climbmix-poc-plan]]:
+Hazel-not-ready docs, the SimpleWarren grep-tool POC, the revised JSONL CLI spec,
+and the implemented `cottontail-jsonl-index`/`-query` CLIs + `//test:jsonl_test`)
+was shipped via **PR #1** (https://github.com/UWaterlooIR/Cottontail/pull/1),
+which is now **MERGED** (merge commit on 2026-06-12).
 
-Do **not** create a new PR. Pushing more commits to the branch updates this PR.
-Note: this sandbox shell has **no push access** to `git@github.com:UWaterlooIR/Cottontail`
-(fetch/push fail), so new local commits reach the PR only when pushed via the
-Claude Code UI / by the user. As of last check, local HEAD == remote branch
-(everything committed is in the PR).
+Active branch is now **`claude/tool-agent`** (tracks `origin/claude/tool-agent`),
+which contains the merged PR-1 history. Ask the user which PR/branch new work
+belongs to before assuming.
+
+Access note: this sandbox shell has **no push access** to
+`git@github.com:UWaterlooIR/Cottontail` (fetch/push fail). Local commits reach a
+remote/PR only when pushed via the Claude Code UI or by the user — so after
+committing, tell the user if local is ahead of its upstream.
