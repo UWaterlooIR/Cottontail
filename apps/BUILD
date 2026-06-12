@@ -507,3 +507,13 @@ cc_binary(
       "-pthread",
     ],
 )
+
+cc_binary(
+    name = "climbmix-poc",
+    srcs = [
+        "climbmix-poc.cc",
+    ],
+    deps = [
+        "//src:cottontail",
+    ],
+)
