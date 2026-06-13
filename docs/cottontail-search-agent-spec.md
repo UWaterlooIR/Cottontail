@@ -55,7 +55,7 @@ the tool-schema names (§4).
 | Structured query | `search_gcl` | Boolean / phrase / proximity / containment precision. | yes (`--gcl`) |
 | Validate / diagnose | `explain` | Dry-run: per-term `df` + `stream`, no ranking. Spot zero-posting terms before spending a query. | yes (`--explain`) |
 | Read a document | `get_document` | Fetch a full row by `docid`. | **new (§3.1)** |
-| (optional) Count | `count_matches` | Cheap count of matching rows for selectivity. | **new, optional (§3.3)** |
+| Count | `count_matches` | Cheap count of matching rows for selectivity. | **new (§3.3)** |
 
 `--stem` is a **modifier** on `search_text`/`search_gcl` (a boolean arg), not a
 separate action. `top_k`, `full_text`, `snippet_chars`, `ranker` are args as
@@ -123,13 +123,13 @@ Add to the `search_text`/`search_gcl` result object (§4.4 of the CLI spec):
 This lets the agent decide *refine vs. stop* at zero cost, and keeps the common
 ranked-search path from paying for a full match count on broad queries.
 
-### 3.3 `count_matches` (optional)
+### 3.3 `count_matches` (required)
 
 A cheap "how many rows match" for selectivity, with **no ranking**: build the
 query's `:item` hopper (and for `--text`, an all-of of the terms), walk container
 solutions, count. CLI: `--count` with `--text`/`--gcl` (honors `--stem`). Output
-`{ "query": ..., "match_count": N }`. Mark optional — implement if cheap; it is
-one container-hopper pass, no scoring.
+`{ "query": ..., "match_count": N }`. It is one container-hopper pass, no scoring
+— the agent's on-demand companion to the cheap `truncated` heuristic (§3.2).
 
 ### 3.4 `--describe` — emit the tool schema (required)
 
@@ -294,7 +294,7 @@ standalone; the writer is an upgrade for long, well-formatted reports.
 ## 7. Testing & acceptance (summary)
 
 - CLI: `get_document` (found / not-found / subset-guard); `--describe` JSON shape;
-  `result_count`/`truncated`; `count_matches` if built. Keep
+  `result_count`/`truncated`; `count_matches`. Keep
   `bazel test //test:tests //test:hazel_test //test:jsonl_test` green.
 - Agent: stub-LLM loop test (deterministic); manual real-model smoke (uncommitted).
 
