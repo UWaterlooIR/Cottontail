@@ -252,15 +252,16 @@ Priorities: (1) reliable multi-step tool calling, (2) reasoning, (3) ≥32k (ide
 
 **Primary = gpt-oss-120b:** best reasoning that *fits one card*, permissive license,
 128k context, and its native MXFP4 checkpoint slots into ~63 GB (no lossy re-quant),
-leaving ~33 GB for KV; 5.1B active params keep the ReAct loop snappy. **Validate two
-things on our sm_120 build before committing** — these are the real risk, not raw
-quality:
-1. **MXFP4 kernel maturity on sm_120** (Blackwell workstation) — has been uneven;
-   smoke-test that it generates clean tokens on a current vLLM.
-2. **Tool-calling on `/v1/chat/completions`** — historically less mature for gpt-oss
-   than the Harmony `/v1/responses` path; since reliable multi-step calling is
-   priority #1, validate multi-step **and** parallel tool calls on our harness.
-   Run it with `Reasoning: low`/`medium` (it's a thinking model) in the agent loop.
+leaving ~33 GB for KV; 5.1B active params keep the ReAct loop snappy. The two risks
+flagged at research time are now **validated on this machine (2026-06-13)**:
+1. ~~**MXFP4 kernel maturity on sm_120**~~ — **cleared:** it loads and serves on the
+   96 GB Blackwell with the launch below.
+2. ~~**Tool-calling on `/v1/chat/completions`**~~ — **cleared (single-step):** a smoke
+   test (one `search_text` tool) returned a well-formed `tool_calls` entry — correct
+   function name, valid JSON args, `finish_reason: tool_calls`, no stray content.
+   Still to confirm during the build: **multi-step continuation** (reasoning after a
+   tool result is fed back) and **parallel** tool calls. Run with `Reasoning:
+   low`/`medium` (it's a thinking model) in the agent loop.
 
 **If those caveats bite → GLM-4.5-Air** (4-bit): the lowest-risk tool-caller here —
 agent-tuned, with a mature dedicated `glm45` parser (the GLM-4.5 family led BFCL-v3).

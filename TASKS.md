@@ -1,5 +1,30 @@
 # Tasks
 
+## In progress
+
+### Search-agent tooling: flesh out the query CLI + an LLM-driven example
+
+Per `docs/cottontail-search-agent-spec.md`. Build the CLI action surface first
+(the example agent depends on it), then the Python ReAct agent.
+
+CLI core (C++, `apps/jsonl_core.*` + `cottontail-jsonl-query`):
+- [x] `get_document` — `--get <docid>` / `jsonl_get()`: find the `:item` whose
+      `:docno` matches the docid (exact-string guard), return the body. found:false
+      (exit 0) for unknown docid. (§3.1)
+- [x] `count_matches` — `--count` / `jsonl_count()`: count `:item` containers that
+      match the query (AND for text, the expr for gcl; honors `--stem`). (§3.3)
+- [x] `result_count` + `truncated` (`result_count == top_k`) on search output. (§3.2)
+- [x] `--describe`: emit the OpenAI/Anthropic tool schema for search_text /
+      search_gcl / explain / get_document / count_matches, GCL cheatsheet embedded. (§3.4/§4)
+- [x] Tests: get (found/not-found/subset-guard), count, truncated, --describe shape.
+- [x] Keep `bazel test //test:tests //test:hazel_test //test:jsonl_test` green.
+
+Example agent (Python, `examples/agent/`):
+- [ ] ReAct loop via vLLM OpenAI-compatible endpoint + native tool calling
+      (gpt-oss-120b on 127.0.0.1:8000, validated 2026-06-13); load tools from
+      `--describe`; budgets; cite docids. (§5)
+- [ ] Stub-LLM harness test (deterministic); manual real-model smoke. (§5.4)
+
 ## Done
 
 ### Tokenizer choice: `--tokenizer ascii|utf8` for the index CLI

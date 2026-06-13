@@ -82,6 +82,17 @@ struct QuerySpec {
 bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  std::vector<Hit> *hits, std::string *error = nullptr);
 
+// Fetch the full body of the row whose :docno equals `docid`. Sets *found=false
+// (not an error) when no such row exists. Returns false only on a hard error.
+bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
+               std::string *text, bool *found, std::string *error = nullptr);
+
+// Count the :item rows that match `spec` (AND of the terms for text mode, the
+// expression for gcl mode; honors spec.stem) — no ranking. Returns false only on
+// a hard error (malformed gcl, or --stem against a non-stemmed burrow).
+bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                 long *count, std::string *error = nullptr);
+
 struct ExplainLeaf {
   std::string term;
   addr df = 0;

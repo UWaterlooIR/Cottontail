@@ -143,6 +143,35 @@ std::string stem_gcl(const std::string &gcl,
   return out;
 }
 
+// The GCL whose :item-containment defines "matches" for a query (used by count):
+// all-of the terms for text mode, the expression for gcl mode, stemmed if asked.
+// Empty *out means "no terms" (zero matches).
+bool build_match_gcl(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                     std::string *out, std::string *error) {
+  if (spec.stem) {
+    auto stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "--stem requested but this burrow has no stemmed stream "
+          "(rebuild the index with --stem)";
+      return false;
+    }
+    if (spec.is_gcl) {
+      *out = stem_gcl(spec.query, stemmer);
+    } else {
+      std::vector<std::string> atoms;
+      for (const auto &t : warren->tokenizer()->split(spec.query))
+        atoms.push_back(stem_atom(stemmer, t));
+      *out = all_of(atoms);
+    }
+  } else if (spec.is_gcl) {
+    *out = spec.query;
+  } else {
+    *out = all_of(warren->tokenizer()->split(spec.query));
+  }
+  return true;
+}
+
 // Candidate term atoms in a GCL expression: drop operators, parens, and
 // structural tags (":...") so --explain can report leaf document frequencies.
 std::vector<std::string> gcl_terms(const std::string &gcl) {
@@ -378,6 +407,65 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     }
     hits->push_back(std::move(h));
   }
+  return true;
+}
+
+bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
+               std::string *text, bool *found, std::string *error) {
+  *found = false;
+  text->clear();
+  std::vector<std::string> terms = warren->tokenizer()->split(docid);
+  if (terms.empty())
+    return true; // nothing to match on -> not found
+  // Find an :item whose :docno contains the docid's token sequence, then verify
+  // the recovered docid string matches exactly (guards against a docid whose
+  // tokens are a subset of another's).
+  std::string phrase = terms[0];
+  if (terms.size() > 1) {
+    phrase = "(...";
+    for (const auto &t : terms)
+      phrase += " " + t;
+    phrase += ")";
+  }
+  std::string gcl = "(>> :item (>> :docno " + phrase + "))";
+  auto hopper = warren->hopper_from_gcl(gcl, error);
+  if (hopper == nullptr)
+    return false;
+  auto docno = warren->hopper_from_gcl(":docno", error);
+  if (docno == nullptr)
+    return false;
+  addr p, q;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q)) {
+    addr dp = 0, dq = -1;
+    docno->tau(p, &dp, &dq);
+    if (trim(warren->txt()->translate(dp, dq)) == docid) {
+      *found = true;
+      *text = warren->txt()->translate(dq + 1, q); // body after the :docno span
+      return true;
+    }
+  }
+  return true;
+}
+
+bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                 long *count, std::string *error) {
+  *count = 0;
+  std::string match;
+  if (!build_match_gcl(warren, spec, &match, error))
+    return false;
+  if (match.empty())
+    return true; // no terms -> 0 matches
+  std::string gcl = "(>> :item " + match + ")";
+  auto hopper = warren->hopper_from_gcl(gcl, error);
+  if (hopper == nullptr)
+    return false; // e.g. malformed --gcl
+  addr p, q;
+  long n = 0;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q))
+    n++;
+  *count = n;
   return true;
 }
 

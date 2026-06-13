@@ -489,3 +489,98 @@ TEST(JsonlTokenizer, UnknownTokenizerIsAnError) {
   EXPECT_FALSE(build_one("tok_bad", "hello", "klingon", "", &b, &error));
   EXPECT_FALSE(error.empty());
 }
+
+// --- get_document (spec §3.1) ----------------------------------------------
+
+TEST(JsonlGet, FetchByDocid) {
+  std::string error;
+  IndexSummary s;
+  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("get1"), &s, &error)) << error;
+  auto w = open_burrow(tmp_burrow("get1"), &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::string text;
+  bool found = false;
+  ASSERT_TRUE(jsonl_get(w, "doc-004", &text, &found, &error)) << error;
+  EXPECT_TRUE(found);
+  EXPECT_NE(text.find("elephants"), std::string::npos);
+  // Unknown docid: not found, but not an error.
+  ASSERT_TRUE(jsonl_get(w, "doc-999", &text, &found, &error)) << error;
+  EXPECT_FALSE(found);
+  EXPECT_TRUE(text.empty());
+  w->end();
+}
+
+TEST(JsonlGet, ExactMatchGuard) {
+  // "alpha"'s docno tokens are a subset of "alpha beta"'s; the exact-string guard
+  // must still return the right row.
+  std::string error, burrow;
+  std::vector<std::string> rows = {
+      R"({"docid":"alpha","contents":"the first document"})",
+      R"({"docid":"alpha beta","contents":"the second document"})"};
+  ASSERT_TRUE(build_rows("get_guard", rows, "", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::string text;
+  bool found = false;
+  ASSERT_TRUE(jsonl_get(w, "alpha", &text, &found, &error)) << error;
+  EXPECT_TRUE(found);
+  EXPECT_NE(text.find("first"), std::string::npos);
+  EXPECT_EQ(text.find("second"), std::string::npos);
+  ASSERT_TRUE(jsonl_get(w, "alpha beta", &text, &found, &error)) << error;
+  EXPECT_TRUE(found);
+  EXPECT_NE(text.find("second"), std::string::npos);
+  w->end();
+}
+
+// --- count_matches (spec §3.3) ---------------------------------------------
+
+TEST(JsonlCount, TextIsConjunctive) {
+  std::string error;
+  IndexSummary s;
+  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("cnt1"), &s, &error)) << error;
+  auto w = open_burrow(tmp_burrow("cnt1"), &error);
+  ASSERT_NE(w, nullptr) << error;
+  long n = -1;
+  QuerySpec a;
+  a.query = "quick fox"; // both in doc-001 and doc-002
+  ASSERT_TRUE(jsonl_count(w, a, &n, &error)) << error;
+  EXPECT_EQ(n, 2);
+  QuerySpec b;
+  b.query = "quick dog"; // quick:{001,002} AND dog:{001,003} = {001}
+  ASSERT_TRUE(jsonl_count(w, b, &n, &error)) << error;
+  EXPECT_EQ(n, 1);
+  w->end();
+}
+
+TEST(JsonlCount, GclAndStem) {
+  std::string error;
+  IndexSummary s;
+  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("cnt2"), &s, &error)) << error;
+  auto w = open_burrow(tmp_burrow("cnt2"), &error);
+  ASSERT_NE(w, nullptr) << error;
+  long n = -1;
+  QuerySpec g;
+  g.is_gcl = true;
+  g.query = "(^ lazy dog)"; // doc-001, doc-003
+  ASSERT_TRUE(jsonl_count(w, g, &n, &error)) << error;
+  EXPECT_EQ(n, 2);
+  // malformed gcl -> hard error
+  QuerySpec bad;
+  bad.is_gcl = true;
+  bad.query = "(^ lazy";
+  EXPECT_FALSE(jsonl_count(w, bad, &n, &error));
+  w->end();
+
+  // stemmed count
+  std::string burrow;
+  ASSERT_TRUE(build_rows("cnt_stem", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto ws = open_burrow(burrow, &error);
+  ASSERT_NE(ws, nullptr) << error;
+  QuerySpec st;
+  st.query = "elephant fox"; // s-1: elephants + foxes
+  st.stem = true;
+  ASSERT_TRUE(jsonl_count(ws, st, &n, &error)) << error;
+  EXPECT_EQ(n, 1);
+  ws->end();
+}
