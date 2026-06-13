@@ -270,11 +270,17 @@ multi-step runs (test `qwen3_coder` vs the newer `qwen3_xml`).
 
 **vLLM launch (primary):**
 ```
-vllm serve openai/gpt-oss-120b --served-model-name gpt-oss-120b \
+CUDA_VISIBLE_DEVICES=1 vllm serve openai/gpt-oss-120b \
+  --served-model-name gpt-oss-120b \
+  --host 127.0.0.1 --port 8000 \
+  --download-dir /share/huggingface-models/ \
   --max-model-len 131072 --enable-auto-tool-choice --tool-call-parser openai \
-  --gpu-memory-utilization 0.92 --port 8000
-# MXFP4 is the native format — do NOT pass --quantization. If "No available memory
-# for cache blocks": lower --max-model-len / --max-num-seqs.
+  --gpu-memory-utilization 0.92
+# CUDA_VISIBLE_DEVICES=1 pins the 96 GB Blackwell (GPU 1). MXFP4 is the native
+# format — do NOT pass --quantization. If "No available memory for cache blocks":
+# lower --max-model-len / --max-num-seqs. The report-writer instance (§6.2) uses
+# the same --download-dir and --host 127.0.0.1 on CUDA_VISIBLE_DEVICES=0 with a
+# different --port (e.g. 8001).
 ```
 
 **Won't fit even at 4-bit (rule out for one card):** DeepSeek-V3.x, GLM-4.6/4.7
