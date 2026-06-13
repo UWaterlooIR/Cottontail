@@ -39,8 +39,13 @@ Behavior:
 
 Net effect: a burrow built with the `stemming` tokenizer carries **both** the
 exact surface stream and the stemmed stream in **one index, one text store, no
-stats**. (This lands on branch `feature/stemming-tokenizer`; it must be merged /
-available before doing the CLI work below.)
+stats**. (Merged to `main` via PR #2.)
+
+> **Status: the CLI surface described below is implemented** in
+> `apps/jsonl_core.{h,cc}` and the two CLIs, with tests in `test/jsonl.cc`
+> (`JsonlStem.*`) and `test/jsonl_cli.cc`. This section now documents the
+> as-built design; §4–§5 describe the mechanism actually used (which differs
+> from an earlier draft — see the note in §4).
 
 ---
 
@@ -78,52 +83,58 @@ mode the index is locked into.
 
 ---
 
-## 4. How a query reaches the stemmed stream (mechanism — read before coding)
+## 4. How a query reaches the stemmed stream (as built)
 
-The cover-density rankers already contain the only hook needed. They split the
-query with `warren->tokenizer()->split()` (surface terms) and compute each lookup
-feature as `featurize(warren->stemmer()->stem(token))`
-(`src/ranking.cc`, e.g. `icover_ranking` ≈ `:988`, `ssr_ranking` ≈ `:1142`):
+A stem feature is just `featurize("porter:<root>")` co-located with the exact
+token. `--stem` retrieval therefore means: **stem each query term into its
+`porter:` atom and look that feature up.** `jsonl_query` does this itself, in
+`apps/jsonl_core.cc`:
 
-- `warren->stemmer()` is the **`NullStemmer`** → `stem()` returns the surface
-  unchanged → `featurize(surface)` → **exact stream**.
-- `warren->stemmer()` is **Porter** → `stem()` returns `"porter:…"` →
-  `featurize("porter:…")` → **stemmed stream** (the one the tokenizer populated).
+1. Reconstruct the index's stemmer from the burrow's dna tokenizer recipe
+   (`burrow_stemmer`): if the tokenizer name is `stemming`, pull the stemmer
+   name/recipe out of its recipe and `Stemmer::make` it. A plain `ascii` burrow
+   yields no stemmer (→ §5 missing-stream error).
+2. Rewrite the query into stemmed atoms:
+   - `--text`: split into surface terms, map each `t → stemmer->stem(t)`, and
+     join as `(^ …)` (all-of).
+   - `--gcl`: walk the expression and replace each **bare term** with its stem,
+     leaving operators, parens, `:tags`, and quoted phrases untouched
+     (`stem_gcl`).
+3. Rank the rewritten expression with **`ssr_ranking`** (cover density) over
+   `:item`. A GCL leaf is featurized verbatim (`parse.cc:258`,
+   `featurizer->featurize(term_)`), so a `porter:<root>` atom resolves straight to
+   the stemmed feature.
 
-A burrow built per §3 opens with **no** warren-level stemmer — the `Warren`
-constructor defaults `stemmer_` to `NullStemmer` (`src/warren.h:37`) and dna
-carries none — so **queries are exact by default**. Good.
+A no-op term is safe and symmetric: `Porter::stem("ox")` returns `"ox"`
+(`stemmed=false`, no prefix), which featurizes to the **exact** `ox` feature — so
+`--stem "ox"` still matches `ox`. No silent miss, and the query never looks for a
+`porter:ox` the index didn't write.
 
-A no-op query term is safe and symmetric: `--stem "ox"` → Porter returns `"ox"`
-(`stemmed=false`) → `featurize("ox")` → matches the exact `ox` postings the
-tokenizer always wrote. No silent miss. The dangerous inverse can't happen: the
-query never looks for a `porter:ox` the index didn't write, because Porter never
-produces one.
+> **Why not use the warren's stemmer hook?** Only `icover_ranking` stems its
+> query terms via `warren->stemmer()` (`src/ranking.cc`); `ssr_ranking` and the
+> `--gcl` path featurize atoms directly and do **not**. Driving stemming through
+> `warren->stemmer()` would also mean mutating the handle's stemmer, and the only
+> public setter — `Warren::set_stemmer()` — **persists** to the burrow's dna
+> (`set_parameter_` → `set_parameter_in_dna`, `simple_warren.cc:142`), which would
+> permanently make stemming the global default and destroy exact-by-default.
+> Stemming in `jsonl_core` and targeting the features directly is uniform across
+> `--text`/`--gcl`, needs no core change, and never writes to the burrow.
 
 ---
 
 ## 5. Query tool changes — `cottontail-jsonl-query`
 
-- Add flag **`--stem`** (boolean, default off).
+- Flag **`--stem`** (boolean, default off; also accepted per-line in `--batch` as
+  `"stem": true`).
   - default (off): exact, unchanged.
-  - `--stem`: run the **same** ranking / `--gcl` path, but with a Porter stemmer
-    active **on the handle**, so the rankers target the stemmed stream. `--gcl`
-    operators are unchanged; bare terms get stemmed.
+  - `--stem`: stem the query into `porter:` atoms and rank via cover density
+    (`ssr`) per §4. Works for both `--text` and `--gcl`; `--gcl` operators are
+    unchanged and only bare terms are stemmed. (`--stem` ranks via `ssr`
+    regardless of `--ranker`, since stemmed atoms can't go through `icover`'s
+    internal tokenization.)
 
-- **Activating the stemmer — avoid the landmine.** `Warren::set_stemmer()`
-  (`src/warren.h:79`) **persists** the stemmer to the burrow's dna:
-  `set_parameter_` → `set_parameter_in_dna` writes disk immediately
-  (`simple_warren.cc:142–146`). Calling it on a query handle would permanently
-  make stemming the **global default** — exactly the failure this design avoids.
-  **Do not use `set_stemmer()` for the per-query toggle.**
-  - Recommended: give the handle an **in-memory-only** Porter for `--stem`
-    queries, mutating nothing on disk. The minimal safe enabler is a
-    non-persisting, handle-local stemmer setter on `Warren` (set `stemmer_`
-    without calling `set_parameter`); add it if it doesn't exist. Equivalent
-    alternatives: thread a stemmer argument into the ranking call, or compose the
-    hopper at the feature level. Whichever you choose, the invariant is
-    absolute: **default open = exact, and the query tool writes nothing to the
-    burrow.**
+- The query tool **never mutates the burrow** — it does not call
+  `Warren::set_stemmer()` (see the §4 note on why). Default opens stay exact.
 
 - **Detection / refuse mismatch.** Decide whether the burrow even has a stemmed
   stream by inspecting its dna **tokenizer**: name `stemming` means yes, and the

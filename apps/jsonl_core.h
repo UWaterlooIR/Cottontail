@@ -28,6 +28,7 @@ struct IndexOptions {
   long limit = -1;                    // -1 = unlimited
   bool strict = false;                // turn skips into fatal errors
   bool verbose = false;
+  std::string stemmer = "";           // "" = none; "porter" = add a stemmed stream
 };
 
 struct IndexSummary {
@@ -37,6 +38,7 @@ struct IndexSummary {
   size_t rows_skipped = 0;
   double elapsed_seconds = 0.0;
   uintmax_t burrow_bytes = 0;
+  std::string stemmer = ""; // stemmer baked into the index ("" = none)
 };
 
 // Recursively index every *.jsonl / *.jsonl.gz under opts.input into a static
@@ -70,6 +72,7 @@ struct QuerySpec {
   size_t top_k = 10;
   bool full_text = false;
   size_t snippet_chars = 240;
+  bool stem = false;             // match against the stemmed stream (opt-in)
 };
 
 // Rank a query against a started burrow (from open_burrow). Returns false (with
@@ -80,6 +83,7 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 struct ExplainLeaf {
   std::string term;
   addr df = 0;
+  std::string stream = "exact"; // which stream df came from: "exact" | "stemmed"
 };
 
 struct ExplainResult {

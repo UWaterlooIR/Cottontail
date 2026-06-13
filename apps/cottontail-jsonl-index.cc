@@ -19,6 +19,7 @@ void usage(const char *prog) {
       << "  --overwrite              replace an existing burrow\n"
       << "  --limit <n>              index at most n rows\n"
       << "  --strict                 make skipped lines fatal\n"
+      << "  --stem <name>            also build a stemmed stream (e.g. porter)\n"
       << "  --verbose                per-file progress to stderr\n";
 }
 
@@ -60,6 +61,8 @@ int main(int argc, char **argv) {
       opts.overwrite = true;
     else if (a == "--strict")
       opts.strict = true;
+    else if (a == "--stem")
+      opts.stemmer = next("--stem");
     else if (a == "--verbose")
       opts.verbose = true;
     else if (a == "--help") {
@@ -88,6 +91,10 @@ int main(int argc, char **argv) {
   out["rows_skipped"] = summary.rows_skipped;
   out["elapsed_seconds"] = summary.elapsed_seconds;
   out["burrow_bytes"] = summary.burrow_bytes;
+  if (summary.stemmer.empty())
+    out["stemmer"] = nullptr;
+  else
+    out["stemmer"] = summary.stemmer;
   std::cout << out.dump(2) << "\n";
   return 0;
 }

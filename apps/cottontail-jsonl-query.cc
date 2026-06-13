@@ -23,7 +23,9 @@ void usage(const char *prog) {
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  ... --batch   (one query object per stdin line -> JSONL)\n"
             << "options: --ranker icover|ssr|tiered  --top-k N  --full-text\n"
-            << "         --snippet-chars N  --format json|jsonl\n"
+            << "         --snippet-chars N  --format json|jsonl  --stem\n"
+            << "  --stem  match the stemmed stream (index must be built --stem;\n"
+            << "          ranks via cover density over stemmed terms)\n"
             << "note: structured/precise queries are fast at any scale; a broad\n"
             << "      common-term ranked query can be second-scale on a very\n"
             << "      large corpus (cover-density touches the query terms'\n"
@@ -52,7 +54,10 @@ json results_json(const QuerySpec &spec, const std::vector<Hit> &hits,
   json o;
   o["query"] = spec.query;
   o["query_mode"] = spec.is_gcl ? "gcl" : "text";
-  o["ranker"] = spec.is_gcl ? std::string("ssr") : spec.ranker;
+  // --stem ranks via cover density over stemmed atoms (ssr), regardless of mode.
+  o["ranker"] = spec.stem ? std::string("ssr")
+                          : (spec.is_gcl ? std::string("ssr") : spec.ranker);
+  o["stemmed"] = spec.stem;
   o["top_k"] = spec.top_k;
   o["elapsed_ms"] = elapsed_ms;
   json arr = json::array();
@@ -75,6 +80,7 @@ json explain_json(const QuerySpec &spec, const ExplainResult &ex) {
       json le;
       le["term"] = l.term;
       le["df"] = l.df;
+      le["stream"] = l.stream;
       leaves.push_back(le);
     }
     o["leaves"] = leaves;
@@ -123,6 +129,8 @@ int main(int argc, char **argv) {
       base.top_k = std::stoul(next());
     else if (a == "--full-text")
       base.full_text = true;
+    else if (a == "--stem")
+      base.stem = true;
     else if (a == "--snippet-chars")
       base.snippet_chars = std::stoul(next());
     else if (a == "--format")
@@ -169,6 +177,7 @@ int main(int argc, char **argv) {
         spec.top_k = in.value("top_k", base.top_k);
         spec.ranker = in.value("ranker", base.ranker);
         spec.full_text = in.value("full_text", base.full_text);
+        spec.stem = in.value("stem", base.stem);
         std::vector<Hit> hits;
         std::string e;
         cottontail::addr t0 = cottontail::now();

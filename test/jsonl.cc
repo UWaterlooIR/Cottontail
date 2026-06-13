@@ -4,6 +4,8 @@
 // by test/jsonl_cli.cc.
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
@@ -44,6 +46,45 @@ cottontail::addr df_of(const ExplainResult &ex, const std::string &term) {
       return l.df;
   return -1;
 }
+
+const ExplainLeaf *leaf_of(const ExplainResult &ex, const std::string &term) {
+  for (const auto &l : ex.leaves)
+    if (l.term == term)
+      return &l;
+  return nullptr;
+}
+
+// Write rows (one JSON object per line) into a fresh input dir and index it,
+// optionally with a stemmer. Keeps the stemming fixtures inline (no committed
+// fixture files needed).
+bool build_rows(const std::string &name, const std::vector<std::string> &rows,
+                const std::string &stemmer, std::string *burrow,
+                std::string *error) {
+  const char *t = std::getenv("TEST_TMPDIR");
+  std::string base = (t != nullptr ? std::string(t) : std::string("/tmp"));
+  std::string dir = base + "/" + name + "_src";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  {
+    std::ofstream f(dir + "/sample.jsonl");
+    for (const auto &r : rows)
+      f << r << "\n";
+  }
+  IndexOptions opts;
+  opts.input = dir;
+  opts.burrow = tmp_burrow(name);
+  opts.overwrite = true;
+  opts.stemmer = stemmer;
+  *burrow = opts.burrow;
+  IndexSummary s;
+  return jsonl_index(opts, &s, error);
+}
+
+const std::vector<std::string> kStemRows = {
+    R"({"docid":"s-1","contents":"the elephants jumped over running foxes"})",
+    R"({"docid":"s-2","contents":"organization of organs"})",
+    R"({"docid":"s-3","contents":"an ox and a cat"})",
+};
 } // namespace
 
 TEST(JsonlIndex, BuildCounts) {
@@ -224,5 +265,141 @@ TEST(JsonlExplain, GclParse) {
   bad.is_gcl = true;
   bad.query = "(^ quick";
   EXPECT_FALSE(jsonl_explain(w, bad).parsed_ok);
+  w->end();
+}
+
+// --- Stemming (docs/stemming.md) ------------------------------------------
+
+TEST(JsonlStem, StemmedRecallExactDoesNot) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_recall", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<Hit> hits;
+
+  // Exact "elephant" does not match the body "elephants".
+  QuerySpec exact;
+  exact.query = "elephant";
+  ASSERT_TRUE(jsonl_query(w, exact, &hits, &error)) << error;
+  EXPECT_TRUE(hits.empty());
+
+  // --stem "elephant" matches s-1 (which contains only "elephants").
+  QuerySpec stem;
+  stem.query = "elephant";
+  stem.stem = true;
+  ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  w->end();
+}
+
+TEST(JsonlStem, ExactStreamPreservedInStemIndex) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_exact", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<Hit> hits;
+  // The exact surface form is still retrievable from a stemmed index.
+  QuerySpec spec;
+  spec.query = "elephants";
+  ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  w->end();
+}
+
+TEST(JsonlStem, NoOpTermFallsBackToExact) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_noop", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  // "ox" is too short for Porter to stem; --stem still finds it via the exact
+  // stream (symmetric fallback, no silent miss).
+  QuerySpec spec;
+  spec.query = "ox";
+  spec.stem = true;
+  std::vector<Hit> hits;
+  ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("s-3"), 1u);
+  w->end();
+}
+
+TEST(JsonlStem, OverStemConflationPinned) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_over", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<Hit> hits;
+
+  // Exact "organ" matches neither "organization" nor "organs".
+  QuerySpec exact;
+  exact.query = "organ";
+  ASSERT_TRUE(jsonl_query(w, exact, &hits, &error)) << error;
+  EXPECT_TRUE(hits.empty());
+
+  // --stem "organ" conflates with organization/organs -> s-2.
+  QuerySpec stem;
+  stem.query = "organ";
+  stem.stem = true;
+  ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("s-2"), 1u);
+  w->end();
+}
+
+TEST(JsonlStem, GclStem) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_gcl", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  // (^ elephant fox) with --stem matches s-1 (elephants + foxes).
+  QuerySpec spec;
+  spec.is_gcl = true;
+  spec.query = "(^ elephant fox)";
+  spec.stem = true;
+  std::vector<Hit> hits;
+  ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  w->end();
+}
+
+TEST(JsonlStem, MissingStreamIsAnError) {
+  std::string error, burrow;
+  // Built WITHOUT a stemmer.
+  ASSERT_TRUE(build_rows("stem_missing", kStemRows, "", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  QuerySpec spec;
+  spec.query = "elephant";
+  spec.stem = true;
+  std::vector<Hit> hits;
+  std::string qerr;
+  EXPECT_FALSE(jsonl_query(w, spec, &hits, &qerr)); // no silent fallback
+  EXPECT_FALSE(qerr.empty());
+  w->end();
+}
+
+TEST(JsonlStem, ExplainStreamLabeling) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("stem_explain", kStemRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  QuerySpec spec;
+  spec.query = "elephant ox";
+  spec.stem = true;
+  ExplainResult ex = jsonl_explain(w, spec);
+  ASSERT_TRUE(ex.parsed_ok);
+  const ExplainLeaf *el = leaf_of(ex, "elephant");
+  const ExplainLeaf *ox = leaf_of(ex, "ox");
+  ASSERT_NE(el, nullptr);
+  ASSERT_NE(ox, nullptr);
+  EXPECT_EQ(el->stream, "stemmed"); // elephant -> stemmed stream
+  EXPECT_GT(el->df, 0);
+  EXPECT_EQ(ox->stream, "exact"); // ox unstemmable -> exact stream
+  EXPECT_GT(ox->df, 0);
   w->end();
 }

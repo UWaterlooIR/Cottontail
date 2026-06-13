@@ -106,6 +106,41 @@ TEST(JsonlCli, RuntimeErrorExit2WithErrorObject) {
   EXPECT_EQ(j["where"], "open");
 }
 
+TEST(JsonlCli, StemBuildAndQuery) {
+  std::string b = tmpdir() + "/cli_stem.burrow";
+  int code;
+  std::string idx = run(std::string(kIndexBin) +
+                            " --input test/jsonl/plain --burrow " + b +
+                            " --stem porter --overwrite",
+                        &code);
+  ASSERT_EQ(code, 0) << idx;
+  EXPECT_EQ(json::parse(idx)["stemmer"], "porter");
+
+  // --stem "run" matches doc-002 ("runs"); the plain index would not.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --text run --stem --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_EQ(j["stemmed"], true);
+  bool found = false;
+  for (const auto &r : j["results"])
+    if (r["docid"] == "doc-002")
+      found = true;
+  EXPECT_TRUE(found) << out;
+}
+
+TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
+  std::string b = build_burrow("cli_stem_missing"); // built without --stem
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --text elephant --stem",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  json j = json::parse(out);
+  EXPECT_TRUE(j.contains("error"));
+}
+
 TEST(JsonlCli, BatchPreservesOrderAndIsolatesErrors) {
   std::string b = build_burrow("cli_batch");
   std::string in = tmpdir() + "/batch_in.txt";
