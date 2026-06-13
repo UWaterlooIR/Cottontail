@@ -16,28 +16,71 @@ client and the tool-executor as arguments, so it can be unit-tested with stubs
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 
 DEFAULT_SYSTEM = """\
 You are a search agent over a document corpus. Answer the user's question using \
-ONLY the search tools; do not rely on prior knowledge.
+ONLY what you retrieve with the tools; do not rely on prior knowledge.
 
-How to work:
-- Start broad with search_text. If results look off, use explain to check whether \
-a key term is rare or zero-hit, then refine.
-- Escalate to search_gcl for precision (both-of, either-of, phrase/proximity, \
-"rows containing X"). Use count_matches to gauge how selective a query is.
-- Set stem=true when you want morphological recall (run/running); leave it off \
-for exact matching.
-- Before answering, use get_document to read the full text of the row(s) you will \
-rely on.
-- When you have enough evidence, STOP calling tools and write a concise final \
-answer that cites the docids you used, e.g. "... [shard_00057_0]".
+These are LEXICAL tools — keyword and proximity matching over exact words, NOT a \
+semantic search box. This changes how you must query:
+- Query with the DISTINCTIVE CONTENT WORDS only. Strip stopwords and meta-phrasing: \
+"I am looking for scientific facts about elephants" should just be `elephants`. \
+Extra common words (looking, facts, about, the) DILUTE the ranking and make \
+results WORSE, not broader.
+- Counter-intuitive but important: FEWER words = BROADER results; MORE words = \
+NARROWER and noisier. To broaden, drop words (often down to a single keyword). To \
+narrow, ADD a distinctive word or switch to search_gcl.
+
+Strategy — go broad first, then hone:
+1. Start with the one or two most salient keywords to see what the corpus actually \
+contains (e.g. `elephants`). Skim the snippets.
+2. THEN add precision: more specific terms, or search_gcl operators — (^ a b) both \
+terms, (... a b) a-near-b in order, (+ a b) either, (>> :item (^ a b)) rows \
+containing both. e.g. (^ elephant conservation) or (... elephant population decline).
+Iterate broad → specific. Do NOT make small tweaks to a long natural-language query.
+
+- Use explain (term doc-frequency) and count_matches (how many rows match) to tell \
+whether a term is too rare or too common, and adjust.
+- stem=true broadens recall (elephant matches elephants). search_text ignores \
+quotation marks — use search_gcl for exact phrases or proximity.
+- Don't re-search the same intent repeatedly. After a couple of searches, read the \
+most promising hit with get_document or answer from what you have. Read a document \
+before you cite it.
+- The corpus may simply not contain the answer. If so, say that plainly rather \
+than guessing.
+
+Finish: when you have enough evidence (or have concluded the corpus lacks it), \
+STOP calling tools and write a concise final answer, citing the docids you relied \
+on in square brackets, e.g. "... [shard_00057_0]".
 """
+
+# Sent as a final user turn when the step budget is spent, to force a best-effort
+# answer instead of returning nothing.
+WRAP_UP = (
+    "You have used your search budget. Do not call any more tools. Answer the "
+    "question using ONLY the evidence gathered above; if the corpus does not "
+    "contain the answer, say so plainly. Cite the docids you relied on in square "
+    "brackets."
+)
 
 # Tool names that return documents/results we can harvest docids from.
 _RESULT_TOOLS = {"search_text", "search_gcl"}
+
+
+def _cited(answer, seen):
+    """Of the docids actually seen, return those the final answer cites.
+
+    Matches each seen docid as a whole token in the answer (so a docid is not a
+    spurious substring of a longer one), so "sources" reflects what the model
+    cited, not everything the searches surfaced.
+    """
+    if not answer:
+        return []
+    return sorted(d for d in seen
+                  if re.search(r"(?<![\w-])" + re.escape(d) + r"(?![\w-])", answer))
 
 
 def _shrink(obj, cap):
@@ -51,8 +94,8 @@ def _shrink(obj, cap):
     return obj
 
 
-def _harvest_citations(name, obs, into):
-    """Collect docids seen in a tool observation."""
+def _harvest_seen(name, obs, into):
+    """Record docids that appeared in a tool observation (search hits / reads)."""
     if name in _RESULT_TOOLS:
         for r in obs.get("results", []) or []:
             if isinstance(r, dict) and r.get("docid"):
@@ -133,7 +176,7 @@ def run_agent(client, model, tools, call_tool, question, *,
         {"role": "user", "content": question},
     ]
     tool_calls_made = []
-    citations = set()
+    seen = set()  # every docid the tools surfaced; cited subset chosen at the end
 
     for step in range(max_steps):
         resp = client.chat.completions.create(
@@ -145,7 +188,7 @@ def run_agent(client, model, tools, call_tool, question, *,
         if not calls:
             return {"answer": msg.content, "stopped": "answer",
                     "steps": step, "tool_calls": tool_calls_made,
-                    "citations": sorted(citations), "messages": messages}
+                    "citations": _cited(msg.content, seen), "messages": messages}
 
         # Echo the assistant's tool-call message back into the history.
         messages.append({
@@ -166,14 +209,21 @@ def run_agent(client, model, tools, call_tool, question, *,
                 cargs = {}
             tool_calls_made.append((name, cargs))
             obs = call_tool(name, cargs)
-            _harvest_citations(name, obs, citations)
+            _harvest_seen(name, obs, seen)
             messages.append({
                 "role": "tool", "tool_call_id": tc.id,
                 "content": json.dumps(_shrink(obs, obs_char_cap)),
             })
 
-    return {"answer": None, "stopped": "budget", "steps": max_steps,
-            "tool_calls": tool_calls_made, "citations": sorted(citations),
+    # Budget spent: one final turn with no tools to force a best-effort answer
+    # (or an explicit "not in the corpus") rather than returning nothing.
+    messages.append({"role": "user", "content": WRAP_UP})
+    resp = client.chat.completions.create(
+        model=model, messages=messages, temperature=temperature,
+    )
+    answer = resp.choices[0].message.content
+    return {"answer": answer, "stopped": "budget", "steps": max_steps,
+            "tool_calls": tool_calls_made, "citations": _cited(answer, seen),
             "messages": messages}
 
 
@@ -206,8 +256,8 @@ def main(argv=None):
         for name, cargs in result["tool_calls"]:
             print(f"  → {name}({json.dumps(cargs)})", file=sys.stderr)
     if result["stopped"] == "budget":
-        print(f"[stopped: step budget ({args.max_steps}) exhausted]",
-              file=sys.stderr)
+        print(f"[step budget ({args.max_steps}) spent; answered from evidence "
+              f"gathered so far]", file=sys.stderr)
     print(result["answer"] or "(no answer)")
     if result["citations"]:
         print("\nsources: " + ", ".join(result["citations"]))

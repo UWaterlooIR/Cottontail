@@ -81,9 +81,9 @@ class ReActLoopTest(unittest.TestCase):
         # tools were executed in the order the model asked for them
         self.assertEqual([n for n, _ in seen], ["search_text", "get_document"])
         self.assertEqual(seen[0][1], {"query": "elephants", "top_k": 5})
-        # docids from search results + the read doc are harvested as citations
-        self.assertIn("d-1", res["citations"])
-        self.assertIn("d-2", res["citations"])
+        # citations are only the docids the ANSWER cites, not every search hit:
+        # d-1 is cited in the answer; d-2 was returned by search but not cited.
+        self.assertEqual(res["citations"], ["d-1"])
         # three model turns: two tool rounds + the final answer
         self.assertEqual(len(client.requests), 3)
         # tools are advertised to the model on every turn
@@ -106,18 +106,23 @@ class ReActLoopTest(unittest.TestCase):
         tool_msg = [m for m in second if m["role"] == "tool"][0]
         self.assertEqual(json.loads(tool_msg["content"]) ["result_count"], 0)
 
-    def test_step_budget(self):
-        # model never stops calling tools -> loop terminates on the budget
+    def test_step_budget_forces_a_final_answer(self):
+        # Model never stops calling tools; after the budget, the wrap-up turn
+        # (no tools) must still produce an answer instead of returning nothing.
         script = [_resp(tool_calls=[("search_text", {"query": "x"})])
-                  for _ in range(10)]
+                  for _ in range(3)]
+        script.append(_resp(content="The corpus does not cover that."))
         client = FakeClient(script)
         res = run_agent(client, "m", tools=[],
                         call_tool=lambda n, a: {"results": []},
                         question="q", max_steps=3)
         self.assertEqual(res["stopped"], "budget")
-        self.assertIsNone(res["answer"])
+        self.assertEqual(res["answer"], "The corpus does not cover that.")
         self.assertEqual(res["steps"], 3)
-        self.assertEqual(len(client.requests), 3)
+        # 3 tool-calling turns + 1 wrap-up turn
+        self.assertEqual(len(client.requests), 4)
+        # the wrap-up request advertises no tools
+        self.assertNotIn("tools", client.requests[3])
 
 
 if __name__ == "__main__":
