@@ -17,10 +17,13 @@ agent-tool CLI actions (`--get`/`--count`/`--describe`, result signals),
 `docs/cottontail-search-agent-spec.md`, the example ReAct agent under
 `examples/agent/` (uv project), and `scripts/`.
 
-Active branch is now **`claude/agent-server`** (→ `main`, already pushed) for the
-search **server** work (spec §8: lift the CLI's tool API into a persistent
-REST/MCP layer over `jsonl_core`, opening the burrow once). It will get its own
-PR — confirm with the user before opening one.
+Active branch is **`claude/agent-server`** (→ `main`), with **open PR #4** ("Add
+HTTP/JSON search server (cottontail-jsonl-server)",
+https://github.com/UWaterlooIR/Cottontail/pull/4). **Reference PR #4 for this
+branch's work — don't open new PRs; pushing more commits updates it.** It carries
+`cottontail-jsonl-server` (cpp-httplib over `jsonl_core`), the shared
+`apps/jsonl_json.{h,cc}`, `docs/cottontail-search-server-spec.md`, the agent HTTP
+transport, and `//test:jsonl_server_test`.
 
 Access note: this sandbox shell has **no push access** to
 `git@github.com:UWaterlooIR/Cottontail` (fetch/push fail). Local commits reach a
