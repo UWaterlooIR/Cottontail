@@ -10,3 +10,4 @@
 - [SimpleWarren scaling model](simplewarren-scaling-model.md) — external-memory build, on-demand posting reads, WAND ranking; tuning levers + stats caveat
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
 - [PR: JSONL CLI](pr-jsonl-cli.md) — PR #1 merged; now on branch claude/tool-agent (shell has no push access)
+- [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); query-side --stem CLI still TODO, specced in docs/stemming.md
