@@ -28,6 +28,7 @@ struct IndexOptions {
   long limit = -1;                    // -1 = unlimited
   bool strict = false;                // turn skips into fatal errors
   bool verbose = false;
+  std::string tokenizer = "utf8";     // token model: "utf8" (Unicode) | "ascii"
   std::string stemmer = "";           // "" = none; "porter" = add a stemmed stream
 };
 
@@ -38,7 +39,8 @@ struct IndexSummary {
   size_t rows_skipped = 0;
   double elapsed_seconds = 0.0;
   uintmax_t burrow_bytes = 0;
-  std::string stemmer = ""; // stemmer baked into the index ("" = none)
+  std::string tokenizer = ""; // token model baked into the index
+  std::string stemmer = "";   // stemmer baked into the index ("" = none)
 };
 
 // Recursively index every *.jsonl / *.jsonl.gz under opts.input into a static

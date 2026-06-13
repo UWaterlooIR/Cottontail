@@ -180,16 +180,33 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
   }
   std::vector<std::string> files = find_shards(opts.input);
 
+  // Pick the inner token model. ascii is byte-level (ASCII only); utf8 is
+  // Unicode-aware (case folding, accents, CJK) and is the default for the UTF-8
+  // corpus. The query tool needs no matching flag -- it reconstructs whichever
+  // tokenizer this is from the burrow dna.
+  std::string inner_name, inner_recipe;
+  if (opts.tokenizer == "ascii") {
+    inner_name = "ascii";
+    inner_recipe = "noxml";
+  } else if (opts.tokenizer == "utf8") {
+    inner_name = "utf8";
+    inner_recipe = "";
+  } else {
+    safe_error(error) =
+        "unknown --tokenizer (want ascii|utf8): " + opts.tokenizer;
+    return false;
+  }
+
   auto working = Working::mkdir(opts.burrow, error);
   auto featurizer = Featurizer::make("hashing", "", error, working);
   std::shared_ptr<Tokenizer> tokenizer;
   if (opts.stemmer.empty()) {
-    tokenizer = Tokenizer::make("ascii", "noxml", error);
+    tokenizer = Tokenizer::make(inner_name, inner_recipe, error);
   } else {
-    // Wrap the ascii/noxml tokenizer with the named stemmer so the index carries
-    // a co-located stemmed stream alongside the exact one (see docs/stemming.md).
-    std::string recipe = "[ tokenizer:[ name:\"ascii\", recipe:\"noxml\" ],"
-                         "  stemmer:[ name:\"" +
+    // Wrap the chosen tokenizer with the named stemmer so the index carries a
+    // co-located stemmed stream alongside the exact one (see docs/stemming.md).
+    std::string recipe = "[ tokenizer:[ name:\"" + inner_name + "\", recipe:\"" +
+                         inner_recipe + "\" ], stemmer:[ name:\"" +
                          opts.stemmer + "\", recipe:\"\" ], ]";
     tokenizer = Tokenizer::make("stemming", recipe, error);
   }
@@ -267,6 +284,7 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
     summary->rows_skipped = skipped;
     summary->elapsed_seconds = (now() - t0) / 1000.0;
     summary->burrow_bytes = dir_bytes(opts.burrow);
+    summary->tokenizer = opts.tokenizer;
     summary->stemmer = opts.stemmer;
   }
   return true;

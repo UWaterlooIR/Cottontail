@@ -403,3 +403,89 @@ TEST(JsonlStem, ExplainStreamLabeling) {
   EXPECT_GT(ox->df, 0);
   w->end();
 }
+
+// --- Tokenizer choice: ascii vs utf8 (docs/stemming.md §6) -----------------
+
+namespace {
+// Index one row of content with an explicit tokenizer/stemmer.
+bool build_one(const std::string &name, const std::string &content,
+               const std::string &tokenizer, const std::string &stemmer,
+               std::string *burrow, std::string *error) {
+  const char *t = std::getenv("TEST_TMPDIR");
+  std::string base = (t != nullptr ? std::string(t) : std::string("/tmp"));
+  std::string dir = base + "/" + name + "_src";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  {
+    std::ofstream f(dir + "/sample.jsonl");
+    f << "{\"docid\":\"d-1\",\"contents\":\"" << content << "\"}\n";
+  }
+  IndexOptions opts;
+  opts.input = dir;
+  opts.burrow = tmp_burrow(name);
+  opts.overwrite = true;
+  opts.tokenizer = tokenizer;
+  opts.stemmer = stemmer;
+  *burrow = opts.burrow;
+  IndexSummary s;
+  return jsonl_index(opts, &s, error);
+}
+} // namespace
+
+TEST(JsonlTokenizer, Utf8KeepsAccentedWordsWholeAsciiDoesNot) {
+  std::string error, bu, ba;
+  ASSERT_TRUE(build_one("tok_u", "Montréal café", "utf8", "", &bu, &error))
+      << error;
+  ASSERT_TRUE(build_one("tok_a", "Montréal café", "ascii", "", &ba, &error))
+      << error;
+  auto wu = open_burrow(bu, &error);
+  ASSERT_NE(wu, nullptr) << error;
+  auto wa = open_burrow(ba, &error);
+  ASSERT_NE(wa, nullptr) << error;
+  EXPECT_EQ(wu->tokenizer()->name(), "utf8");
+  EXPECT_EQ(wa->tokenizer()->name(), "ascii");
+  // utf8: "Montréal" folds (capital + accent) to the whole token "montréal";
+  // "café" is one token too.
+  EXPECT_GT(wu->idx()->count(wu->featurizer()->featurize("montréal")), 0);
+  EXPECT_GT(wu->idx()->count(wu->featurizer()->featurize("café")), 0);
+  // ascii: the accent byte is a separator, so the whole accented word is never
+  // a token.
+  EXPECT_EQ(wa->idx()->count(wa->featurizer()->featurize("montréal")), 0);
+  wu->end();
+  wa->end();
+}
+
+TEST(JsonlTokenizer, DefaultsToUtf8AndReportsIt) {
+  std::string error;
+  IndexSummary s;
+  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("tok_def"), &s, &error))
+      << error;
+  EXPECT_EQ(s.tokenizer, "utf8"); // default
+  auto w = open_burrow(tmp_burrow("tok_def"), &error);
+  ASSERT_NE(w, nullptr) << error;
+  EXPECT_EQ(w->tokenizer()->name(), "utf8");
+  w->end();
+}
+
+TEST(JsonlTokenizer, Utf8WithStem) {
+  std::string error, b;
+  ASSERT_TRUE(build_one("tok_us", "running foxes", "utf8", "porter", &b, &error))
+      << error;
+  auto w = open_burrow(b, &error);
+  ASSERT_NE(w, nullptr) << error;
+  EXPECT_EQ(w->tokenizer()->name(), "stemming"); // wraps utf8
+  // English stemmed recall still works over a utf8 index.
+  QuerySpec stem;
+  stem.query = "run";
+  stem.stem = true;
+  std::vector<Hit> hits;
+  ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
+  EXPECT_EQ(docids(hits).count("d-1"), 1u); // "running" -> porter:run
+  w->end();
+}
+
+TEST(JsonlTokenizer, UnknownTokenizerIsAnError) {
+  std::string error, b;
+  EXPECT_FALSE(build_one("tok_bad", "hello", "klingon", "", &b, &error));
+  EXPECT_FALSE(error.empty());
+}

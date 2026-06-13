@@ -122,12 +122,15 @@ read-only by `SimpleWarren`.
 | `--overwrite` | off | If the burrow exists, replace it; otherwise fail rather than silently append. |
 | `--limit <n>` | none | Index at most `n` rows total (smoke tests). |
 | `--strict` | off | Turn skips (bad/missing-field lines) into fatal errors. |
+| `--tokenizer <ascii\|utf8>` | `utf8` | Token model. `utf8`: Unicode-aware (case folding, accents, CJK). `ascii`: byte-level, ASCII only (non-ASCII bytes are separators). |
+| `--stem <name>` | none | Also build a co-located stemmed stream (e.g. `porter`); see `docs/stemming.md`. |
 | `--verbose` | off | Per-file progress to stderr. |
 
-There is **no** `--stemmer` option: indexing stores exact (case-folded) surface tokens,
-which gives predictable grep semantics. (Stemming is not part of this model; if ever
-added it must be applied symmetrically at index and query time and recorded in the
-burrow — out of scope here.)
+Tokenization and stemming are recorded in the burrow's dna, so the query tool
+reconstructs the identical tokenizer (and any stemmed stream) automatically — there
+is no matching flag on the query side. Default retrieval is exact surface tokens
+(Unicode case-folded under `utf8`); `--stem` adds opt-in per-query recall (see
+`docs/stemming.md`).
 
 ### 3.3 JSONL parsing rules
 
@@ -150,10 +153,12 @@ add_text(contents)         -> (p_body, q_body)   ; add_annotation(":item",  p_id
 - `:docno` marks the identifier so every hit resolves back to its `docid`.
 - Body text is indexed **verbatim**.
 
-Use the **`ascii` tokenizer with the `noxml` recipe** and the **`hashing` featurizer**.
-With `noxml`, `<`, `>`, `&` in the body are ordinary characters — **no sanitization /
-escaping is required** (this replaces the older XML-tag-wrapping scheme and its escaping
-caveat). The container/id are referenced at query time as the bare GCL tags `:item` and
+Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
+— correct for the UTF-8 corpus (whole-word accented/non-Latin tokens, Unicode case
+folding). `--tokenizer ascii` selects the byte-level `ascii`/`noxml` tokenizer
+instead (faster, but non-ASCII bytes are separators, so e.g. `café` → `caf`).
+Neither tokenizer needs body sanitization: `<`, `>`, `&` are ordinary characters.
+The container/id are referenced at query time as the bare GCL tags `:item` and
 `:docno`.
 
 ### 3.5 Build path & resource behavior

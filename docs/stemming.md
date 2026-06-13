@@ -164,10 +164,14 @@ A no-op term is safe and symmetric: `Porter::stem("ox")` returns `"ox"`
 - Short (< 3 char) and non-alphabetic terms (e.g. `covid19`) are **never
   stemmed**; under `--stem` they fall back to exact for that term automatically.
   This is correct, not a bug.
-- **Non-ASCII caveat (pre-existing, not stemming-specific).** The `ascii`
-  tokenizer is ASCII-only and treats non-ASCII bytes as separators, so
-  accented/UTF-8 words are split or truncated (e.g. `café` → `caf`) in **both**
-  streams. Document it; it affects all retrieval, not just stemming.
+- **Tokenizer / non-ASCII.** The index defaults to the `utf8` tokenizer
+  (Unicode-aware: whole-word accented/non-Latin tokens, Unicode case folding), so
+  non-ASCII content is handled correctly. If the index was built with
+  `--tokenizer ascii`, non-ASCII bytes are separators (e.g. `café` → `caf`) in
+  **both** streams — an ASCII-only limitation, not stemming-specific. Note Porter
+  is ASCII-only regardless: it does not stem non-ASCII words (they fall back to
+  their exact `utf8` token), so `--stem` adds recall for English, not for accented
+  or non-Latin terms.
 
 ---
 
