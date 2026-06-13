@@ -17,12 +17,13 @@ features share addresses, so one index carries both streams — no stats, no sec
 text store. Only `tokenize` is specialized; `skip`/`split` delegate; recipe
 round-trips through dna.
 
-**Still TODO — the query/CLI side is NOT built.** It's specced in
-**`docs/stemming.md`** (on branch `claude/tool-agent`): add `--stem` to the JSONL
-indexer (build with the `stemming` tokenizer) and query tool (run the same
-cover-density ranking with Porter active on the handle). The rankers already
-branch on `warren->stemmer()` (`src/ranking.cc`), and a burrow opens exact by
-default (constructor defaults `stemmer_` to NullStemmer).
+**Query/CLI side is now BUILT** (open PR #3 on `claude/tool-agent`): the JSONL
+indexer takes `--stem porter` (builds with the `stemming` tokenizer) and
+`--tokenizer ascii|utf8`; the query tool takes `--stem` (stems terms into
+`porter:` GCL atoms, ranks via ssr). See `docs/stemming.md`. Note the implemented
+mechanism does NOT use `warren->stemmer()` — that path only stems in
+`icover_ranking`, and `Warren::set_stemmer()` persists to dna; instead jsonl_core
+stems the query and targets the stemmed features directly.
 
 **Landmine to remember:** `Warren::set_stemmer()` (`src/warren.h`) **persists** the
 stemmer into the burrow dna (`set_parameter_` → `set_parameter_in_dna`,
