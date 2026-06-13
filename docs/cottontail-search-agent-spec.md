@@ -268,19 +268,23 @@ agent-tuned, with a mature dedicated `glm45` parser (the GLM-4.5 family led BFCL
 context — but its vLLM tool parser has a documented fragility history on long
 multi-step runs (test `qwen3_coder` vs the newer `qwen3_xml`).
 
-**vLLM launch (primary):**
+**vLLM launch (primary) — confirmed serving on this machine, 2026-06-13:**
 ```
-CUDA_VISIBLE_DEVICES=1 vllm serve openai/gpt-oss-120b \
+CUDA_VISIBLE_DEVICES=1 CUDA_DEVICE_ORDER=PCI_BUS_ID \
+vllm serve openai/gpt-oss-120b \
   --served-model-name gpt-oss-120b \
   --host 127.0.0.1 --port 8000 \
   --download-dir /share/huggingface-models/ \
   --max-model-len 131072 --enable-auto-tool-choice --tool-call-parser openai \
   --gpu-memory-utilization 0.92
-# CUDA_VISIBLE_DEVICES=1 pins the 96 GB Blackwell (GPU 1). MXFP4 is the native
-# format — do NOT pass --quantization. If "No available memory for cache blocks":
-# lower --max-model-len / --max-num-seqs. The report-writer instance (§6.2) uses
-# the same --download-dir and --host 127.0.0.1 on CUDA_VISIBLE_DEVICES=0 with a
-# different --port (e.g. 8001).
+# CUDA_DEVICE_ORDER=PCI_BUS_ID makes CUDA enumerate GPUs in nvidia-smi/PCI order, so
+# CUDA_VISIBLE_DEVICES=1 reliably selects the 96 GB Blackwell (without it CUDA orders
+# "fastest first" and the index may not be the card you mean). MXFP4 is the native
+# format — do NOT pass --quantization; it loads and serves on this sm_120 card, so
+# caveat (1) above is cleared. The remaining check is caveat (2): multi-step (and
+# parallel) tool calling on /v1/chat/completions. If "No available memory for cache
+# blocks": lower --max-model-len / --max-num-seqs. The report-writer (§6.2) reuses
+# the same env + --download-dir + --host on CUDA_VISIBLE_DEVICES=0, different --port.
 ```
 
 **Won't fit even at 4-bit (rule out for one card):** DeepSeek-V3.x, GLM-4.6/4.7
