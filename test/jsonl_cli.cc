@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -104,6 +105,95 @@ TEST(JsonlCli, RuntimeErrorExit2WithErrorObject) {
   json j = json::parse(out);
   EXPECT_TRUE(j.contains("error"));
   EXPECT_EQ(j["where"], "open");
+}
+
+TEST(JsonlCli, StemBuildAndQuery) {
+  std::string b = tmpdir() + "/cli_stem.burrow";
+  int code;
+  std::string idx = run(std::string(kIndexBin) +
+                            " --input test/jsonl/plain --burrow " + b +
+                            " --stem porter --overwrite",
+                        &code);
+  ASSERT_EQ(code, 0) << idx;
+  EXPECT_EQ(json::parse(idx)["stemmer"], "porter");
+
+  // --stem "run" matches doc-002 ("runs"); the plain index would not.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --text run --stem --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_EQ(j["stemmed"], true);
+  bool found = false;
+  for (const auto &r : j["results"])
+    if (r["docid"] == "doc-002")
+      found = true;
+  EXPECT_TRUE(found) << out;
+}
+
+TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
+  std::string b = build_burrow("cli_stem_missing"); // built without --stem
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --text elephant --stem",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  json j = json::parse(out);
+  EXPECT_TRUE(j.contains("error"));
+}
+
+TEST(JsonlCli, GetDocument) {
+  std::string b = build_burrow("cli_get");
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --get doc-004 --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_EQ(j["found"], true);
+  EXPECT_EQ(j["docid"], "doc-004");
+  EXPECT_NE(j["text"].get<std::string>().find("elephants"), std::string::npos);
+}
+
+TEST(JsonlCli, CountMatches) {
+  std::string b = build_burrow("cli_count");
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --count --text \"quick fox\" --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_EQ(j["match_count"], 2);
+}
+
+TEST(JsonlCli, ResultCountAndTruncated) {
+  std::string b = build_burrow("cli_trunc");
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --text fox --top-k 1 --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_EQ(j["result_count"], 1);
+  EXPECT_EQ(j["truncated"], true); // fox matches 2 docs, asked for 1
+}
+
+TEST(JsonlCli, DescribeEmitsToolSchema) {
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --describe", &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  ASSERT_TRUE(j.is_array());
+  std::set<std::string> names;
+  for (const auto &t : j) {
+    EXPECT_EQ(t["type"], "function");
+    names.insert(t["function"]["name"].get<std::string>());
+  }
+  EXPECT_EQ(names.count("search_text"), 1u);
+  EXPECT_EQ(names.count("search_gcl"), 1u);
+  EXPECT_EQ(names.count("explain"), 1u);
+  EXPECT_EQ(names.count("get_document"), 1u);
+  EXPECT_EQ(names.count("count_matches"), 1u);
 }
 
 TEST(JsonlCli, BatchPreservesOrderAndIsolatesErrors) {

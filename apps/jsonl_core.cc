@@ -8,7 +8,9 @@
 #include "src/builder.h"
 #include "src/nlohmann.h"
 #include "src/ranking.h"
+#include "src/recipe.h"
 #include "src/simple_builder.h"
+#include "src/stemmer.h"
 
 namespace cottontail {
 namespace jsonl {
@@ -73,6 +75,103 @@ std::string all_of(const std::vector<std::string> &terms) {
   return e + ")";
 }
 
+bool is_gcl_operator(const std::string &t) {
+  return t == "^" || t == "+" || t == "..." || t == "<>" || t == "<<" ||
+         t == ">>";
+}
+
+// True for things in a GCL expression that are not bare query terms: operators
+// and structural tags (":item", ":docno", ...). These are left untouched when
+// rewriting a query for stemming.
+bool is_gcl_nonterm(const std::string &t) {
+  return is_gcl_operator(t) || (!t.empty() && t[0] == ':');
+}
+
+// If the burrow was built with a stemmed stream, return the matching stemmer
+// (reconstructed from the tokenizer recipe). Returns nullptr for a plain index.
+std::shared_ptr<Stemmer> burrow_stemmer(std::shared_ptr<Warren> warren) {
+  if (warren->tokenizer()->name() != "stemming")
+    return nullptr;
+  std::map<std::string, std::string> parameters;
+  if (!cook(warren->tokenizer()->recipe(), &parameters))
+    return nullptr;
+  std::string name, recipe;
+  if (!name_and_recipe(parameters, "stemmer", &name, &recipe))
+    return nullptr;
+  return Stemmer::make(name, recipe);
+}
+
+// Stem one query term into the GCL atom that addresses the stemmed stream. When
+// the stemmer reports it did nothing (short/non-alpha term), the stemmer returns
+// the surface form unchanged, which addresses the exact stream -- the correct
+// symmetric fallback (so e.g. --stem "ox" still matches "ox").
+std::string stem_atom(std::shared_ptr<Stemmer> stemmer,
+                      const std::string &term) {
+  return stemmer->stem(term);
+}
+
+// Rewrite a GCL expression, replacing every bare term with its stemmed atom and
+// leaving operators, parens, whitespace, and ":tags" untouched. Quoted phrases
+// are passed through verbatim (not stemmed term-by-term).
+std::string stem_gcl(const std::string &gcl,
+                     std::shared_ptr<Stemmer> stemmer) {
+  std::string out, tok;
+  bool in_phrase = false;
+  auto flush = [&]() {
+    if (tok.empty())
+      return;
+    if (is_gcl_nonterm(tok))
+      out += tok;
+    else
+      out += stem_atom(stemmer, tok);
+    tok.clear();
+  };
+  for (char c : gcl) {
+    if (c == '"') { // phrase delimiter: emit the quoted span unchanged
+      flush();
+      out += c;
+      in_phrase = !in_phrase;
+    } else if (!in_phrase &&
+               (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n')) {
+      flush();
+      out += c;
+    } else {
+      tok.push_back(c);
+    }
+  }
+  flush();
+  return out;
+}
+
+// The GCL whose :item-containment defines "matches" for a query (used by count):
+// all-of the terms for text mode, the expression for gcl mode, stemmed if asked.
+// Empty *out means "no terms" (zero matches).
+bool build_match_gcl(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                     std::string *out, std::string *error) {
+  if (spec.stem) {
+    auto stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "--stem requested but this burrow has no stemmed stream "
+          "(rebuild the index with --stem)";
+      return false;
+    }
+    if (spec.is_gcl) {
+      *out = stem_gcl(spec.query, stemmer);
+    } else {
+      std::vector<std::string> atoms;
+      for (const auto &t : warren->tokenizer()->split(spec.query))
+        atoms.push_back(stem_atom(stemmer, t));
+      *out = all_of(atoms);
+    }
+  } else if (spec.is_gcl) {
+    *out = spec.query;
+  } else {
+    *out = all_of(warren->tokenizer()->split(spec.query));
+  }
+  return true;
+}
+
 // Candidate term atoms in a GCL expression: drop operators, parens, and
 // structural tags (":...") so --explain can report leaf document frequencies.
 std::vector<std::string> gcl_terms(const std::string &gcl) {
@@ -110,9 +209,36 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
   }
   std::vector<std::string> files = find_shards(opts.input);
 
+  // Pick the inner token model. ascii is byte-level (ASCII only); utf8 is
+  // Unicode-aware (case folding, accents, CJK) and is the default for the UTF-8
+  // corpus. The query tool needs no matching flag -- it reconstructs whichever
+  // tokenizer this is from the burrow dna.
+  std::string inner_name, inner_recipe;
+  if (opts.tokenizer == "ascii") {
+    inner_name = "ascii";
+    inner_recipe = "noxml";
+  } else if (opts.tokenizer == "utf8") {
+    inner_name = "utf8";
+    inner_recipe = "";
+  } else {
+    safe_error(error) =
+        "unknown --tokenizer (want ascii|utf8): " + opts.tokenizer;
+    return false;
+  }
+
   auto working = Working::mkdir(opts.burrow, error);
   auto featurizer = Featurizer::make("hashing", "", error, working);
-  auto tokenizer = Tokenizer::make("ascii", "noxml", error);
+  std::shared_ptr<Tokenizer> tokenizer;
+  if (opts.stemmer.empty()) {
+    tokenizer = Tokenizer::make(inner_name, inner_recipe, error);
+  } else {
+    // Wrap the chosen tokenizer with the named stemmer so the index carries a
+    // co-located stemmed stream alongside the exact one (see docs/stemming.md).
+    std::string recipe = "[ tokenizer:[ name:\"" + inner_name + "\", recipe:\"" +
+                         inner_recipe + "\" ], stemmer:[ name:\"" +
+                         opts.stemmer + "\", recipe:\"\" ], ]";
+    tokenizer = Tokenizer::make("stemming", recipe, error);
+  }
   if (working == nullptr || featurizer == nullptr || tokenizer == nullptr)
     return false;
   auto builder = SimpleBuilder::make(working, featurizer, tokenizer, error,
@@ -187,6 +313,8 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
     summary->rows_skipped = skipped;
     summary->elapsed_seconds = (now() - t0) / 1000.0;
     summary->burrow_bytes = dir_bytes(opts.burrow);
+    summary->tokenizer = opts.tokenizer;
+    summary->stemmer = opts.stemmer;
   }
   return true;
 }
@@ -205,7 +333,34 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  std::vector<Hit> *hits, std::string *error) {
   const std::string container = ":item";
   std::vector<RankingResult> ranked;
-  if (spec.is_gcl) {
+  if (spec.stem) {
+    // Stemmed retrieval: rewrite the query into stemmed-stream atoms and rank
+    // with ssr (cover density). Uniform for --text and --gcl; the engine's
+    // rankers don't stem on their own, so we target the stemmed features here.
+    auto stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "--stem requested but this burrow has no stemmed stream "
+          "(rebuild the index with --stem)";
+      return false;
+    }
+    std::string query;
+    if (spec.is_gcl) {
+      query = stem_gcl(spec.query, stemmer);
+    } else {
+      std::vector<std::string> terms = warren->tokenizer()->split(spec.query);
+      std::vector<std::string> atoms;
+      for (const auto &t : terms)
+        atoms.push_back(stem_atom(stemmer, t));
+      query = all_of(atoms);
+    }
+    if (!query.empty()) {
+      auto check = warren->hopper_from_gcl(query, error);
+      if (check == nullptr)
+        return false;
+      ranked = ssr_ranking(warren, query, container, spec.top_k);
+    }
+  } else if (spec.is_gcl) {
     // Validate the expression up front so a bad --gcl is a reported error,
     // not a silent empty result.
     auto check = warren->hopper_from_gcl(spec.query, error);
@@ -255,6 +410,65 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
   return true;
 }
 
+bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
+               std::string *text, bool *found, std::string *error) {
+  *found = false;
+  text->clear();
+  std::vector<std::string> terms = warren->tokenizer()->split(docid);
+  if (terms.empty())
+    return true; // nothing to match on -> not found
+  // Find an :item whose :docno contains the docid's token sequence, then verify
+  // the recovered docid string matches exactly (guards against a docid whose
+  // tokens are a subset of another's).
+  std::string phrase = terms[0];
+  if (terms.size() > 1) {
+    phrase = "(...";
+    for (const auto &t : terms)
+      phrase += " " + t;
+    phrase += ")";
+  }
+  std::string gcl = "(>> :item (>> :docno " + phrase + "))";
+  auto hopper = warren->hopper_from_gcl(gcl, error);
+  if (hopper == nullptr)
+    return false;
+  auto docno = warren->hopper_from_gcl(":docno", error);
+  if (docno == nullptr)
+    return false;
+  addr p, q;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q)) {
+    addr dp = 0, dq = -1;
+    docno->tau(p, &dp, &dq);
+    if (trim(warren->txt()->translate(dp, dq)) == docid) {
+      *found = true;
+      *text = warren->txt()->translate(dq + 1, q); // body after the :docno span
+      return true;
+    }
+  }
+  return true;
+}
+
+bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                 long *count, std::string *error) {
+  *count = 0;
+  std::string match;
+  if (!build_match_gcl(warren, spec, &match, error))
+    return false;
+  if (match.empty())
+    return true; // no terms -> 0 matches
+  std::string gcl = "(>> :item " + match + ")";
+  auto hopper = warren->hopper_from_gcl(gcl, error);
+  if (hopper == nullptr)
+    return false; // e.g. malformed --gcl
+  addr p, q;
+  long n = 0;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q))
+    n++;
+  *count = n;
+  return true;
+}
+
 ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
                             const QuerySpec &spec) {
   ExplainResult out;
@@ -273,10 +487,30 @@ ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
     out.parsed_ok = true;
     terms = warren->tokenizer()->split(spec.query);
   }
+  std::shared_ptr<Stemmer> stemmer;
+  if (spec.stem) {
+    stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      out.parsed_ok = false;
+      out.error = "--stem requested but this burrow has no stemmed stream "
+                  "(rebuild the index with --stem)";
+      return out;
+    }
+  }
   for (const auto &t : terms) {
     ExplainLeaf leaf;
     leaf.term = t;
-    leaf.df = warren->idx()->count(warren->featurizer()->featurize(t));
+    if (spec.stem) {
+      // The stemmed atom addresses the stemmed stream; if the term is
+      // unstemmable the stemmer returns the surface form (exact stream).
+      bool stemmed = false;
+      std::string atom = stemmer->stem(t, &stemmed);
+      leaf.stream = stemmed ? "stemmed" : "exact";
+      leaf.df = warren->idx()->count(warren->featurizer()->featurize(atom));
+    } else {
+      leaf.stream = "exact";
+      leaf.df = warren->idx()->count(warren->featurizer()->featurize(t));
+    }
     out.leaves.push_back(leaf);
   }
   return out;

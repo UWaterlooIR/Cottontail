@@ -6,9 +6,9 @@
 /*test*
 !/*test*/
 !/*test*/**
-*.sh
-*.py
 .DS_Store
+.venv/
+__pycache__/
 MODULE.bazel.lock
 /bazel-Cottontail
 /bazel-bin

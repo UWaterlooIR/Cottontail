@@ -28,6 +28,8 @@ struct IndexOptions {
   long limit = -1;                    // -1 = unlimited
   bool strict = false;                // turn skips into fatal errors
   bool verbose = false;
+  std::string tokenizer = "utf8";     // token model: "utf8" (Unicode) | "ascii"
+  std::string stemmer = "";           // "" = none; "porter" = add a stemmed stream
 };
 
 struct IndexSummary {
@@ -37,6 +39,8 @@ struct IndexSummary {
   size_t rows_skipped = 0;
   double elapsed_seconds = 0.0;
   uintmax_t burrow_bytes = 0;
+  std::string tokenizer = ""; // token model baked into the index
+  std::string stemmer = "";   // stemmer baked into the index ("" = none)
 };
 
 // Recursively index every *.jsonl / *.jsonl.gz under opts.input into a static
@@ -70,6 +74,7 @@ struct QuerySpec {
   size_t top_k = 10;
   bool full_text = false;
   size_t snippet_chars = 240;
+  bool stem = false;             // match against the stemmed stream (opt-in)
 };
 
 // Rank a query against a started burrow (from open_burrow). Returns false (with
@@ -77,9 +82,21 @@ struct QuerySpec {
 bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  std::vector<Hit> *hits, std::string *error = nullptr);
 
+// Fetch the full body of the row whose :docno equals `docid`. Sets *found=false
+// (not an error) when no such row exists. Returns false only on a hard error.
+bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
+               std::string *text, bool *found, std::string *error = nullptr);
+
+// Count the :item rows that match `spec` (AND of the terms for text mode, the
+// expression for gcl mode; honors spec.stem) — no ranking. Returns false only on
+// a hard error (malformed gcl, or --stem against a non-stemmed burrow).
+bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
+                 long *count, std::string *error = nullptr);
+
 struct ExplainLeaf {
   std::string term;
   addr df = 0;
+  std::string stream = "exact"; // which stream df came from: "exact" | "stemmed"
 };
 
 struct ExplainResult {

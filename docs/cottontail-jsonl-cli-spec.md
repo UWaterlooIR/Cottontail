@@ -122,12 +122,15 @@ read-only by `SimpleWarren`.
 | `--overwrite` | off | If the burrow exists, replace it; otherwise fail rather than silently append. |
 | `--limit <n>` | none | Index at most `n` rows total (smoke tests). |
 | `--strict` | off | Turn skips (bad/missing-field lines) into fatal errors. |
+| `--tokenizer <ascii\|utf8>` | `utf8` | Token model. `utf8`: Unicode-aware (case folding, accents, CJK). `ascii`: byte-level, ASCII only (non-ASCII bytes are separators). |
+| `--stem <name>` | none | Also build a co-located stemmed stream (e.g. `porter`); see `docs/stemming.md`. |
 | `--verbose` | off | Per-file progress to stderr. |
 
-There is **no** `--stemmer` option: indexing stores exact (case-folded) surface tokens,
-which gives predictable grep semantics. (Stemming is not part of this model; if ever
-added it must be applied symmetrically at index and query time and recorded in the
-burrow — out of scope here.)
+Tokenization and stemming are recorded in the burrow's dna, so the query tool
+reconstructs the identical tokenizer (and any stemmed stream) automatically — there
+is no matching flag on the query side. Default retrieval is exact surface tokens
+(Unicode case-folded under `utf8`); `--stem` adds opt-in per-query recall (see
+`docs/stemming.md`).
 
 ### 3.3 JSONL parsing rules
 
@@ -150,10 +153,12 @@ add_text(contents)         -> (p_body, q_body)   ; add_annotation(":item",  p_id
 - `:docno` marks the identifier so every hit resolves back to its `docid`.
 - Body text is indexed **verbatim**.
 
-Use the **`ascii` tokenizer with the `noxml` recipe** and the **`hashing` featurizer**.
-With `noxml`, `<`, `>`, `&` in the body are ordinary characters — **no sanitization /
-escaping is required** (this replaces the older XML-tag-wrapping scheme and its escaping
-caveat). The container/id are referenced at query time as the bare GCL tags `:item` and
+Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
+— correct for the UTF-8 corpus (whole-word accented/non-Latin tokens, Unicode case
+folding). `--tokenizer ascii` selects the byte-level `ascii`/`noxml` tokenizer
+instead (faster, but non-ASCII bytes are separators, so e.g. `café` → `caf`).
+Neither tokenizer needs body sanitization: `<`, `>`, `&` are ordinary characters.
+The container/id are referenced at query time as the bare GCL tags `:item` and
 `:docno`.
 
 ### 3.5 Build path & resource behavior
@@ -501,10 +506,11 @@ in `main()`.
   //test:hazel_test //test:jsonl_test` must pass before any PR (see §Contributing in
   `/CLAUDE.md`).
 
-> **Gotcha — tests must be C++.** `.gitignore` ignores `*.sh` and `*.py` repo-wide, so a
-> shell/Python CLI test will **not** be committed and cannot serve as the regression net.
-> This is why §11.1 (library factoring) is mandatory: test the library in C++, not the
-> binary via a script.
+> **Keep the regression net in C++.** Python and shell are committable in this
+> repo (for tooling and examples), but the green-gate regression tests stay
+> **C++/googletest** — fast, deterministic, no subprocess — which is why §11.1
+> (library factoring) matters: test `jsonl_core` directly rather than scripting the
+> binary.
 
 ### 11.3 Fixtures (tiny, committed under `test/jsonl/`, listed in the target's `data`)
 
@@ -572,5 +578,6 @@ boundary — exit codes, the stderr `{"error","where"}` object, stdout JSON fram
   (exit `2`, with the stderr error object), and one `--batch` case (order preserved,
   one malformed line isolated).
 
-This is the **only committable way** to test the CLI surface, because `.sh`/`.py`
-harnesses are gitignored (§11.2). Everything else stays at the library level.
+This C++ harness is the **committed** regression net for the CLI surface (fast and
+self-contained); everything else stays at the library level. Ad-hoc `.sh`/`.py`
+scripts are fine for exploration but are not the green-gate tests.

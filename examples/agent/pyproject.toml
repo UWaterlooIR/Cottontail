@@ -1,0 +1,10 @@
+[project]
+name = "cottontail-search-agent"
+version = "0.1.0"
+description = "Example LLM ReAct search agent over a Cottontail burrow"
+requires-python = ">=3.12"
+dependencies = ["openai>=1.40"]
+
+# Scripts, not an installable package — uv manages the env/lock only.
+[tool.uv]
+package = false
