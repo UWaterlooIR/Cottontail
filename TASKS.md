@@ -1,6 +1,6 @@
 # Tasks
 
-## In progress
+## Done
 
 ### Search-agent tooling: flesh out the query CLI + an LLM-driven example
 
@@ -19,13 +19,13 @@ CLI core (C++, `apps/jsonl_core.*` + `cottontail-jsonl-query`):
 - [x] Tests: get (found/not-found/subset-guard), count, truncated, --describe shape.
 - [x] Keep `bazel test //test:tests //test:hazel_test //test:jsonl_test` green.
 
-Example agent (Python, `examples/agent/`):
-- [ ] ReAct loop via vLLM OpenAI-compatible endpoint + native tool calling
-      (gpt-oss-120b on 127.0.0.1:8000, validated 2026-06-13); load tools from
-      `--describe`; budgets; cite docids. (§5)
-- [ ] Stub-LLM harness test (deterministic); manual real-model smoke. (§5.4)
-
-## Done
+Example agent (Python uv project, `examples/agent/`):
+- [x] ReAct loop via vLLM OpenAI-compatible endpoint + native tool calling
+      (gpt-oss-120b on 127.0.0.1:8000, validated 2026-06-13); loads tools from
+      `--describe`; step budget; cites docids. (§5)
+- [x] Stub-LLM harness test (deterministic, no GPU) — `test_agent.py`. Manual
+      real-model smoke is a human step (see `examples/agent/README.md`). (§5.4)
+- [x] uv project: `pyproject.toml` + `uv.lock` (Python ≥3.12); `.venv` gitignored.
 
 ### Tokenizer choice: `--tokenizer ascii|utf8` for the index CLI
 
