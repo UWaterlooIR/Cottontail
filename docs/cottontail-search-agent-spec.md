@@ -109,16 +109,19 @@ A missing/corrupt burrow is still exit 2 with `{"error","where"}`.
 `found:false`, exit 0; a docid whose tokens are a prefix/subset of another's
 resolves to the right row (exact-match guard).
 
-### 3.2 Result-set signals on search output (recommended)
+### 3.2 Result-set signals on search output
 
 Add to the `search_text`/`search_gcl` result object (§4.4 of the CLI spec):
 
 - `"result_count"`: number of results returned (≤ `top_k`).
-- `"truncated"`: `true` if more rows matched than were returned. Cheapest correct
-  source is whether the ranker filled `top_k`; if an exact total is wanted, see
-  §3.3. Document which semantics you implement.
+- `"truncated"`: the **cheap heuristic** `result_count == top_k` — i.e. "the
+  result set was at least as large as the slice you asked for, so there may be
+  more." This is free (no extra pass). It is intentionally approximate (exactly
+  `top_k` matches looks the same as far more) and carries **no count** — when the
+  agent wants the exact number it calls `count_matches` (§3.3).
 
-These let the agent decide *refine vs. stop* without a second call.
+This lets the agent decide *refine vs. stop* at zero cost, and keeps the common
+ranked-search path from paying for a full match count on broad queries.
 
 ### 3.3 `count_matches` (optional)
 
@@ -221,33 +224,72 @@ The LLM is non-deterministic, so test the **harness**, not the model:
 A separate, **manual** smoke script (not committed if `.sh`/`.py`) runs the real
 vLLM model on a couple of questions for a human to eyeball.
 
-## 6. Recommended LLM to serve via vLLM
+## 6. Recommended LLM(s) to serve via vLLM
 
-Requirements for this agent: **strong, reliable tool/function calling**, solid
-reasoning, and **≥ 32k context** (search observations accumulate). All below are
-open-weight and vLLM-served. (Model landscape as of early 2026 — verify the latest
-point release and that vLLM's tool parser supports your exact build.)
+**Hardware (measured, `nvidia-smi` 2026-06-13):** two *heterogeneous* GPUs —
+GPU 1 = **RTX PRO 6000 Blackwell Max-Q, 96 GB** (sm_120, native FP4/FP8);
+GPU 0 = **RTX A6000, 48 GB** (Ampere sm_86, no FP8/FP4). Driver 580.142, CUDA 13.0.
+Do **not** tensor-parallel across them (heterogeneous TP is unsupported and the
+Ampere card blocks FP4/FP8) — run **two separate vLLM instances**, pinned with
+`CUDA_VISIBLE_DEVICES`.
 
-**Recommendation by GPU budget** (bf16 ≈ 2 GB/B params; 4-bit AWQ/GPTQ ≈ 0.5 GB/B,
-plus KV-cache headroom):
+> Models below were researched **2026-06-13** (past this doc author's training
+> cutoff). Vendor/agentic benchmark figures for the newest models are largely
+> unverified secondary claims — treat as directional, and confirm the model, its
+> license, and vLLM tool-parser support on your exact build before committing.
 
-| Tier | Model | Why | Rough VRAM |
-|---|---|---|---|
-| **Primary** | **Qwen2.5-32B-Instruct** (or Qwen3-32B if available) | Best tool-calling quality-per-GB in reach of one big GPU; long context. | ~64 GB bf16 (1×80 GB), or 4-bit on ~24–32 GB |
-| High end | Llama-3.3-70B-Instruct *or* Qwen2.5-72B-Instruct | Top open-weight tool use/reasoning if you have the VRAM. | ~140 GB bf16 (2×80 GB); 4-bit ~40–48 GB |
-| Fast/dev | Qwen2.5-7B-Instruct *or* Llama-3.1-8B-Instruct | Fits a single 24 GB card; fine for wiring up the loop. | ~16 GB bf16 |
+### 6.1 Agent LLM — on the 96 GB Blackwell (GPU 1)
 
-**vLLM flags (tool calling):**
-- Qwen: `--enable-auto-tool-choice --tool-call-parser hermes`
-- Llama 3.x: `--enable-auto-tool-choice --tool-call-parser llama3_json`
-- set `--max-model-len` ≥ 32768 (more if you let observations grow).
+Priorities: (1) reliable multi-step tool calling, (2) reasoning, (3) ≥32k (ideally
+128k) context. Fits = weights + KV on the one 96 GB card.
 
-**Primary pick:** start with **Qwen2.5-32B-Instruct** — its function-calling
-reliability is the thing this agent leans on hardest, and it serves on a single
-80 GB card (or quantized on 24–32 GB). Drop to **Qwen2.5-7B-Instruct** while
-building the harness; move to **Llama-3.3-70B / Qwen2.5-72B** if you have
-2×80 GB and want maximum quality. If a newer **Qwen3** instruct build is available
-in your vLLM, prefer it at the same size tier.
+| Pick | Model | Type / params | Fit on 96 GB | Ctx | vLLM parser | License |
+|---|---|---|---|---|---|---|
+| **Primary** | **gpt-oss-120b** | MoE 117B / 5.1B act | native MXFP4 ~63 GB | 131k | `openai` | Apache 2.0 |
+| Safest tool-caller | GLM-4.5-Air | MoE 106B / 12B act | 4-bit ~55 GB | 131k | `glm45` (+`--reasoning-parser glm45`) | MIT |
+| Best dense fit | Qwen3.6-27B | dense 27B | FP8 ~27 GB / BF16 ~54 GB | 262k | `qwen3_coder`/`qwen3_xml` | Apache 2.0 |
+| Fast dev | gpt-oss-20b | MoE 21B / 3.6B act | native MXFP4 ~14 GB | 131k | `openai` | Apache 2.0 |
+
+**Primary = gpt-oss-120b:** best reasoning that *fits one card*, permissive license,
+128k context, and its native MXFP4 checkpoint slots into ~63 GB (no lossy re-quant),
+leaving ~33 GB for KV; 5.1B active params keep the ReAct loop snappy. **Validate two
+things on our sm_120 build before committing** — these are the real risk, not raw
+quality:
+1. **MXFP4 kernel maturity on sm_120** (Blackwell workstation) — has been uneven;
+   smoke-test that it generates clean tokens on a current vLLM.
+2. **Tool-calling on `/v1/chat/completions`** — historically less mature for gpt-oss
+   than the Harmony `/v1/responses` path; since reliable multi-step calling is
+   priority #1, validate multi-step **and** parallel tool calls on our harness.
+   Run it with `Reasoning: low`/`medium` (it's a thinking model) in the agent loop.
+
+**If those caveats bite → GLM-4.5-Air** (4-bit): the lowest-risk tool-caller here —
+agent-tuned, with a mature dedicated `glm45` parser (the GLM-4.5 family led BFCL-v3).
+**Or Qwen3.6-27B** if you want a dense model that fits at full BF16 with the biggest
+context — but its vLLM tool parser has a documented fragility history on long
+multi-step runs (test `qwen3_coder` vs the newer `qwen3_xml`).
+
+**vLLM launch (primary):**
+```
+vllm serve openai/gpt-oss-120b --served-model-name gpt-oss-120b \
+  --max-model-len 131072 --enable-auto-tool-choice --tool-call-parser openai \
+  --gpu-memory-utilization 0.92 --port 8000
+# MXFP4 is the native format — do NOT pass --quantization. If "No available memory
+# for cache blocks": lower --max-model-len / --max-num-seqs.
+```
+
+**Won't fit even at 4-bit (rule out for one card):** DeepSeek-V3.x, GLM-4.6/4.7
+(355B), Qwen3-235B / Qwen3.5-397B, Kimi K2, Llama 4 Maverick.
+
+### 6.2 Optional report-writer — on the 48 GB A6000 (GPU 0)
+
+A clean two-model topology this enables: the **agent** (Blackwell) searches and
+gathers evidence; a separate **report-writer** (A6000) synthesizes the final cited
+answer from the gathered bundle — no tool calling, just faithful grounded synthesis.
+Recommended: **Gemma 4 31B-it** (dense, 4-bit/QAT-int4 ~17 GB, Apache 2.0, 256k ctx,
+native system role) as its own vLLM instance on GPU 0; alternatives **Qwen3.6-27B**
+(family consistency) or **GLM-4.7-Flash** (MLA → very cheap KV for huge bundles).
+Ampere has no FP8/FP4, so use 4-bit there. This is **additive** — the agent works
+standalone; the writer is an upgrade for long, well-formatted reports.
 
 ## 7. Testing & acceptance (summary)
 
@@ -264,10 +306,15 @@ in your vLLM, prefer it at the same size tier.
   exactly what the server removes — but only after the API is right here.
 - Ranking-model changes, multi-burrow federation, and auth are all out of scope.
 
-## 9. Open decisions for sign-off
+## 9. Decisions
 
-1. ~~Example app placement~~ — resolved: Python under `examples/agent/` (the
+1. ~~Example app placement~~ — **resolved:** Python under `examples/agent/` (the
    `*.py`/`*.sh` `.gitignore` rules were removed).
-2. **`count_matches`** (§3.3): build now or defer.
-3. **`truncated` semantics** (§3.2): "ranker filled `top_k`" vs. an exact count.
-4. **Model** (§6): confirm the GPU budget so the tier is pinned.
+2. ~~`count_matches`~~ — **resolved: build it** (§3.3).
+3. ~~`truncated` semantics~~ — **resolved (§3.2):** cheap heuristic
+   `truncated = result_count == top_k` on every search; exact number via
+   `count_matches` on demand.
+4. ~~Model~~ — **resolved** (§6): two heterogeneous GPUs; agent LLM
+   **gpt-oss-120b** on the 96 GB Blackwell (validate sm_120 MXFP4 + chat-completions
+   tool calling; fall back to GLM-4.5-Air), optional report-writer on the 48 GB
+   A6000.
