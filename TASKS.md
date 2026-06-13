@@ -2,6 +2,28 @@
 
 ## Done
 
+### Search server: HTTP/JSON over jsonl_core (`cottontail-jsonl-server`)
+
+Per `docs/cottontail-search-server-spec.md`. A long-lived HTTP server (cpp-httplib)
+that opens the burrow once and serves the tool actions over the identical JSON
+contract as the CLI.
+
+- [x] Factor the JSON serialization into a shared `apps/jsonl_json.{h,cc}` used by
+      both the query CLI and the server (no contract drift); CLI tests still green.
+- [x] `cottontail-jsonl-server`: `GET /healthz` (public), `GET /describe`, and
+      `POST /tools/<name>` for the five actions; thin layer over `jsonl_core`.
+- [x] Bearer-token auth (optional on loopback, required on a non-loopback bind;
+      fail-safe refuse-to-start), env `COTTONTAIL_API_TOKEN` (or `--token`),
+      constant-time compare, no logging of the header. Loopback default; no TLS
+      (deployment-layer tunnel/proxy).
+- [x] `WarrenProvider`: single shared Warren serialized by a mutex now,
+      structured for a clone-per-thread pool later (no handler changes).
+- [x] `cpp-httplib` via MODULE.bazel; `cc_binary` //apps:cottontail-jsonl-server.
+- [x] e2e test `test/jsonl_server.cc` (auth/search/get/count/malformed/describe)
+      — `//test:jsonl_server_test`. Full gate green.
+- [x] Example agent HTTP mode (`--server-url`, token via env) — transport swap,
+      same contract.
+
 ### Search-agent tooling: flesh out the query CLI + an LLM-driven example
 
 Per `docs/cottontail-search-agent-spec.md`. Build the CLI action surface first

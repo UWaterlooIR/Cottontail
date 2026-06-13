@@ -54,6 +54,22 @@ uv run --project examples/agent python examples/agent/search_agent.py \
 (Paths are relative to the repo root; `--project examples/agent` selects the uv
 environment.)
 
+### Against a running server instead of the CLI
+
+If you have `cottontail-jsonl-server` running (see
+`docs/cottontail-search-server-spec.md`), point the agent at it instead of a
+burrow — same contract, no per-query process spawn:
+
+```sh
+COTTONTAIL_API_TOKEN=<token> \
+uv run --project examples/agent python examples/agent/search_agent.py \
+  --server-url http://127.0.0.1:8080 \
+  --model gpt-oss-120b --question "…" --trace
+```
+
+The token is read from the environment (never a flag). Supply exactly one of
+`--server-url` (HTTP) or `--burrow` (subprocess).
+
 It prints the final answer and the cited docids; `--trace` shows the tool calls
 on stderr. Other flags: `--max-steps` (tool-call budget), `--reasoning low|medium|high`.
 
