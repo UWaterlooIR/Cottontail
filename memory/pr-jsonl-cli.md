@@ -10,14 +10,17 @@ Hazel-not-ready docs, the SimpleWarren grep-tool POC, the revised JSONL CLI spec
 and the `cottontail-jsonl-index`/`-query` CLIs + `//test:jsonl_test`) shipped via
 **PR #1** (https://github.com/UWaterlooIR/Cottontail/pull/1), now **MERGED**.
 
-Active branch is **`claude/tool-agent`** (→ `main`), with **open PR #3**
-("Add stemming CLI support and LLM agent specification",
-https://github.com/UWaterlooIR/Cottontail/pull/3). **Reference PR #3 for this
-branch's ongoing work — do not open new PRs; pushing more commits to
-`claude/tool-agent` updates it.** PR #3 carries: the `--stem` CLI + tokenizer
-choice ([[stemming-tokenizer]]), the agent-tool CLI actions (`--get`/`--count`/
-`--describe`, result signals), `docs/cottontail-search-agent-spec.md`, the example
-ReAct agent under `examples/agent/` (uv project), and `scripts/`.
+**PR #3** ("Add stemming CLI support and LLM agent specification",
+https://github.com/UWaterlooIR/Cottontail/pull/3) is now **MERGED** into `main`.
+It carried the `--stem` CLI + tokenizer choice ([[stemming-tokenizer]]), the
+agent-tool CLI actions (`--get`/`--count`/`--describe`, result signals),
+`docs/cottontail-search-agent-spec.md`, the example ReAct agent under
+`examples/agent/` (uv project), and `scripts/`.
+
+Active branch is now **`claude/agent-server`** (→ `main`, already pushed) for the
+search **server** work (spec §8: lift the CLI's tool API into a persistent
+REST/MCP layer over `jsonl_core`, opening the burrow once). It will get its own
+PR — confirm with the user before opening one.
 
 Access note: this sandbox shell has **no push access** to
 `git@github.com:UWaterlooIR/Cottontail` (fetch/push fail). Local commits reach a
