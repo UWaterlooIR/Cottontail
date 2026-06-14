@@ -9,12 +9,18 @@
 #include <vector>
 
 #include "apps/jsonl_core.h"
+#include "apps/jsonl_json.h"
 #include "src/nlohmann.h"
 
 namespace {
+using cottontail::jsonl::count_json;
+using cottontail::jsonl::describe_json;
+using cottontail::jsonl::explain_json;
 using cottontail::jsonl::ExplainResult;
+using cottontail::jsonl::get_json;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
+using cottontail::jsonl::results_json;
 
 void usage(const char *prog) {
   std::cerr << "usage:\n"
@@ -36,184 +42,6 @@ void usage(const char *prog) {
             << "      common-term ranked query can be second-scale on a very\n"
             << "      large corpus (cover-density touches the query terms'\n"
             << "      postings). No BM25 (it needs a stats precompute).\n";
-}
-
-json hit_json(const Hit &h) {
-  json r;
-  r["rank"] = h.rank;
-  r["score"] = h.score;
-  r["docid"] = h.docid;
-  json bp;
-  bp["start"] = h.best_passage.start;
-  bp["end"] = h.best_passage.end;
-  bp["text"] = h.best_passage.text;
-  r["best_passage"] = bp;
-  if (h.has_full_text)
-    r["text"] = h.full_text;
-  else
-    r["text"] = nullptr;
-  return r;
-}
-
-json results_json(const QuerySpec &spec, const std::vector<Hit> &hits,
-                  double elapsed_ms) {
-  json o;
-  o["query"] = spec.query;
-  o["query_mode"] = spec.is_gcl ? "gcl" : "text";
-  // --stem ranks via cover density over stemmed atoms (ssr), regardless of mode.
-  o["ranker"] = spec.stem ? std::string("ssr")
-                          : (spec.is_gcl ? std::string("ssr") : spec.ranker);
-  o["stemmed"] = spec.stem;
-  o["top_k"] = spec.top_k;
-  o["elapsed_ms"] = elapsed_ms;
-  json arr = json::array();
-  for (const auto &h : hits)
-    arr.push_back(hit_json(h));
-  o["results"] = arr;
-  o["result_count"] = hits.size();
-  // Cheap "there may be more" signal: the result set was at least as large as the
-  // slice asked for. Approximate by design; call count_matches for an exact number.
-  o["truncated"] = (hits.size() == spec.top_k);
-  return o;
-}
-
-json explain_json(const QuerySpec &spec, const ExplainResult &ex) {
-  json o;
-  o["query"] = spec.query;
-  o["query_mode"] = spec.is_gcl ? "gcl" : "text";
-  o["parsed_ok"] = ex.parsed_ok;
-  if (!ex.parsed_ok) {
-    o["error"] = ex.error;
-  } else {
-    json leaves = json::array();
-    for (const auto &l : ex.leaves) {
-      json le;
-      le["term"] = l.term;
-      le["df"] = l.df;
-      le["stream"] = l.stream;
-      leaves.push_back(le);
-    }
-    o["leaves"] = leaves;
-  }
-  return o;
-}
-
-json get_json(const std::string &docid, bool found, const std::string &text) {
-  json o;
-  o["docid"] = docid;
-  o["found"] = found;
-  o["text"] = found ? text : std::string("");
-  return o;
-}
-
-json count_json(const QuerySpec &spec, long count) {
-  json o;
-  o["query"] = spec.query;
-  o["query_mode"] = spec.is_gcl ? "gcl" : "text";
-  o["stemmed"] = spec.stem;
-  o["match_count"] = count;
-  return o;
-}
-
-// The agent tool schema (OpenAI/Anthropic function shape). The example agent
-// loads this verbatim; a future server exposes the identical schema.
-json describe_json() {
-  auto strp = [](const std::string &d) {
-    json p;
-    p["type"] = "string";
-    p["description"] = d;
-    return p;
-  };
-  auto intp = [](const std::string &d) {
-    json p;
-    p["type"] = "integer";
-    p["description"] = d;
-    return p;
-  };
-  auto boolp = [](const std::string &d) {
-    json p;
-    p["type"] = "boolean";
-    p["description"] = d;
-    return p;
-  };
-  auto tool = [](const std::string &name, const std::string &desc, json props,
-                 std::vector<std::string> required) {
-    json params;
-    params["type"] = "object";
-    params["properties"] = props;
-    params["required"] = required;
-    json fn;
-    fn["name"] = name;
-    fn["description"] = desc;
-    fn["parameters"] = params;
-    json t;
-    t["type"] = "function";
-    t["function"] = fn;
-    return t;
-  };
-
-  json tools = json::array();
-
-  json st;
-  st["query"] = strp("Natural-language words to find.");
-  st["top_k"] = intp("Max rows to return (default 10).");
-  st["stem"] = boolp("Also match morphological variants (run<->running); trades "
-                     "precision for recall.");
-  st["full_text"] = boolp("Return the whole row body instead of a snippet.");
-  tools.push_back(tool(
-      "search_text",
-      "Ranked full-text search over the corpus (cover-density proximity ranking). "
-      "Use first for broad recall. Returns ranked rows with docid, score and a "
-      "best-passage snippet; result_count and truncated indicate if there may be "
-      "more.",
-      st, {"query"}));
-
-  json sg;
-  sg["query"] = strp(
-      "A GCL S-expression. Operators: (^ a b) smallest span containing BOTH; "
-      "(+ a b) EITHER; (... a b) a then b in order/proximity; (>> :item (^ a b)) "
-      "rows CONTAINING both terms; (<< a :item) a contained in a row. Tags: :item "
-      "= a whole row, :docno = its id. Example: (>> :item (^ elephant vaccine)).");
-  sg["top_k"] = intp("Max rows to return (default 10).");
-  sg["stem"] = boolp("Stem bare terms for recall.");
-  sg["full_text"] = boolp("Return the whole row body instead of a snippet.");
-  tools.push_back(tool(
-      "search_gcl",
-      "Structured search for precision: Boolean, phrase, proximity, containment. "
-      "Use when bag-of-words is too noisy. Same ranked output as search_text.",
-      sg, {"query"}));
-
-  json ex;
-  ex["query"] = strp("The query to analyze.");
-  ex["is_gcl"] = boolp("Treat the query as a GCL expression.");
-  ex["stem"] = boolp("Resolve terms against the stemmed stream.");
-  tools.push_back(tool(
-      "explain",
-      "Dry-run a query WITHOUT ranking: returns each term's document frequency "
-      "(df) and which stream it hit (exact|stemmed). Use to check a term isn't "
-      "zero-hit before spending a real search.",
-      ex, {"query"}));
-
-  json gd;
-  gd["docid"] = strp("A docid from a prior search result.");
-  tools.push_back(tool(
-      "get_document",
-      "Read the full body of one row by its docid (e.g. to read a candidate "
-      "before answering). Returns {docid, found, text}.",
-      gd, {"docid"}));
-
-  json cm;
-  cm["query"] = strp("The query to count.");
-  cm["is_gcl"] = boolp("Treat the query as a GCL expression.");
-  cm["stem"] = boolp("Count against the stemmed stream.");
-  tools.push_back(tool(
-      "count_matches",
-      "Count how many rows match a query (no ranking) to gauge selectivity. For "
-      "words this is an AND of the terms; for GCL it's the expression. Returns "
-      "{query, match_count}.",
-      cm, {"query"}));
-
-  return tools;
 }
 
 [[noreturn]] void die(const std::string &msg, const std::string &where) {

@@ -2,7 +2,7 @@ load("@rules_cc//cc:defs.bzl", "cc_test")
 
 cc_test(
     name = "tests",
-    srcs = glob(["**/*.cc"], exclude = ["hazel.cc", "jsonl.cc", "jsonl_cli.cc"]) + glob(["**/*.h"]),
+    srcs = glob(["**/*.cc"], exclude = ["hazel.cc", "jsonl.cc", "jsonl_cli.cc", "jsonl_server.cc"]) + glob(["**/*.h"]),
     deps = [
         "//src:cottontail",
         "@googletest//:gtest_main",
@@ -56,6 +56,28 @@ cc_test(
     deps = [
         "//apps:jsonl_core",
         "//src:cottontail",
+        "@googletest//:gtest_main",
+    ],
+    linkopts = [
+        "-lz",
+        "-pthread",
+    ],
+)
+
+cc_test(
+    name = "jsonl_server_test",
+    size = "small",
+    srcs = [
+        "jsonl_server.cc",
+    ],
+    data = [
+        "jsonl/plain/sample.jsonl",
+        "//apps:cottontail-jsonl-index",
+        "//apps:cottontail-jsonl-server",
+    ],
+    deps = [
+        "//src:cottontail",
+        "@cpp-httplib//:httplib",
         "@googletest//:gtest_main",
     ],
     linkopts = [

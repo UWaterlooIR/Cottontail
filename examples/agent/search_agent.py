@@ -16,9 +16,12 @@ client and the tool-executor as arguments, so it can be unit-tested with stubs
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 DEFAULT_SYSTEM = """\
 You are a search agent over a document corpus. Answer the user's question using \
@@ -104,14 +107,42 @@ def _harvest_seen(name, obs, into):
         into.add(obs["docid"])
 
 
-class SearchTools:
-    """Loads the tool schema from, and executes tool calls against, the CLI."""
+def _http_request(url, token, payload=None):
+    """GET (payload=None) or POST a JSON request; return the parsed body, or a
+    parsed {error,...} body on an HTTP/connection error."""
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    data = json.dumps(payload).encode() if payload is not None else None
+    method = "POST" if payload is not None else "GET"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:  # server sends a JSON error body
+        try:
+            return json.loads(e.read().decode())
+        except Exception:
+            return {"error": f"HTTP {e.code}", "where": "server"}
+    except urllib.error.URLError as e:
+        return {"error": f"connection failed: {e.reason}", "where": "server"}
 
-    def __init__(self, query_bin, burrow):
+
+class SearchTools:
+    """Loads the tool schema from, and executes tool calls against, either the
+    CLI binary (subprocess) or a running cottontail-jsonl-server (HTTP). The two
+    transports share the identical JSON contract, so the rest of the agent is
+    unaffected by the choice."""
+
+    def __init__(self, query_bin=None, burrow=None, server_url=None, token=None):
         self.query_bin = query_bin
         self.burrow = burrow
+        self.server_url = server_url.rstrip("/") if server_url else None
+        self.token = token
 
     def schema(self):
+        if self.server_url:
+            return _http_request(f"{self.server_url}/describe", self.token)
         out = subprocess.run(
             [self.query_bin, "--describe"], capture_output=True, text=True
         )
@@ -120,6 +151,8 @@ class SearchTools:
         return json.loads(out.stdout)
 
     def call(self, name, args):
+        if self.server_url:  # HTTP transport: POST /tools/<name> with the args
+            return _http_request(f"{self.server_url}/tools/{name}", self.token, args)
         b = ["--burrow", self.burrow]
         fmt = ["--format", "jsonl"]
 
@@ -229,11 +262,16 @@ def run_agent(client, model, tools, call_tool, question, *,
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--burrow", required=True, help="Cottontail burrow path")
     ap.add_argument("--question", required=True)
+    # Search transport: either a running server (--server-url) or the CLI binary.
+    ap.add_argument("--server-url",
+                    help="cottontail-jsonl-server base URL (HTTP transport); "
+                         "token read from env COTTONTAIL_API_TOKEN")
+    ap.add_argument("--burrow", help="burrow path (subprocess transport)")
     ap.add_argument("--query-bin", default="cottontail-jsonl-query",
-                    help="path to the cottontail-jsonl-query binary")
-    ap.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
+                    help="path to the cottontail-jsonl-query binary (subprocess)")
+    ap.add_argument("--base-url", default="http://127.0.0.1:8000/v1",
+                    help="vLLM OpenAI-compatible base URL (the LLM, not search)")
     ap.add_argument("--model", default="gpt-oss-120b",
                     help="must match vLLM --served-model-name")
     ap.add_argument("--api-key", default="EMPTY")
@@ -244,10 +282,18 @@ def main(argv=None):
                     help="print the tool-call trace to stderr")
     args = ap.parse_args(argv)
 
+    if args.server_url:
+        # Token via env, never a flag (it would show in /proc/<pid>/cmdline).
+        tools = SearchTools(server_url=args.server_url,
+                            token=os.environ.get("COTTONTAIL_API_TOKEN"))
+    elif args.burrow:
+        tools = SearchTools(query_bin=args.query_bin, burrow=args.burrow)
+    else:
+        ap.error("supply --server-url (HTTP) or --burrow (subprocess)")
+
     from openai import OpenAI  # lazy: tests import this module without openai
 
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
-    tools = SearchTools(args.query_bin, args.burrow)
     schema = tools.schema()
     result = run_agent(client, args.model, schema, tools.call, args.question,
                        max_steps=args.max_steps, reasoning=args.reasoning)

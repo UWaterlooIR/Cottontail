@@ -532,6 +532,21 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "jsonl_json",
+    srcs = [
+        "jsonl_json.cc",
+    ],
+    hdrs = [
+        "jsonl_json.h",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":jsonl_core",
+        "//src:cottontail",
+    ],
+)
+
 cc_binary(
     name = "cottontail-jsonl-index",
     srcs = [
@@ -552,6 +567,25 @@ cc_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":jsonl_core",
+        ":jsonl_json",
         "//src:cottontail",
+    ],
+)
+
+cc_binary(
+    name = "cottontail-jsonl-server",
+    srcs = [
+        "cottontail-jsonl-server.cc",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":jsonl_core",
+        ":jsonl_json",
+        "//src:cottontail",
+        "@cpp-httplib//:httplib",
+    ],
+    linkopts = [
+        "-lz",
+        "-pthread",
     ],
 )
