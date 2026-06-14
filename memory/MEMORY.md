@@ -9,5 +9,5 @@
 - [ClimbMix corpus location](climbmix-corpus-location.md) — gzip'd JSONL shards at /share/corpora/climbmix-400b-corpus-jsonl/ (outside repo)
 - [SimpleWarren scaling model](simplewarren-scaling-model.md) — external-memory build, on-demand posting reads, WAND ranking; tuning levers + stats caveat
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
-- [PR: JSONL CLI](pr-jsonl-cli.md) — PRs #1 & #3 merged; open PR #4 for claude/agent-server (HTTP search server; reference it, don't open new ones)
+- [PR: JSONL CLI](pr-jsonl-cli.md) — PRs #1, #3, #4 merged into main (JSONL CLI, stemming, agent tooling, HTTP server + thread pool); no active feature branch
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
