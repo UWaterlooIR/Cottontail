@@ -6,7 +6,7 @@ CISC baselines we aim to beat, and the evaluation harness live in
 `docs/trec-rag-2026-design.md`. Not yet an approved implementation task list. Open
 questions are marked **⚑ For Charlie / Mark** inline and collected at the end. This
 revision folds in Charlie's first feedback round and the original TREC-4 queries
-(`apps/trec4.queries`, upstream repo).
+(in Charlie's upstream `claclark/Cottontail` repo — **not** this fork; link in §2).
 
 ## 1. Thesis
 
@@ -65,9 +65,10 @@ demote its cover score from a verdict to a reading order.*
 
 Historical rhyme: at TREC-4, Clarke hand-wrote Boolean queries **zero-shot** — no
 interactive search, results never inspected, the full index built only the day before
-submission — and they did well (`docs/multitext.md`; the queries survive at
-`apps/trec4.queries`). The bottleneck was human effort and skill, and the LLM removes
-it. The bet — Charlie's "grep is all you need" — is that Boolean covers with proximity,
+submission — and they did well (`docs/multitext.md`; the queries survive in Charlie's
+upstream repo at <https://github.com/claclark/Cottontail/blob/main/apps/trec4.queries> —
+they are **not** in this fork). The bottleneck was human effort and skill, and the LLM
+removes it. The bet — Charlie's "grep is all you need" — is that Boolean covers with proximity,
 **used as a tool by an LLM in a loop**, can rival or beat BM25 and dense retrieval.
 
 **Why an agent can wield RISC where a blind author could not: interactivity.** A
