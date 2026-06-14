@@ -96,16 +96,20 @@ Full spec: `docs/agentic-gcl-search-spec.md`. In brief, per topic the agent:
 
 1. parses the question into facets/entities/constraints;
 2. emits precise GCL covers — `(^ …)` of `(+ …)` facet groups, `<>`/`...` for phrases;
-3. inspects results — `count` plus reading covers from the top *and* deep — and judges
-   relevance with quoted evidence;
-4. reformulates: broaden (`+`, relax proximity, split sub-queries), narrow (add facet,
-   tighten), or **carve** non-relevant clusters with `!>` / `!<`;
-5. harvests by exhaustion (pages deep — recall by tireless enumeration, not a cutoff),
-   folding read-discovered vocabulary into `+` clauses;
+3. **triages** — `count` for breadth, then proximity-ordered `triage` to surface
+   candidate documents; reads the top plus a deeper sample and judges relevance with
+   quoted evidence;
+4. **mines** each confirmed-good document (`mine`, scoped to that docid) for all of its
+   relevant covers — for grounding and nugget coverage;
+5. **reformulates** to drive recall — broaden (`+`, relax proximity, split sub-queries),
+   narrow (add facet, tighten), or **carve** false-positive clusters with `!>` / `!<` —
+   folding read-discovered vocabulary into `+` groups (recall comes from better queries,
+   not from paging one query deep);
 6. compiles a docid-deduped ranked list of `{docid, cover passage, justification,
    grade}` that serves **both** Task R (docids) and Task RAG (grounding).
 
-The engine produces covers, never a relevance score; ordering is the policy of §5.
+The engine orders covers by a statistics-free proximity prior — a *reading aid*, not the
+verdict; the **submitted** ranking is the agent's, per the policy of §5.
 
 ## 5. Ranking policy — a research ladder
 
