@@ -3,9 +3,12 @@
 // drives it with an httplib::Client and asserts auth, the tool endpoints, and the
 // error/contract behavior. Mirrors test/jsonl_cli.cc's "run the real binary" style.
 
+#include <atomic>
 #include <csignal>
 #include <cstdlib>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -49,8 +52,8 @@ pid_t start_server(const std::string &burrow, int port) {
   if (pid == 0) {
     std::string ports = std::to_string(port);
     ::execl(kServerBin, kServerBin, "--burrow", burrow.c_str(), "--host",
-            "127.0.0.1", "--port", ports.c_str(), "--token", kToken,
-            static_cast<char *>(nullptr));
+            "127.0.0.1", "--port", ports.c_str(), "--threads", "4", "--token",
+            kToken, static_cast<char *>(nullptr));
     _exit(127); // exec failed
   }
   return pid;
@@ -154,6 +157,76 @@ TEST(JsonlServer, EndToEnd) {
     EXPECT_EQ(names.count("get_document"), 1u);
     EXPECT_EQ(names.count("count_matches"), 1u);
   }
+
+  ::kill(pid, SIGTERM);
+  int status = 0;
+  ::waitpid(pid, &status, 0);
+}
+
+// Many concurrent requests against the clone-per-thread pool must all return
+// correct results and not deadlock (the server is started with --threads 4).
+TEST(JsonlServer, ConcurrentRequests) {
+  std::string burrow = tmpdir() + "/server_concurrent.burrow";
+  std::string build = std::string(kIndexBin) +
+                      " --input test/jsonl/plain --burrow " + burrow +
+                      " --overwrite >/dev/null 2>&1";
+  ASSERT_EQ(std::system(build.c_str()), 0);
+
+  int port = free_port();
+  pid_t pid = start_server(burrow, port);
+  ASSERT_GT(pid, 0);
+
+  { // wait for the server to come up
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(2, 0);
+    bool up = false;
+    for (int i = 0; i < 100 && !up; ++i) {
+      if (auto r = cli.Get("/healthz"); r && r->status == 200)
+        up = true;
+      else
+        ::usleep(50 * 1000);
+    }
+    ASSERT_TRUE(up) << "server did not start";
+  }
+
+  const httplib::Headers auth = {
+      {"Authorization", std::string("Bearer ") + kToken}};
+  const int kClients = 8, kIters = 25; // 8 threads x 25 x 3 calls = 600 requests
+  std::atomic<int> failures{0};
+  std::vector<std::thread> workers;
+  for (int t = 0; t < kClients; ++t) {
+    workers.emplace_back([&]() {
+      httplib::Client cli("127.0.0.1", port); // per-thread (Client isn't shared)
+      cli.set_connection_timeout(5, 0);
+      for (int i = 0; i < kIters; ++i) {
+        try {
+          auto s = cli.Post("/tools/search_text", auth,
+                            R"({"query":"elephants"})", "application/json");
+          json js;
+          if (!s || s->status != 200 || (js = json::parse(s->body))["results"].empty() ||
+              js["results"][0]["docid"] != "doc-004") {
+            failures++;
+            continue;
+          }
+          auto c = cli.Post("/tools/count_matches", auth,
+                            R"({"query":"quick fox"})", "application/json");
+          if (!c || c->status != 200 || json::parse(c->body)["match_count"] != 2) {
+            failures++;
+            continue;
+          }
+          auto g = cli.Post("/tools/get_document", auth, R"({"docid":"doc-004"})",
+                            "application/json");
+          if (!g || g->status != 200 || json::parse(g->body)["found"] != true)
+            failures++;
+        } catch (...) {
+          failures++;
+        }
+      }
+    });
+  }
+  for (auto &w : workers)
+    w.join();
+  EXPECT_EQ(failures.load(), 0);
 
   ::kill(pid, SIGTERM);
   int status = 0;

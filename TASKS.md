@@ -2,6 +2,22 @@
 
 ## Done
 
+### Server concurrency: clone-per-thread pool (`--threads`)
+
+Per `docs/cottontail-server-threadpool-spec.md`. `cottontail-jsonl-server` serves
+requests concurrently via a fixed pool of pre-cloned Warrens (no engine or handler
+changes).
+
+- [x] `WarrenProvider` → fixed pool of N pre-cloned warrens: checkout/checkin
+      under a brief lock, query runs lock-free, RAII check-in, block (backpressure)
+      when exhausted. Pre-cloned once at startup.
+- [x] `--threads N` flag (default 4); pool built after `open_burrow()`.
+- [x] cpp-httplib worker pool sized to match (`new_task_queue` / `ThreadPool`).
+- [x] Concurrency test (`JsonlServer.ConcurrentRequests`): 8 client threads x 600
+      requests against a 4-handler pool, all correct, no deadlock.
+- [x] Full gate green; ThreadSanitizer clean on the concurrency test (run with
+      `setarch -R` to satisfy TSan's memory layout in this sandbox).
+
 ### Search server: HTTP/JSON over jsonl_core (`cottontail-jsonl-server`)
 
 Per `docs/cottontail-search-server-spec.md`. A long-lived HTTP server (cpp-httplib)

@@ -7,10 +7,12 @@
 //   for search_text | search_gcl | explain | get_document | count_matches.
 // Auth: a bearer token, optional on loopback, required on a non-loopback bind.
 
+#include <condition_variable>
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "httplib.h"
@@ -25,22 +27,46 @@ using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
 
-// v1: one shared started Warren, serialized by a mutex (a Warren's read path is
-// not shared-thread-safe, and cpp-httplib dispatches requests on a thread pool).
-// To add real concurrency later, hand out a cloned Warren per call from a pool
-// instead of locking — handlers are unchanged. See spec §5.
+// A fixed pool of started read handles (the original Warren + its clones), built
+// once at startup. with() hands one out for the duration of a query and returns
+// it; the mutex is held only for the brief check-out/check-in, so queries run
+// concurrently. When the pool is exhausted, callers block (backpressure). A
+// Warren's text read path uses a stateful fstream, so each handle is a separate
+// clone; the shared SimpleIdx is internally locked. clone() must be done at
+// startup, single-threaded. See docs/cottontail-server-threadpool-spec.md.
 class WarrenProvider {
 public:
-  explicit WarrenProvider(std::shared_ptr<cottontail::Warren> w)
-      : warren_(std::move(w)) {}
+  explicit WarrenProvider(
+      std::vector<std::shared_ptr<cottontail::Warren>> handles)
+      : free_(std::move(handles)) {}
+
   template <class F> auto with(F &&fn) {
-    std::lock_guard<std::mutex> g(mu_);
-    return fn(warren_);
+    std::shared_ptr<cottontail::Warren> w;
+    {
+      std::unique_lock<std::mutex> lock(mu_);
+      cv_.wait(lock, [&] { return !free_.empty(); });
+      w = free_.back();
+      free_.pop_back();
+    }
+    // RAII: return the handle to the pool when fn returns or throws.
+    struct Return {
+      WarrenProvider *p;
+      std::shared_ptr<cottontail::Warren> w;
+      ~Return() {
+        {
+          std::lock_guard<std::mutex> lock(p->mu_);
+          p->free_.push_back(w);
+        }
+        p->cv_.notify_one();
+      }
+    } ret{this, w};
+    return fn(w); // query runs without holding mu_
   }
 
 private:
-  std::shared_ptr<cottontail::Warren> warren_;
+  std::vector<std::shared_ptr<cottontail::Warren>> free_;
   std::mutex mu_;
+  std::condition_variable cv_;
 };
 
 // Constant-time string compare (avoid leaking the token via timing).
@@ -82,6 +108,7 @@ void usage(const char *prog) {
   std::cerr << "usage: " << prog << " --burrow <path> [options]\n"
             << "  --host <addr>   default 127.0.0.1 (loopback)\n"
             << "  --port <n>      default 8080\n"
+            << "  --threads <n>   concurrent query handlers (default 4)\n"
             << "  --token <t>     bearer token (prefer env COTTONTAIL_API_TOKEN)\n"
             << "  --no-auth       disable auth (loopback dev only)\n";
 }
@@ -90,6 +117,7 @@ void usage(const char *prog) {
 int main(int argc, char **argv) {
   std::string burrow, host = "127.0.0.1", flag_token;
   int port = 8080;
+  int threads = 4;
   bool no_auth = false;
 
   for (int i = 1; i < argc; i++) {
@@ -107,6 +135,8 @@ int main(int argc, char **argv) {
       host = next();
     else if (a == "--port")
       port = std::stoi(next());
+    else if (a == "--threads")
+      threads = std::stoi(next());
     else if (a == "--token")
       flag_token = next();
     else if (a == "--no-auth")
@@ -159,9 +189,26 @@ int main(int argc, char **argv) {
     std::cerr << "could not open burrow: " << error << "\n";
     return 2;
   }
-  WarrenProvider provider(warren);
+  // Fixed pool of read handles: the original + (threads-1) clones, built once at
+  // startup, single-threaded (clone() auto-starts a started parent). Each clone
+  // shares the idx cache but gets its own Txt fstream; see the threadpool spec.
+  if (threads < 1)
+    threads = 1;
+  std::vector<std::shared_ptr<cottontail::Warren>> handles;
+  handles.push_back(warren);
+  for (int i = 1; i < threads; ++i) {
+    auto clone = warren->clone(&error);
+    if (clone == nullptr) {
+      std::cerr << "failed to clone warren for the pool: " << error << "\n";
+      return 2;
+    }
+    handles.push_back(clone);
+  }
+  WarrenProvider provider(std::move(handles));
 
   httplib::Server svr;
+  // Match cpp-httplib's worker pool to the warren pool so they don't fight.
+  svr.new_task_queue = [threads] { return new httplib::ThreadPool(threads); };
 
   svr.set_exception_handler(
       [](const httplib::Request &, httplib::Response &res, std::exception_ptr) {
@@ -301,7 +348,7 @@ int main(int argc, char **argv) {
            });
 
   std::cerr << "cottontail-jsonl-server listening on " << host << ":" << port
-            << " burrow=" << burrow
+            << " burrow=" << burrow << " threads=" << threads
             << (auth_required ? " (auth on)" : " (NO AUTH)") << "\n";
   if (!svr.listen(host, port)) {
     std::cerr << "bind failed on " << host << ":" << port << "\n";
