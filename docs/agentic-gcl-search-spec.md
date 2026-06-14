@@ -1,10 +1,12 @@
 # Agentic GCL search — a RISC instruction set for retrieval
 
-**Status:** proposed / draft, **prepared for Charlie's review.** This is the
+**Status:** proposed / draft, **prepared for Charlie & Mark to review.** This is the
 **primary-system** spec for the Cottontail TREC RAG 2026 entry. Track integration, the
 CISC baselines we aim to beat, and the evaluation harness live in
 `docs/trec-rag-2026-design.md`. Not yet an approved implementation task list. Open
-questions for Charlie are marked **⚑ For Charlie** inline.
+questions are marked **⚑ For Charlie / Mark** inline and collected at the end. This
+revision folds in Charlie's first feedback round and the original TREC-4 queries
+(`apps/trec4.queries`, upstream repo).
 
 ## 1. Thesis
 
@@ -40,8 +42,8 @@ more likely relevant" assumption — and it is what lets the agent spend its lim
 reading budget on the most promising covers first. *Keep the book's cover machinery;
 demote its cover score from a verdict to a reading order.*
 
-> **⚑ For Charlie:** the whole design hinges on this split — proximity scoring as a
-> *where-to-read-first* aid, with the *final* relevance call and the submitted ranking
+> **⚑ For Charlie / Mark:** the whole design hinges on this split — proximity scoring as
+> a *where-to-read-first* aid, with the *final* relevance call and the submitted ranking
 > coming from the agent's reading. Does that division match your intuition? Or is a good
 > proximity order, in practice, trustworthy enough to simply *be* the answer for most
 > short queries — so the agent should only intervene on the hard ones rather than
@@ -61,15 +63,31 @@ demote its cover score from a verdict to a reading order.*
   RISC instructions (GCL queries), inspects intermediate results (reads covers), and
   optimizes (reformulates) — tirelessly.
 
-Historical rhyme: at TREC-4, Clarke hand-wrote Boolean queries with **no interactive
-search** and they did well (`docs/multitext.md`). The bottleneck was human effort and
-skill. The LLM removes that bottleneck. The bet — Charlie's "grep is all you need" — is
-that Boolean covers with proximity, **used as a tool by an LLM in a loop**, can rival or
-beat BM25 and dense retrieval. This spec is how we test that bet, and it is deliberately
-the **pure** idea: Boolean covers from the book, authored by the LLM. We do **not** add
-the keyword→Boolean auto-generators or recall fallbacks from later variations — those
-existed only because there was no good query author in the loop, and they make "better"
-ambiguous (better generator? better fallback?). There is a good author now.
+Historical rhyme: at TREC-4, Clarke hand-wrote Boolean queries **zero-shot** — no
+interactive search, results never inspected, the full index built only the day before
+submission — and they did well (`docs/multitext.md`; the queries survive at
+`apps/trec4.queries`). The bottleneck was human effort and skill, and the LLM removes
+it. The bet — Charlie's "grep is all you need" — is that Boolean covers with proximity,
+**used as a tool by an LLM in a loop**, can rival or beat BM25 and dense retrieval.
+
+**Why an agent can wield RISC where a blind author could not: interactivity.** A
+zero-shot author needs forgiving, robust instruments — which is exactly why CISC ranking
+and recall fallbacks exist, and why the TREC-4 queries used **no `NOT`** (excluding
+material you cannot see is dangerous). An agent that *reads results and judges them* can
+instead use sharp, brittle, *precise* instruments — tight covers, proximity, and
+exclusion (`!>`) — and **repair its mistakes by reading**. Seeing results is what makes
+the precision tools safe. So the agent's edge over the 1997 human is not only
+tirelessness; interactivity *licenses the whole RISC approach*, and the agent should be
+**more** willing than the blind author to use exclusion and tight constraints, not less.
+
+From the TREC-4 queries we therefore transfer the **structure** — facets joined by `^`,
+each an `+`-group of variants, composed into a compound list of subqueries ordered
+precise→broad (§5) — but **not** the zero-shot tactics (the `NOT`-avoidance was a
+blind-authoring mitigation, lifted by interactivity). This spec is deliberately the
+**pure** idea: Boolean covers from the book, authored by the LLM. We do **not** add the
+keyword→Boolean auto-generators or recall fallbacks from later variations — those existed
+only because there was no good query author in the loop, and they make "better" ambiguous
+(better generator? better fallback?). There is a good author now.
 
 ## 3. The instruction set (ISA)
 
@@ -109,21 +127,40 @@ and **order** (proximity vs. corpus). GCL tokens below are verified against
 4. **`count(expr)`** — number of matching documents (and/or covers) — the breadth gauge
    for deciding to narrow or broaden.
 
-Order is **proximity by default** on both `triage` and `mine` (the triage aid of §1).
-**Corpus (positional) order, and corpus-wide cover enumeration, are shelved** (§7):
-triage is better served at the document level (positional enumeration would let one
-dense document flood the list), and recall is served by reformulation (§4), not by
-paging the tail of one broad query. Document-scoped cover enumeration (`mine`) is the
-*only* cover-level enumeration we keep, and it is cheap because it is bounded to one
-document.
+**Returned passage — a window around the cover (Charlie's rule).** Scoring/ordering is
+done on the *raw* cover; the returned text is a readable window. Given a window size `W`:
+if the cover is at least `W` long, return the cover unchanged (never shrink a large
+cover); otherwise widen the cover **symmetrically** out to `W`, clamped at document
+bounds. This applies to `triage`'s representative passage and to every cover from `mine`,
+and it is what the ≤125-char RAG quote (§6) is drawn from. The window is presentation
+only — it does not affect the score.
 
-> **⚑ For Charlie:** which proximity ordering should drive `triage`/`mine` — `ssr`
-> (`Σ 1/(K+q−p)`, Cottontail default `K≈42`), the book's pure `rankProximity`
-> (`Σ 1/(v−u+1)`, no `K`), or something else? And should a document's `triage` rank
-> reflect its **best** cover or its **summed** covers (book assumption 2: more covers →
-> more relevant)? Your TREC-4 hand-Boolean experience is the ground truth for what
-> ordering actually surfaced relevant material first, and for whether `K` matters for
-> *ordering* (as opposed to absolute scores) on long, varied web text like ClimbMix.
+Order is **proximity by default** on both `triage` and `mine` — shorter/tighter covers
+first (the triage aid of §1). Cottontail's existing `ssr` already embodies this idea; the
+*exact* ordering function (e.g. `ssr`'s `1/(K+q−p)` vs. a pure inverse cover length, and
+document-level summed vs. best-cover) is a **tuning detail for the harness, not a decreed
+choice** — default to `ssr` as-is (see the callout). **Corpus (positional) order, and
+corpus-wide cover enumeration, are shelved** (§7): triage is better served at the
+document level (positional enumeration would let one dense document flood the list), and
+recall is served by reformulation (§4), not by paging the tail of one broad query.
+Document-scoped cover enumeration (`mine`) is the *only* cover-level enumeration we keep,
+and it is cheap because it is bounded to one document.
+
+> **⚑ For Charlie / Mark:** the *idea* — tighter covers first — is settled, and `ssr`
+> embodies it; we treat the exact ordering function as a tuning detail (default: `ssr`
+> as-is, *not* a decreed pure `1/len`). Any strong prior worth pinning — does `ssr`'s `K`
+> matter for *ordering* (vs. absolute scores) on long web text, and should a document's
+> `triage` rank use its **best** cover or its **summed** covers (book assumption 2)? Fine
+> to leave to the harness if you have no strong view.
+
+> **⚑ For Charlie / Mark (ISA gap):** the TREC-4 queries lean on a hard proximity-width
+> operator `< [n]` — e.g. `(("nuclear" + "atomic") ^ ("plant" + "plants" + "power")) < [5]`
+> — but Cottontail's GCL has **no width operator** (only `<>`/`followed_by` and
+> containment). Do we **add a `< [n]` width operator** to the ISA, or rely on
+> **cover-length ordering** as the soft substitute (tight covers float to the top without
+> a hard cap)? A hard cap buys precision and a smaller candidate set on broad queries; the
+> soft version is what the windowing rule above already implies. This is the one concrete
+> ISA gap we found against TREC-4.
 
 ## 4. The compiler loop
 
@@ -139,13 +176,21 @@ For a question, the agent runs optimization passes over the ISA. The shape is
    covering distinct nuggets.
 5. **Reformulate** with a fixed move repertoire:
    - *Precision gap* (mixed triage) → narrow: add a facet, tighten proximity, or
-     **carve** with `!>` / `!<` against the false-positive cluster just read.
+     **carve** with `!>` / `!<` against the false-positive cluster just read — then
+     **verify the carve** by reading a sample of what it *removed*, to confirm it did not
+     drop relevant material (the safety step a zero-shot author cannot do).
    - *Recall gap* → broaden: add `+` synonyms (including vocabulary discovered while
      reading), relax proximity, drop an over-constraining facet, or split into
      sub-queries per sub-facet.
    - *Ambiguity* → disambiguate with proximity or containment.
 6. **Iterate** until a small set of validated queries cleanly isolates the relevant
    material.
+
+**Carving is safe here — that is the point.** The TREC-4 queries used no `NOT`: excluding
+material you cannot see is dangerous zero-shot. The agent reads what it excludes, so
+exclusion (`!>` / `!<`) becomes a **first-class** precision tool rather than a hazard —
+used freely, with the carve-and-verify read-back above. Expect the agent to narrow and
+exclude *more* aggressively than a blind author would, not less.
 
 **Recall comes from reformulation, not from exhaustion.** The recall move is to *vary
 the query* — narrow, carve, expand from read vocabulary, split facets — not to page a
@@ -166,14 +211,14 @@ discipline and sliding back into CISC.
 (recall saturation across the facet decomposition) or at the compute budget. This maps
 directly to nugget coverage in the evaluation.
 
-> **⚑ For Charlie:** two practical questions from your TREC-4 experience: **(a)** do you
-> agree recall is best driven by *reformulation* (narrow / vary / carve / expand) rather
-> than exhaustive deep enumeration — and is there a regime (known-item, or legal-style
-> high-recall) where you'd want an exhaustive corpus-wide cover sweep back in the
-> toolkit? **(b)** When you needed to *exclude* a sense or a false-positive cluster by
-> hand, was `not-containing` (`!>`) your tool, or did you more often disambiguate with
-> proximity / containment? We want the agent's "carve" move to mirror what actually
-> worked for you.
+> **⚑ For Charlie / Mark:** **(a)** do you agree recall is best driven by *reformulation*
+> (narrow / vary / carve / expand) rather than exhaustive deep enumeration — and is there
+> a regime (known-item, or legal-style high-recall) where you'd want an exhaustive
+> corpus-wide cover sweep back in the toolkit? **(b)** We read the absence of `NOT` in the
+> TREC-4 queries as a *zero-shot* precaution, now lifted by interactive judging — so the
+> agent should use `!>` / `!<` freely, with a carve-and-verify read-back. Any residual
+> cautions, or carve idioms you trust (exclusion vs. proximity/containment to kill a bad
+> sense)?
 
 ## 5. Ranking policy — a research ladder
 
@@ -188,10 +233,14 @@ orders where to look; the policy orders what we return.
 Ordering the submitted list is an open research question; we climb a cost ladder and
 commit only to the bottom rung now:
 
-- **Level 0 — query-tier ordering, judgment as tiebreak (build first).** Covers from a
-  precise query outrank covers from a broader one (agent-authored tiers, the MultiText
-  compound-query idea); the agent's light read-judgment breaks ties; proximity (tightest
-  cover first) is the cheap sub-tiebreak. Chosen for **affordability**.
+- **Level 0 — query-tier ordering, judgment as tiebreak (build first).** The agent
+  authors a **compound, ordered list of subqueries** per topic, precise→broad — exactly
+  the TREC-4 form (`@rank q0 q1 … qN`, where `q0` is the all-facets `^` of `+`-groups, and
+  later entries are weaker alternatives and bare-term fallbacks; facets are named
+  `+`-groups, e.g. `USbroad = US0 + US1 + US2 + US`). Results fill tier by tier: a precise
+  subquery's hits outrank a broader one's; the agent's light read-judgment breaks ties;
+  tightest-cover-first is the cheap sub-tiebreak. Chosen for **affordability** — and it is
+  the structure Charlie's blind TREC-4 runs already validated.
 - **Level 1 — agent read-judgment as the primary signal.** The agent reads and grades
   more passages and orders by grade. More reading, more cost, plausibly higher quality.
 - **Level 2 — listwise LLM reranking.** The "ZephyrRank" / RankZephyr / RankGPT family:
@@ -202,22 +251,25 @@ commit only to the bottom rung now:
 Each rung is a hypothesis measured on the dev data (§10): is the quality gain worth the
 cost?
 
-> **⚑ For Charlie:** Level 0 ranks by query-tier — a precise query's hits above a broad
-> query's. Is "one validated query = one tier, ordered precise→broad, a document keeps
-> its most-precise tier" a sound first cut, or do you have a better notion of tier from
-> the MultiText compound-query work (e.g. tiers by Boolean structure: all-facets-AND >
-> facet-subset > single-facet)?
+> **⚑ For Charlie / Mark:** Level 0 mirrors the TREC-4 `@rank` compound list
+> (precise→broad). Confirming details: when several subqueries hit a document, it keeps
+> its **most-precise** tier (we assume yes); within a tier, order by read-judgment then
+> cover-tightness, or did the TREC-4 runs order within a subquery purely by cover density?
+> And should the agent **author the whole ordered list up front** (as you did), **grow it
+> interactively** as it reads, or both?
 
 ## 6. The output compiler
 
 The agent assembles **one structure that is both TREC RAG task outputs**: a
 docid-deduplicated list of
-`{ docid, the mined cover passage(s) + text, the query + read-evidence that justified it, agent grade }`,
-ordered by the active ranking policy (§5). `mine` populates the per-document passages.
+`{ docid, the mined cover passage(s) + windowed text, the query + read-evidence that justified it, agent grade }`,
+ordered by the active ranking policy (§5). `mine` populates the per-document passages
+(windowed per §3).
 
 - **Task R** = the docids in that order → `r_output_…tsv` (rank from 1).
 - **Task RAG** = answer sentences grounded in those mined cover passages, cited by
-  docid; the ≤125-char quoted-source rule is trivial because covers are short.
+  docid; the ≤125-char quoted-source rule is trivial because covers (and their windows)
+  are short.
 
 So the same compiled artifact drives both submissions.
 
@@ -225,7 +277,7 @@ So the same compiled artifact drives both submissions.
 
 **Kept in the agent's hot path:** GCL cover finding; the statistics-free proximity order
 as the **triage aid** (§3); document-scoped cover **mining**; `read`; `count`; the
-`!>` / `!<` carve operators.
+`!>` / `!<` carve operators (now first-class, §4).
 
 **Dropped from the agent's hot path:** proximity/`ssr`/`icover`/BM25 as the **final,
 submitted ranker** — the agent's reading is the verdict; these survive only as
@@ -236,10 +288,10 @@ any keyword→Boolean auto-translator; recall fallbacks. (Levels 1–2 of §5 re
 LLM reranking *deliberately and measured* — that is the agent reasoning over read
 passages, gated by the harness, not a trained CISC score.)
 
-Net, in Cottontail terms: the one genuinely new engine capability is **document-scoped
+Net, in Cottontail terms: the genuinely new engine capability is **document-scoped
 cover mining** (cheap), plus exposing **`triage`** (≈ the existing `ssr` GCL search) with
-a generous depth and a good passage/context return. No corpus-wide cursor; no new ranker
-on the hot path.
+a generous depth and the §3 windowed-passage return. No corpus-wide cursor; no new ranker
+on the hot path. (A `< [n]` width operator is the one possible addition — open, §3.)
 
 ## 8. Cottontail mapping
 
@@ -255,14 +307,18 @@ the book's `nextCover` (Fig 2.10: `v ← max next(t_i); u ← min prev(t_i, v+1)
 
 - **`triage`** — the existing `search_gcl` / `ssr` path (`apps/jsonl_core.cc`
   `jsonl_query`; `src/ranking.cc:305` `ssr_ranking`), exposed with a generous/explicit
-  `k` and returning docid + representative cover passage + a little context.
+  `k` and returning docid + a representative passage (windowed per §3) + a little context.
 - **`mine(docid, expr)`** — **new**: enumerate the solutions of
   `(<< (^ …) (>> :item (>> :docno "<docid>")))` by iterating the hopper's `tau`, and
-  return every cover (span + text), proximity-ordered. Bounded to one document.
+  return every cover, proximity-ordered, each with its text windowed per §3. Bounded to
+  one document.
 - **`read`** — extend `jsonl_get` with an optional window around a span.
 - **`count`** — `count_matches` (optionally also a cover count).
 - **Carving** uses `!>` / `!<`, already parsed (`src/parse.cc:33-36`) and implemented
   (`NotContaining` / `NotContainedIn`, `src/gcl.h:137,154`).
+- **Proximity width (`< [n]`)** — a hard width operator the TREC-4 queries used but GCL
+  lacks. If adopted (open question, §3) it is a small new GCL operator; otherwise
+  cover-length ordering is the soft substitute. This is the only ISA gap found.
 - The ranked **verdict** path (`icover`/`ssr`-as-submitted-ranking) leaves the agent
   surface; `ssr` stays, but as the triage *order*. The ranked rankers plus the book
   `rankProximity` live behind baseline endpoints/flags (design doc §6).
@@ -287,9 +343,9 @@ the book's `nextCover` (Fig 2.10: `v ← max next(t_i); u ← min prev(t_i, v+1)
 - **Reproducibility.** Log every query, triage, mine, read, and judgment. This is the
   audit trail, the paper's method section, and the debugging surface in one.
 - **Upside that justifies it:** exactness (no idf / length-norm / train-test-mismatch
-  failure modes), the `!>` scalpel, doc-scoped mining for grounding, and —
-  competitively — doing the thing only *this engine + an LLM* can do, rather than
-  re-running the neural-IR playbook every other group will submit.
+  failure modes), the `!>` scalpel (now safe to use, §4), doc-scoped mining for
+  grounding, and — competitively — doing the thing only *this engine + an LLM* can do,
+  rather than re-running the neural-IR playbook every other group will submit.
 
 ## 10. How we prove it
 
@@ -303,16 +359,28 @@ across the three judges.
 
 ---
 
-### Summary of open questions for Charlie
+### Open questions for Charlie / Mark
+
+Resolved or refined by Charlie's first round + the TREC-4 queries: the proximity *order*
+is a settled idea (`ssr` embodies it; the exact function is a tuning detail, **not** a
+decreed pure `1/len`); carve (`!>`/`!<`) is **elevated to first-class** (the TREC-4
+`NOT`-avoidance was a zero-shot precaution, lifted by interactive judging); the Level-0
+tier model **is** the TREC-4 `@rank` compound list; the returned passage uses Charlie's
+window-around-cover rule (§3). Still open:
 
 1. **§1** — Is "proximity = reading order, agent's reading = the verdict" the right
-   split, or is a good proximity order trustworthy enough to be the answer for most
-   short queries?
-2. **§3** — Which proximity ordering for `triage`/`mine` (`ssr` K≈42 vs the book's pure
-   `rankProximity`), best-cover vs summed-covers for a document's rank, and does `K`
-   matter for *ordering* on long web text?
-3. **§4(a)** — Recall via reformulation vs. a regime that needs an exhaustive
+   split, or is a good proximity order trustworthy enough to *be* the answer for most
+   short queries (agent intervenes only on the hard ones)?
+2. **§3 (ordering)** — Any strong prior on the ordering function (`ssr`'s `K`; best vs.
+   summed covers for a document's rank), or leave it to the harness?
+3. **§3 (ISA gap)** — Add a hard `< [n]` proximity-width operator to GCL, or rely on
+   cover-length ordering as the soft substitute?
+4. **§4(a)** — Recall via reformulation, or is there a regime needing an exhaustive
    corpus-wide cover sweep?
-4. **§4(b)** — Is `!>` (not-containing) the right "carve" tool, or proximity/containment?
-5. **§5** — Is query-tier ("precise→broad, doc keeps its most-precise tier") the right
-   Level-0 ranking, or a better tier notion from the MultiText compound-query work?
+5. **§4(b)** — Any residual cautions on free use of carve with carve-and-verify, or carve
+   idioms you trust (exclusion vs. proximity/containment)?
+6. **§5** — Author the whole precise→broad subquery list up front (TREC-4 style), grow it
+   interactively as the agent reads, or both? Confirm "a document keeps its most-precise
+   tier."
+7. **§6 / §3 (for Mark)** — Default window size `W` for the returned passage, given
+   ClimbMix's ~400-word median document (e.g. one ~250-word passage, or smaller)?
