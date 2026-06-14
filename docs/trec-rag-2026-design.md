@@ -135,9 +135,14 @@ the RISC agent on the dev data and (b) report head-to-head in the TREC paper.
 - **BM25 (self-hosted Anserini, tuned).** Index the official ClimbMix corpus JSONL;
   BM25 at `k1≈10, b≈1`. Official docids by construction; also a parity oracle (§3).
   The hosted Pyserini API (default params) is the *as-provided* baseline.
-- **Cover-density / `icover`** (`src/ranking.cc:389`) over the burrow — the strongest
-  no-LLM lexical ranker we already have; the natural "what does the engine's own
-  ranking score get?" point.
+- **Cover density — the book's pure `rankProximity`.** Büttcher/Clarke/Cormack §2.2.2,
+  Eq 2.15: `score(d) = Σ 1/(v−u+1)` summed over a document's covers — statistics-free,
+  no `K`, no idf (`docs/cover-density-ranking-from-book.md`). This is the faithful
+  "what does cover density alone get?" baseline, and it is **distinct from both**
+  rankers already in the tree: `icover` (`src/ranking.cc:389`; idf-weighted, keeps the
+  best cover) and `ssr` (smoothed `1/(K+q−p)`, `K=42`). It is a ~30-line loop over the
+  existing `And`-cover iteration (`nextCover` ↔ `(^ …)`). Report the book's pure form
+  as the honest baseline (and `icover`/`ssr` too, if cheap).
 - **(Optional) the full CISC pipeline** — RRF fusion of BM25 + `icover` + GCL-facet
   `tiered`, then a monoT5-3B re-rank on cover passages — i.e. the deep-research
   paper's recipe (`docs/revisiting-bm25.md`). Build only if we want to show the RISC
@@ -246,8 +251,8 @@ RISC-first; most is simplification + orchestration around existing components.
   list (§6).
 - **P1 — Dev-data eval harness (§8):** `trec_eval` over UMBRELA qrels + nugget recall
   + rubric scorer; the ledger. Stand up early; it gates every policy choice.
-- **P1 — Baselines (§6):** self-hosted tuned-BM25 index and an `icover` run, scored on
-  the same harness for head-to-head.
+- **P1 — Baselines (§6):** a self-hosted tuned-BM25 index and a book cover-density
+  (`rankProximity`, Eq 2.15) run, scored on the same harness for head-to-head.
 - **P1 — RAG formatter + validator (§7):** emit exact `rag_output…jsonl`; enforce
   schema; NLI grounding pass.
 - **P2 — Ranking ladder rungs (§5):** Level 1 (read-judgment), then Level 2 (listwise
@@ -272,4 +277,4 @@ RISC-first; most is simplification + orchestration around existing components.
 
 **Immediate actions:** (1) verify docid parity (§3); (2) expose the RISC ISA + stand up
 the compiler-loop agent (§4, §9); (3) stand up the dev-data harness (§8); (4) build the
-tuned-BM25 and `icover` baselines (§6) for head-to-head.
+tuned-BM25 and book-cover-density baselines (§6) for head-to-head.

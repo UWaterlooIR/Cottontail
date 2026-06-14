@@ -28,6 +28,15 @@ We have simply been hiding it under ranking layers (`icover`, `ssr`, BM25). The 
 is to expose the algebra directly to an LLM "compiler" and lift the ranker out of the
 hot path.
 
+This is grounded in the canonical source — Büttcher, Clarke & Cormack, *Information
+Retrieval: Implementing and Evaluating Search Engines* (MIT Press, 2010), §2.2.2
+(`docs/cover-density-ranking-from-book.md`). That chapter splits exactly along the
+RISC/CISC line: cover **finding** (§7.1–7.2, `nextCover`) is the precise,
+statistics-free localizer we **keep**; cover **scoring** (§7.3 —
+`score(d) = Σ 1/(v−u+1)` summed over a document's covers) is a closed-form relevance
+heuristic, a one-shot designer's guess, that we **drop** in favor of the agent's
+read-judgment. *Keep the book's cover machinery; discard the book's cover score.*
+
 ## 2. RISC vs. CISC
 
 - **CISC instruction** (BM25 / cover-density ranking / cross-encoder): one call that
@@ -178,6 +187,14 @@ by the harness.)
 
 The engine is already a GCL machine; the work is exposure and simplification, not new
 ranking.
+
+The book's machinery (`docs/cover-density-ranking-from-book.md`) maps one-to-one onto
+the engine — same author, same algebra. The inverted-index ADT
+`next`/`prev`/`first`/`last` (book §1, Table 2.4) **is** the hopper (`tau`/`uat`), and
+the book's `nextCover` (Fig 2.10: `v ← max next(t_i); u ← min prev(t_i, v+1)`) **is**
+`Combinational::tau_` for `And` (`*p = L(*q = R(k))`, with `And::R_ = max`,
+`And::L_ = min`; `src/gcl.cc:34,62-64`). So `(^ …)` computes the book's covers
+exactly — what follows is exposure, not new code.
 
 - **`gcl(expr, offset, limit)`** — extend the existing `search_gcl`
   (`apps/jsonl_core.cc`, `apps/cottontail-jsonl-server.cc`) to (a) return covers in
