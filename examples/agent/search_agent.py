@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 import urllib.error
 import urllib.request
 
@@ -88,27 +89,16 @@ def _cited(answer, seen):
                   if re.search(r"(?<![\w-])" + re.escape(d) + r"(?![\w-])", answer))
 
 
-def _shrink(obj, cap):
-    """Truncate long string values so observations don't blow the context."""
-    if isinstance(obj, str):
-        return obj if len(obj) <= cap else obj[:cap] + "…[truncated]"
-    if isinstance(obj, list):
-        return [_shrink(x, cap) for x in obj]
-    if isinstance(obj, dict):
-        return {k: _shrink(v, cap) for k, v in obj.items()}
-    return obj
-
-
-def _render_obs(obs, indent=6):
-    """Full, pretty-printed JSON rendering of a tool observation, wrapped to the
-    terminal width for readable display. Nothing is truncated — every hit and the
-    full document text are shown. Each output line is prefixed with `indent`
-    spaces and over-long lines (long passages/bodies) are word-wrapped with a
-    hanging indent so the JSON structure stays readable on a normal terminal."""
+def _render_json(obj, indent=6):
+    """Full, pretty-printed JSON rendering of any value (a tool observation, the
+    request messages, the LLM response payload), wrapped to the terminal width for
+    readable display. Nothing is truncated. Each output line is prefixed with
+    `indent` spaces and over-long lines (long passages/bodies/prompts) are
+    word-wrapped with a hanging indent so the structure stays readable."""
     width = max(40, shutil.get_terminal_size().columns)
     pad = " " * indent
     out = []
-    for line in json.dumps(obs, indent=2, ensure_ascii=False).splitlines():
+    for line in json.dumps(obj, indent=2, ensure_ascii=False).splitlines():
         if indent + len(line) <= width:
             out.append(pad + line)
             continue
@@ -120,6 +110,22 @@ def _render_obs(obs, indent=6):
             subsequent_indent=pad + " " * (lead + 2),
             break_long_words=True, break_on_hyphens=False) or [pad + line])
     return "\n".join(out)
+
+
+def _response_payload(resp):
+    """The LLM's reply as a plain JSON-able dict — content, any tool calls (with
+    their raw arguments), and the finish reason — so the verbose trace can show
+    exactly what came back. Tolerant of stub/minimal responses."""
+    choice = resp.choices[0]
+    msg = choice.message
+    out = {"finish_reason": getattr(choice, "finish_reason", None),
+           "content": getattr(msg, "content", None)}
+    calls = getattr(msg, "tool_calls", None) or []
+    if calls:
+        out["tool_calls"] = [
+            {"id": tc.id, "name": tc.function.name,
+             "arguments": tc.function.arguments} for tc in calls]
+    return out
 
 
 def _harvest_seen(name, obs, into):
@@ -219,8 +225,27 @@ class SearchTools:
         return json.loads(out.stdout)
 
 
+def _llm_summary(resp, t0):
+    """One-line summary of an LLM round-trip for the verbose trace: round-trip
+    latency, finish reason, tool-call count, and token usage when the server
+    reports it. Tolerant of stub/minimal responses (missing finish/usage)."""
+    parts = [f"{(time.monotonic() - t0) * 1000:.0f}ms"]
+    choice = resp.choices[0]
+    finish = getattr(choice, "finish_reason", None)
+    if finish:
+        parts.append(f"finish={finish}")
+    calls = getattr(choice.message, "tool_calls", None) or []
+    parts.append(f"{len(calls)} tool call(s)")
+    usage = getattr(resp, "usage", None)
+    pt = getattr(usage, "prompt_tokens", None)
+    ct = getattr(usage, "completion_tokens", None)
+    if pt is not None and ct is not None:
+        parts.append(f"tokens {pt}+{ct}")
+    return ", ".join(parts)
+
+
 def run_agent(client, model, tools, call_tool, question, *,
-              system=DEFAULT_SYSTEM, max_steps=8, obs_char_cap=2000,
+              system=DEFAULT_SYSTEM, max_steps=8,
               reasoning="low", temperature=0.0, verbose=False):
     """Run the ReAct loop. Returns a result dict.
 
@@ -243,13 +268,18 @@ def run_agent(client, model, tools, call_tool, question, *,
     seen = set()  # every docid the tools surfaced; cited subset chosen at the end
 
     for step in range(max_steps):
+        _emit(f"\n── step {step + 1}/{max_steps} ──")
+        _emit(f"  → LLM request: model={model}, {len(messages)} messages")
+        _emit(_render_json(messages))
+        t0 = time.monotonic()
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=tools,
             tool_choice="auto", temperature=temperature,
         )
+        _emit(f"  ← LLM response: {_llm_summary(resp, t0)}")
+        _emit(_render_json(_response_payload(resp)))
         msg = resp.choices[0].message
         calls = msg.tool_calls or []
-        _emit(f"\n── step {step + 1}/{max_steps} ──")
         if msg.content and msg.content.strip():
             _emit(f"  assistant: {msg.content.strip()}")
         if not calls:
@@ -280,19 +310,24 @@ def run_agent(client, model, tools, call_tool, question, *,
             obs = call_tool(name, cargs)
             _harvest_seen(name, obs, seen)
             _emit("    ↳")
-            _emit(_render_obs(obs))
+            _emit(_render_json(obs))
             messages.append({
                 "role": "tool", "tool_call_id": tc.id,
-                "content": json.dumps(_shrink(obs, obs_char_cap)),
+                "content": json.dumps(obs),
             })
 
     # Budget spent: one final turn with no tools to force a best-effort answer
     # (or an explicit "not in the corpus") rather than returning nothing.
     _emit(f"\n[step budget ({max_steps}) spent — forcing a final answer]")
     messages.append({"role": "user", "content": WRAP_UP})
+    _emit(f"  → LLM request (final): model={model}, {len(messages)} messages")
+    _emit(_render_json(messages))
+    t0 = time.monotonic()
     resp = client.chat.completions.create(
         model=model, messages=messages, temperature=temperature,
     )
+    _emit(f"  ← LLM response: {_llm_summary(resp, t0)}")
+    _emit(_render_json(_response_payload(resp)))
     answer = resp.choices[0].message.content
     return {"answer": answer, "stopped": "budget", "steps": max_steps,
             "tool_calls": tool_calls_made, "citations": _cited(answer, seen),

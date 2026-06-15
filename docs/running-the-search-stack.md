@@ -134,8 +134,9 @@ uv run --project examples/agent python examples/agent/search_agent.py \
 Supply exactly one of `--server-url` (HTTP) or `--burrow` (subprocess).
 
 Useful flags: `--trace` (tool-call summary after the run), `--verbose` (live
-transcript of assistant text, tool calls, and full observations), `--max-steps`,
-`--reasoning low|medium|high`.
+transcript: each LLM round-trip with the full request messages and reply payload
+plus timing/tokens, assistant text, tool calls, and full observations),
+`--max-steps`, `--reasoning low|medium|high`.
 
 Design and rationale: [search-agent-spec](cottontail-search-agent-spec.md). The
 forward-looking RISC direction (triage/mine/reformulate): [agentic-gcl-search-spec](agentic-gcl-search-spec.md).

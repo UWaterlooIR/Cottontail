@@ -72,8 +72,10 @@ The token is read from the environment (never a flag). Supply exactly one of
 
 It prints the final answer and the cited docids. `--trace` shows a tool-call
 summary on stderr after the run; `--verbose` streams a live transcript as the loop
-runs — the assistant's text, each tool call with its JSON args, and the full
-observation pretty-printed and wrapped to the terminal width. Other flags:
+runs — each LLM round-trip (the full request messages and the reply payload, plus
+latency, finish reason, and token usage), the assistant's text, each tool call with
+its JSON args, and the full observation, all pretty-printed and wrapped to the
+terminal width. Other flags:
 `--max-steps` (tool-call budget), `--reasoning low|medium|high`.
 
 ## Test (no GPU / no network)
