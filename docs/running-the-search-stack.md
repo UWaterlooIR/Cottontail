@@ -119,6 +119,20 @@ uv run --project examples/agent python examples/agent/search_agent.py \
   --question "What is the best rope for climbing?" --verbose
 ```
 
+Or run directly against a burrow with no server — the agent shells out to the
+query binary (§0) for each tool call. Pass `--burrow` (and `--query-bin` if it is
+not on your `PATH`) instead of `--server-url`:
+
+```sh
+uv run --project examples/agent python examples/agent/search_agent.py \
+  --burrow corpus.burrow \
+  --query-bin bazel-bin/apps/cottontail-jsonl-query \
+  --model <served-model-name> --base-url http://127.0.0.1:8000/v1 \
+  --question "What is the best rope for climbing?" --verbose
+```
+
+Supply exactly one of `--server-url` (HTTP) or `--burrow` (subprocess).
+
 Useful flags: `--trace` (tool-call summary after the run), `--verbose` (live
 transcript of assistant text, tool calls, and full observations), `--max-steps`,
 `--reasoning low|medium|high`.
