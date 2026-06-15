@@ -18,8 +18,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import textwrap
 import urllib.error
 import urllib.request
 
@@ -95,6 +97,29 @@ def _shrink(obj, cap):
     if isinstance(obj, dict):
         return {k: _shrink(v, cap) for k, v in obj.items()}
     return obj
+
+
+def _render_obs(obs, indent=6):
+    """Full, pretty-printed JSON rendering of a tool observation, wrapped to the
+    terminal width for readable display. Nothing is truncated — every hit and the
+    full document text are shown. Each output line is prefixed with `indent`
+    spaces and over-long lines (long passages/bodies) are word-wrapped with a
+    hanging indent so the JSON structure stays readable on a normal terminal."""
+    width = max(40, shutil.get_terminal_size().columns)
+    pad = " " * indent
+    out = []
+    for line in json.dumps(obs, indent=2, ensure_ascii=False).splitlines():
+        if indent + len(line) <= width:
+            out.append(pad + line)
+            continue
+        stripped = line.lstrip(" ")
+        lead = len(line) - len(stripped)
+        out.extend(textwrap.wrap(
+            stripped, width=width,
+            initial_indent=pad + " " * lead,
+            subsequent_indent=pad + " " * (lead + 2),
+            break_long_words=True, break_on_hyphens=False) or [pad + line])
+    return "\n".join(out)
 
 
 def _harvest_seen(name, obs, into):
@@ -196,13 +221,19 @@ class SearchTools:
 
 def run_agent(client, model, tools, call_tool, question, *,
               system=DEFAULT_SYSTEM, max_steps=8, obs_char_cap=2000,
-              reasoning="low", temperature=0.0):
+              reasoning="low", temperature=0.0, verbose=False):
     """Run the ReAct loop. Returns a result dict.
 
     client      : OpenAI-compatible client (`client.chat.completions.create`).
     tools       : tool schema list (from SearchTools.schema()).
     call_tool   : fn(name: str, args: dict) -> dict observation.
+    verbose     : if set, stream a live transcript (assistant text, tool calls,
+                  and observations) to stderr as each step happens.
     """
+    def _emit(line):
+        if verbose:
+            print(line, file=sys.stderr, flush=True)
+
     sys_content = (f"Reasoning: {reasoning}\n\n{system}" if reasoning else system)
     messages = [
         {"role": "system", "content": sys_content},
@@ -218,7 +249,11 @@ def run_agent(client, model, tools, call_tool, question, *,
         )
         msg = resp.choices[0].message
         calls = msg.tool_calls or []
+        _emit(f"\n── step {step + 1}/{max_steps} ──")
+        if msg.content and msg.content.strip():
+            _emit(f"  assistant: {msg.content.strip()}")
         if not calls:
+            _emit("  (no tool calls — final answer)")
             return {"answer": msg.content, "stopped": "answer",
                     "steps": step, "tool_calls": tool_calls_made,
                     "citations": _cited(msg.content, seen), "messages": messages}
@@ -241,8 +276,11 @@ def run_agent(client, model, tools, call_tool, question, *,
             except json.JSONDecodeError:
                 cargs = {}
             tool_calls_made.append((name, cargs))
+            _emit(f"  → {name}({json.dumps(cargs)})")
             obs = call_tool(name, cargs)
             _harvest_seen(name, obs, seen)
+            _emit("    ↳")
+            _emit(_render_obs(obs))
             messages.append({
                 "role": "tool", "tool_call_id": tc.id,
                 "content": json.dumps(_shrink(obs, obs_char_cap)),
@@ -250,6 +288,7 @@ def run_agent(client, model, tools, call_tool, question, *,
 
     # Budget spent: one final turn with no tools to force a best-effort answer
     # (or an explicit "not in the corpus") rather than returning nothing.
+    _emit(f"\n[step budget ({max_steps}) spent — forcing a final answer]")
     messages.append({"role": "user", "content": WRAP_UP})
     resp = client.chat.completions.create(
         model=model, messages=messages, temperature=temperature,
@@ -279,7 +318,10 @@ def main(argv=None):
     ap.add_argument("--reasoning", default="low",
                     help="gpt-oss reasoning effort (low|medium|high; '' to omit)")
     ap.add_argument("--trace", action="store_true",
-                    help="print the tool-call trace to stderr")
+                    help="print the tool-call summary to stderr after the run")
+    ap.add_argument("--verbose", action="store_true",
+                    help="stream a live transcript (assistant text, tool calls, "
+                         "and observations) to stderr as the loop runs")
     args = ap.parse_args(argv)
 
     if args.server_url:
@@ -296,7 +338,8 @@ def main(argv=None):
     client = OpenAI(base_url=args.base_url, api_key=args.api_key)
     schema = tools.schema()
     result = run_agent(client, args.model, schema, tools.call, args.question,
-                       max_steps=args.max_steps, reasoning=args.reasoning)
+                       max_steps=args.max_steps, reasoning=args.reasoning,
+                       verbose=args.verbose)
 
     if args.trace:
         for name, cargs in result["tool_calls"]:
