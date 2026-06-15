@@ -70,8 +70,11 @@ uv run --project examples/agent python examples/agent/search_agent.py \
 The token is read from the environment (never a flag). Supply exactly one of
 `--server-url` (HTTP) or `--burrow` (subprocess).
 
-It prints the final answer and the cited docids; `--trace` shows the tool calls
-on stderr. Other flags: `--max-steps` (tool-call budget), `--reasoning low|medium|high`.
+It prints the final answer and the cited docids. `--trace` shows a tool-call
+summary on stderr after the run; `--verbose` streams a live transcript as the loop
+runs — the assistant's text, each tool call with its JSON args, and the full
+observation pretty-printed and wrapped to the terminal width. Other flags:
+`--max-steps` (tool-call budget), `--reasoning low|medium|high`.
 
 ## Test (no GPU / no network)
 

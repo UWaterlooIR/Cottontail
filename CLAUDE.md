@@ -129,6 +129,17 @@ Real binaries (build then run from `bazel-bin/apps/`):
   (`--convert` / `--merge`). **Hazel is a work in progress and not ready for use
   — don't build on this path (see the Warren table below).**
 
+**JSONL search stack (index → query → server → agent).** How to build and run
+these — with copy-paste commands — is in
+[docs/running-the-search-stack.md](docs/running-the-search-stack.md), the **single
+source** for running them (it links on to the design specs). Don't duplicate run
+instructions elsewhere; point at that guide.
+
+- `//apps:cottontail-jsonl-index` — build a burrow from `*.jsonl`/`*.jsonl.gz`.
+- `//apps:cottontail-jsonl-query` — ranked text / GCL search over a burrow.
+- `//apps:cottontail-jsonl-server` — HTTP/JSON server exposing the same tools.
+- `examples/agent/` — example LLM agent driving the tools (server or burrow).
+
 `*.burrow` and `*.meadow` directories are local working indexes and are gitignored.
 
 ## Architecture (orientation)
