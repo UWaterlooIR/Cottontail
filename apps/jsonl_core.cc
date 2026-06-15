@@ -57,9 +57,25 @@ std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
+// Truncate to at most n bytes, then step back so the result never ends inside a
+// multi-byte UTF-8 character. A mid-character split leaves invalid UTF-8, which
+// the JSON serializer rejects (type_error.316). n is a byte budget and snippets
+// are short previews, so dropping the final partial character is fine.
 std::string truncate(std::string s, size_t n) {
-  if (s.size() > n)
-    s = s.substr(0, n);
+  if (s.size() <= n)
+    return s;
+  s.resize(n);
+  // Walk back over UTF-8 continuation bytes (10xxxxxx) to the lead byte, then
+  // drop the whole sequence if the lead's expected length runs past the cut.
+  size_t i = s.size();
+  while (i > 0 && (static_cast<unsigned char>(s[i - 1]) & 0xC0) == 0x80)
+    --i;
+  if (i > 0) {
+    unsigned char lead = static_cast<unsigned char>(s[i - 1]);
+    size_t need = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+    if (s.size() - (i - 1) < need)
+      s.resize(i - 1);
+  }
   return s;
 }
 

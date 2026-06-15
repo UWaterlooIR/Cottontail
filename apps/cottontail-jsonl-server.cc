@@ -211,7 +211,20 @@ int main(int argc, char **argv) {
   svr.new_task_queue = [threads] { return new httplib::ThreadPool(threads); };
 
   svr.set_exception_handler(
-      [](const httplib::Request &, httplib::Response &res, std::exception_ptr) {
+      [](const httplib::Request &req, httplib::Response &res,
+         std::exception_ptr ep) {
+        // The client gets a generic 500, but log the real cause so internal
+        // errors aren't opaque (recovering the message otherwise means a crash).
+        std::string what = "unknown exception";
+        try {
+          if (ep)
+            std::rethrow_exception(ep);
+        } catch (const std::exception &e) {
+          what = e.what();
+        } catch (...) {
+        }
+        std::cerr << "internal error handling " << req.method << " " << req.path
+                  << ": " << what << "\n";
         fail(res, 500, "internal error", "server");
       });
 
