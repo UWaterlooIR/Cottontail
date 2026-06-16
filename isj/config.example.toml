@@ -1,0 +1,39 @@
+# isj configuration file — example
+#
+# Copy this file to isj/config.toml and edit as needed.
+# config.toml is git-ignored; this example file is the checked-in reference.
+#
+# Usage (from repo root):
+#   cp isj/config.example.toml isj/config.toml
+
+# ---------------------------------------------------------------------------
+# [llm.<name>]
+# Named LLM profiles. Each profile defines a vLLM endpoint and the model
+# served on it. Profiles are referenced by name in [agents.<role>].
+# ---------------------------------------------------------------------------
+[llm.default]
+
+# Base URL of the vLLM endpoint (OpenAI-compatible API).
+# Local deployments typically use the loopback address.
+base_url = "http://127.0.0.1:8000/v1"
+
+# Must match the --served-model-name option used when launching the vLLM instance.
+model = "gpt.oss.120b"
+
+# Name of the environment variable holding the API key for this endpoint.
+# If not set here, the key defaults to "EMPTY", which works for unauthenticated
+# local vLLM instances. If set, the named environment variable must exist at
+# startup or an error is raised.
+# api_key_env = "MY_VLLM_API_KEY"
+
+# ---------------------------------------------------------------------------
+# [agents.<role>]
+# Maps each agent role to an implementation class and a named LLM profile.
+# class: fully-qualified Python class path — the CLI uses load_class() to
+#        resolve and instantiate it. To swap implementations, point this at
+#        a different class with the same interface.
+# llm:   name of the [llm.*] profile to use for this agent.
+# ---------------------------------------------------------------------------
+[agents.analyst]
+class = "isj_agent.agents.analyst.Analyst"
+llm = "default"

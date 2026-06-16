@@ -15,3 +15,5 @@ MODULE.bazel.lock
 /bazel-out
 /bazel-testlogs
 /Scrapheap
+/isj/config.toml
+/build-all.log
