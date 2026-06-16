@@ -473,6 +473,11 @@ Per-position slots: `variants` (same concept, other words) · `instances`
 (concrete members) · `manifestations` (specific forms) · `kinds` (abstract
 subtypes) · `morphology` (exact vs. stemmed).
 
+**`morphology` is per-term, not per-query.** It is the *default* for a position
+and may be overridden per individual variant. The Query Author realizes the
+choice as per-atom GCL syntax — bare `<term>` for exact, `porter:<term>` for
+stemmed — never as a whole-query stemming pass. See §4.1.4.
+
 ### 3.3 The four Learn pivots
 
 When one position is under-named in the corpus, search a related well-named
@@ -600,6 +605,20 @@ knowledge of the others.
   proximity) · `<<` / `>>` (Contained / Containing) · `!>` / `!<` (NotContaining
   / NotContainedIn). (Verified against `src/parse.cc`.)
 - **Sees:** task + CM slice. Never the INP rubric, never the corpus directly.
+
+**Morphology is per-atom, not per-query.** The Query Author emits the morphology
+choice directly into the GCL: bare `<term>` for `morphology=exact`,
+`porter:<term>` (the stemmed-stream atom for the index's stemmer, per
+`docs/stemming.md`) for `morphology=stemmed`. A single query routinely mixes the
+two — e.g. `(^ creativity (+ measure porter:measure))` keeps the topic noun
+exact (its cognates *creative* / *creator* are noise vectors here) while letting
+the verb facet match *measured* / *measurement* without enumerating each form by
+hand. The CLI's `--stem` flag, which rewrites a whole expression by passing
+every term through the stemmer (`apps/jsonl_core.cc:stem_gcl`), is a convenience
+for humans running one-off queries and is **not** invoked by the agent.
+Stemming is a tool the agent **composes into the cover**, not a switch it
+toggles. The exact and stemmed streams are co-located in the same index (the
+index was built with `--stem`); a `+`-group can address either or both.
 
 #### 4.1.5 Judge
 
