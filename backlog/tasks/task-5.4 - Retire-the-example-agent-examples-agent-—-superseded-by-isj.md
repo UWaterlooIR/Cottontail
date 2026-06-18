@@ -4,7 +4,7 @@ title: Retire the example agent (examples/agent/) — superseded by isj/
 status: To Do
 assignee: []
 created_date: '2026-06-17 15:51'
-updated_date: '2026-06-18 13:48'
+updated_date: '2026-06-18 15:15'
 labels:
   - cleanup
   - docs
@@ -42,9 +42,19 @@ Keeping the old example around invites confusion about which is the real contrac
 - Update references so nothing authoritative points at it as the contract:
   `docs/running-the-search-stack.md`, the top-level `README.md`, `CLAUDE.md`, and any
   mention in `docs/cottontail-search-agent-spec.md`. Either remove the example-agent
-  sections or clearly mark them as archived/superseded.
+  sections or clearly mark them as archived/superseded. (REMOVE/MARK only — do NOT write the
+  new isj run instructions here; adding the isj Searcher path is TASK-5.10's job.)
 - Confirm the build/test gate is unaffected (the example agent is a uv project, not in
   the Bazel build; just make sure no doc/test references break).
+
+## Boundary with TASK-5.10 (no double-editing)
+
+This task and TASK-5.10 both touch the same docs (`running-the-search-stack.md`, `README.md`,
+`CLAUDE.md`, `cottontail-search-agent-spec.md`), so split the work cleanly:
+- 5.4 (this task, runs at archival): REMOVE or MARK-AS-ARCHIVED the OLD example-agent
+  pointers so nothing presents it as the current contract. It does NOT add isj content.
+- TASK-5.10 (depends on 5.4 + the C3 CLI): ADD the new isj Searcher path (run commands +
+  output layout) and the final repointing to `isj/`.
 
 ## Non-goals
 
@@ -52,6 +62,8 @@ Keeping the old example around invites confusion about which is the real contrac
   and the B/C agent work).
 - Do NOT remove the search-stack docs themselves — only the example-agent-specific
   pointers; the index/query/server guidance stays.
+- Do NOT add the new isj Searcher run instructions / the isj path to the docs — that is
+  TASK-5.10. 5.4 only removes or marks-archived the old example-agent pointers.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria

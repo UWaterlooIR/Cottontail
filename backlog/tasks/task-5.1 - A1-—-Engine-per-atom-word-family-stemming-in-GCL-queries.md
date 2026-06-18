@@ -4,7 +4,7 @@ title: 'A1 — Engine: cover_search tool with per-atom word* family stemming'
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:49'
-updated_date: '2026-06-18 13:44'
+updated_date: '2026-06-18 15:14'
 labels:
   - engine
   - cpp
@@ -108,7 +108,21 @@ For each returned document, build `summary` from the query's covers within it (t
 covers ssr summed). Window size W is in TOKENS (corpus term positions), default 75
 (about 3 sentences at ~25 words); A2 lets the request override it.
 
-Algorithm:
+WHERE THE COVERS COME FROM — a cheap PHASE 2 over the top_k results only (do NOT re-rank the
+corpus): ssr_ranking (src/ranking.cc:305-350) computes covers internally (score +=
+1/(K+q-p)) but RETURNS ONLY THE CONTAINER SPAN (cp,cq) per result — the individual covers are
+discarded, and RankingResult exposes no per-cover data for an ssr hit (its p()/q() equal the
+container). So build the summary in a SECOND PHASE over ONLY the top_k RETURNED documents
+(standard rank-then-snippet): for each returned container (cp,cq), seek the query hopper to
+cp and advance tau while q <= cq, collecting THAT document's (p,q) covers (the same inner
+recurrence as ranking.cc:327-345). This re-enumerates covers within ~top_k documents only —
+it is NOT a second corpus-wide pass and is negligible next to ranking. Do NOT read covers off
+RankingResult (they are not there), and do NOT call ssr_ranking again over :item. (Capturing
+covers during phase 1 is intentionally avoided: ssr does not know which documents survive
+into top_k until scoring finishes, so buffering covers for every matching document would be
+unbounded memory; the localized re-walk trades trivial recomputation for bounded memory.)
+
+Algorithm (per returned document, using that document's phase-2 covers):
 1. Enumerate the query's covers within the document, in DOCUMENT ORDER.
 2. For each cover (p,q): width T = max(W, cover_length). Center a T-token window on the
    cover. If it runs past the document body start or end, SHIFT it inward to keep T
@@ -153,6 +167,7 @@ offsets for later grounding; the text is the required deliverable.)
 - [ ] #15 The summary window size is a parameter in tokens with default 75 (about 3 sentences at ~25 words); cover_search collects the query's covers within each returned :item to build the summary; A2 adds the request field to override the window.
 - [ ] #16 A new cover_search tool exists (a jsonl_core function + POST /tools/cover_search endpoint added alongside the existing server tools), included in describe_json; search_gcl is unchanged and remains a pure GCL interface with no word* handling.
 - [ ] #17 cover_search is included in describe_json so GET /describe lists it (the server advertises all its tools; there is no per-agent/profile filtering).
+- [ ] #18 The summary is built in a PHASE 2 over only the top_k returned documents: because ssr_ranking returns only the container span per result (not the covers), the builder recovers each returned document's covers by walking the query hopper within that container [cp,cq] (mirroring ranking.cc:327-345); it does NOT re-rank the corpus and does NOT read covers off RankingResult.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -171,8 +186,11 @@ Grounded in the current code; adapt as needed. No task dependencies.
    word* atoms (bare and phrase-internal, before expand_phrases), error on a non-trailing
    mid-token `*`; require burrow_stemmer()!=null if word* present; rank docs by ssr within
    :item. Leave search_gcl untouched.
-4. Build summary per returned doc: enumerate the query's covers WITHIN that :item (e.g. a
-   cover hopper restricted to the doc's container) and apply the summary algorithm (window
+4. Build summary per returned doc in a cheap PHASE 2 over the top_k results ONLY (ssr_ranking
+   returns only the container span, NOT the covers): for each returned container (cp,cq),
+   re-enumerate that document's covers by seeking the query hopper to cp and advancing tau
+   while q <= cq (mirroring ranking.cc:327-345). Do NOT re-rank the corpus and do NOT read
+   covers off RankingResult (an ssr hit has none). Then apply the summary algorithm (window
    default 75 tokens; center max(W,cover) per cover; shift at body edges; union; merge
    overlapping/touching; join non-contiguous extents with the spaced-dots separator;
    document order). Translate extents via txt()->translate.

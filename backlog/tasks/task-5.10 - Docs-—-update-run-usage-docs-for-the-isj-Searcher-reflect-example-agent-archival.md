@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 14:19'
+updated_date: '2026-06-18 15:15'
 labels:
   - searcher
 dependencies:
@@ -41,6 +42,14 @@ the CLI and TASK-5.8 for the output layout). The docs still describe the OLD wor
 - CLAUDE.md ("JSONL search stack" + "Running the apps" sections) lists examples/agent/ as the
   example LLM agent.
 
+## Relationship to TASK-5.4 (no overlap)
+
+TASK-5.4 (a dependency) has ALREADY removed or marked-archived the example-agent pointers at
+archival time. This task does NOT redo that archival; its job is to ADD the NEW isj Searcher
+path (run commands + output layout) and complete the repointing to isj/. If 5.4 happened to
+leave any example-agent pointer live, fix it in passing, but the primary work here is
+documenting the new flow.
+
 ## Required behavior (the contract)
 
 1. docs/running-the-search-stack.md (KEEP IT THE SINGLE SOURCE): add the isj Searcher path
@@ -52,8 +61,9 @@ the CLI and TASK-5.8 for the output layout). The docs still describe the OLD wor
 2. isj/README.md: replace the Analyst-only demo description with the full pipeline + the CLI
    flags + the output layout (or, to avoid duplication, summarize and LINK to
    running-the-search-stack.md for the run commands — the single-source rule wins).
-3. CLAUDE.md: update "JSONL search stack" and "Running the apps" so examples/agent/ is noted
-   as ARCHIVED and readers are pointed to isj/. Remove/replace stale example-agent pointers.
+3. CLAUDE.md: ensure the "JSONL search stack" and "Running the apps" sections point to isj/
+   as the maintained agent and the cover_search tool path (5.4 already marked examples/agent/
+   as archived; here just ADD/confirm the isj pointer). Fix any remaining stale pointer.
 4. Top-level README.md (if present) and any other lingering examples/agent/ references in
    docs: repoint to isj/. (grep the repo for examples/agent to find them.)
 5. Do NOT duplicate run instructions across files: running-the-search-stack.md is the single
@@ -62,6 +72,8 @@ the CLI and TASK-5.8 for the output layout). The docs still describe the OLD wor
 ## Non-goals
 
 - No code, no CLI behavior, no new tasks of substance — documentation only.
+- Do not re-do TASK-5.4's archival (removing/marking the old example-agent pointers); assume
+  it is done and ADD the isj flow on top.
 - Do not document fusion/RRF/Task-R/RAG (out of scope / dropped).
 - Do not resurrect anything from archive/.
 <!-- SECTION:DESCRIPTION:END -->
@@ -70,7 +82,7 @@ the CLI and TASK-5.8 for the output layout). The docs still describe the OLD wor
 <!-- AC:BEGIN -->
 - [ ] #1 docs/running-the-search-stack.md documents the isj Searcher path end to end (index -> server with cover_search -> python -m isj_agent.cli --question/--out), with copy-paste commands, and describes the run-output directory layout (intents.json + intent-NN.json + intent-NN.trace.jsonl + optional errors.log; absence of errors.log == whole run succeeded).
 - [ ] #2 isj/README.md no longer describes the Analyst-only demo as the CLI; it describes the full per-intent Searcher pipeline and the output layout, linking to running-the-search-stack.md for run commands rather than duplicating them.
-- [ ] #3 CLAUDE.md 'JSONL search stack' and 'Running the apps' sections note examples/agent/ as ARCHIVED and point to isj/ instead; no doc still presents examples/agent/ as the current example agent.
+- [ ] #3 CLAUDE.md 'JSONL search stack' and 'Running the apps' sections point to isj/ as the maintained agent and the cover_search tool path (the example-agent references were archived in TASK-5.4); no doc still presents examples/agent/ as the current example agent.
 - [ ] #4 A repo grep for 'examples/agent' finds no stale pointer presenting it as a runnable/current path (top-level README and other docs repointed to isj/).
 - [ ] #5 Run instructions are not duplicated: running-the-search-stack.md remains the single source and other files link to it.
 <!-- AC:END -->
