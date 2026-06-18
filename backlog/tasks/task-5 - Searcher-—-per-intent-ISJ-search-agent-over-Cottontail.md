@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 13:49'
+updated_date: '2026-06-18 14:06'
 labels:
   - searcher
 dependencies: []
@@ -33,19 +33,19 @@ instead). A reusable probe lives at isj/scouting/.
 
 ## Architecture (decided)
 
-- The Cottontail HTTP server is just a COLLECTION OF TOOLS (`/tools/<name>`, with
-  `/describe` listing them). It is NOT aware of agents or "profiles". It is the CLIENT's job
+- The Cottontail HTTP server is just a COLLECTION OF TOOLS (/tools/<name>, with
+  /describe listing them). It is NOT aware of agents or "profiles". It is the CLIENT's job
   to choose which tools its agent gets and to supply them (from this server, a directory, or
   another server). cover_search is simply a new tool the server offers. (An earlier "tool
   registry + per-agent profiles" idea was rejected — the server must not model agents.)
-- `search_gcl` stays a PURE GCL primitive (it does not learn agent conveniences). The
-  ISJ agent gets a NEW, separate tool `cover_search` that understands the `word*` family
-  marker, returns a cover-biased extractive `summary`, and (A2) carries breadth/novelty
+- search_gcl stays a PURE GCL primitive (it does not learn agent conveniences). The
+  ISJ agent gets a NEW, separate tool cover_search that understands the word* family
+  marker, returns a cover-biased extractive summary, and (A2) carries breadth/novelty
   signals + exclusion + a window override.
 - The word*->feature stemming translation lives in the C++ tool layer (parity with the
   burrow's own Porter), NOT in Python and NOT in GCL/search_gcl.
 - The Python isj agent holds the judged set and passes it as exclude_docids (the engine
-  is stateless); the `judge` verdict tool is controller-side, not a server endpoint. The
+  is stateless); the judge verdict tool is controller-side, not a server endpoint. The
   agent's two LLM tools (search -> cover_search; judge) are defined client-side by B2.
 - GCL validity (and any other engine failure) is the ENGINE's truth: there is no Python
   GCL validator; the engine raises EngineError and the agent controller handles it
@@ -62,12 +62,12 @@ instead). A reusable probe lives at isj/scouting/.
 ## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
 
 The cover_search HTTP/JSON contract has two ends:
-- SERVER = the A tasks (C++): cottontail-jsonl-server's `cover_search` endpoint — JSON
+- SERVER = the A tasks (C++): cottontail-jsonl-server's cover_search endpoint — JSON
   request parsing (spec_from) + response serialization (jsonl_json), added alongside the
   other tools and advertised by GET /describe. This is the PROVIDER; it does the actual
   searching (covers, stemming, summary, counts) and emits JSON. It only waits to be called
   (by curl, the CLI, or a client).
-- CLIENT = C1 (Python): `HttpSearchEngine` — a class in isj_agent/engine/ that implements
+- CLIENT = C1 (Python): HttpSearchEngine — a class in isj_agent/engine/ that implements
   the B1 SearchEngine Protocol by POSTing to /tools/cover_search and parsing the JSON
   response into B1's SearchResponse type. It is the CONSUMER / transport glue: no search
   logic, no schema invention. (B1's SearchResponse is the Python MIRROR of A's server
@@ -75,7 +75,7 @@ The cover_search HTTP/JSON contract has two ends:
   and C3's full live run catch it.)
 
 The Searcher agent (B2) is Python and only knows the SearchEngine Protocol (from B1) —
-`engine.search(...)`, `engine.read(...)`. It is deliberately TRANSPORT-AGNOSTIC: it never
+engine.search(...), engine.read(...). It is deliberately TRANSPORT-AGNOSTIC: it never
 sees HTTP. So you can plug in either implementation:
 
 ```
@@ -101,11 +101,11 @@ which satisfies the same Protocol with zero HTTP — the whole point of the B1 P
 ## Decomposition (subtasks)
 
 Engine/server track (C++); dependency A1 -> A2:
-- A1 (5.1) New `cover_search` tool (added as a /tools/cover_search endpoint alongside the
-  existing tools + a /describe entry): per-atom `word*` stemming (+ honored in phrases) and
-  a cover-biased extractive `summary` (default window 75 tokens). Leaves search_gcl pure.
-- A2 (5.2) `cover_search` enrichment: total_matches + unjudged_matches (document counts),
-  atom_counts (occurrences, no stream), exclude_docids (container-carve), and a `window`
+- A1 (5.1) New cover_search tool (added as a /tools/cover_search endpoint alongside the
+  existing tools + a /describe entry): per-atom word* stemming (+ honored in phrases) and
+  a cover-biased extractive summary (default window 75 tokens). Leaves search_gcl pure.
+- A2 (5.2) cover_search enrichment: total_matches + unjudged_matches (document counts),
+  atom_counts (occurrences, no stream), exclude_docids (container-carve), and a window
   request override for A1's summary.
 - Retire the example agent (5.4): archive examples/agent/, superseded by isj/.
 (Note: an earlier A0 "tool registry + per-agent profiles" task was rejected and archived —
@@ -125,13 +125,17 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   a go-ahead-gated live CONNECTIVITY check (cover_search round-trip + EngineError). C1 ships
   NO CLI entry. (Targets the server A1/A2 modify.)
 - C2 (5.8) Run-output writer: persist a run to an output directory — intents.json (the
-  Intents) + per intent intent-NN.json (the RankedList) + intent-NN.trace.jsonl (the
-  structured event trace, JSON Lines). Pure; no fusion.
+  Intents) + per SUCCESSFUL intent intent-NN.json (the RankedList) + intent-NN.trace.jsonl
+  (the structured event trace, JSON Lines), plus an OPTIONAL errors.log written ONLY if an
+  intent (or the run) failed — its ABSENCE means every intent completed successfully, its
+  PRESENCE means something went wrong and it holds the error messages. Pure; no fusion.
 - C3 (5.9) The CLI: a SINGLE flag-based entry
-  `python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]` (NO
+  python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose] (NO
   subcommands) that runs the whole pipeline — Analyst -> Intents -> per-intent Searcher over
   the live engine (C1) -> capture each SearcherResult (RankedList + events) -> write the run
-  output directory (C2); --verbose renders the events live. It replaces the Analyst-only demo
+  output directory (C2). A per-intent failure is caught as a RunError and the run CONTINUES
+  (one bad intent does not abort the rest); failures land in errors.log and the CLI exits
+  non-zero. --verbose renders the events live. It replaces the Analyst-only demo
   and IS the full real-LLM live integration gate (gpt-oss-120b +
   Scrapheap/climbmix-1000-utf8-porter.burrow). No fusion.
 
