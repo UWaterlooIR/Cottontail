@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 03:53'
+updated_date: '2026-06-18 04:41'
 labels:
   - searcher
 dependencies: []
@@ -19,15 +19,17 @@ ordinal: 5000
 <!-- SECTION:DESCRIPTION:BEGIN -->
 Umbrella task for the **Searcher**: the per-intent ISJ (Interactive Searching and
 Judging) search agent for the TREC RAG 2026 entry. One interpretation ("intent") of
-a question goes in; a ranked, graded passage list comes out. RRF later fuses the
-per-intent lists into the question's final ranking.
+a question goes in; a ranked, graded passage list comes out. Each intent is searched
+INDEPENDENTLY and its per-intent results are PERSISTED to a run output directory for later
+analysis. Fusion (RRF), Task-R formatting, and RAG are deferred / OUT OF SCOPE for now.
 
 The design was validated by live scouting against gpt-oss-120b, Qwen3.6-27B, and
 gemma-4-31B. The scouting writeup (loop, prompt, tools, controller, evidence) is
 docs/searcher-agent-lessons-June-16-2026.md (a snapshot; where it and these tasks
 disagree, the tasks are current). Background: docs/agentic-isj-investigation-planner.md
 (the over-built spec we are simplifying away from) and backlog/docs/doc-3 (per-intent
-retrieval + RRF fusion). A reusable probe lives at isj/scouting/.
+retrieval; its RRF-fusion proposal is DROPPED for now — we persist per-intent results
+instead). A reusable probe lives at isj/scouting/.
 
 ## Architecture (decided)
 
@@ -45,6 +47,9 @@ retrieval + RRF fusion). A reusable probe lives at isj/scouting/.
   GCL validator; the engine raises EngineError and the agent controller handles it
   generally by feeding the message back to the model to self-correct.
 - Judgement grade scale is 0-4 (UMBRELA-aligned).
+- We do NOT fuse the per-intent lists yet. Each intent's results (a RankedList + the
+  verbose loop trace) are written to a run output directory; deciding what to do with them
+  (fusion, Task-R, RAG) is deferred.
 
 ## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
 
@@ -108,10 +113,12 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   profile); config [cottontail_http_json_server] section; full real-LLM live e2e against
   gpt-oss-120b + Scrapheap/climbmix-1000-utf8-porter.burrow. (Targets the server the A
   tasks modify; the live e2e is the integration gate.)
-- C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write, dep B1]
-- C3 Orchestrator wiring (Analyst -> Intents -> Searcher-per-intent -> RRF -> final
-  ranked list). [to write, dep B2/C2]
+- C2 (5.8) Run-output writer: persist a run to an output directory — intents.json (the
+  Intents) + per intent intent-NN.json (the RankedList) + intent-NN.trace.txt (the verbose
+  loop trace). Pure; no fusion.
+- C3 (5.9) CLI orchestrator: one question -> Analyst -> Intents -> per-intent Searcher over
+  the live engine (C1) with tracing -> write the run output directory (C2). No fusion.
 
-Out of scope of this umbrella (downstream): Task-R TSV / RAG-JSONL output + Writer/
-Validator, the dev-data eval harness, real-model policy tuning.
+Out of scope of this umbrella: fusion (RRF, dropped for now); Task-R TSV / RAG-JSONL output
++ Writer/Validator; the dev-data eval harness; real-model policy tuning.
 <!-- SECTION:DESCRIPTION:END -->
