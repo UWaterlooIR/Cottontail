@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 02:37'
+updated_date: '2026-06-18 02:44'
 labels:
   - searcher
 dependencies: []
@@ -56,17 +56,26 @@ The cover_search HTTP/JSON contract has two ends:
   response into B1's SearchResponse type. It is the CONSUMER / transport glue: no search
   logic, no schema invention.
 
-The agent (B2) only knows the in-process SearchEngine Protocol (B1) and is
-transport-agnostic:
-  B2 -> engine.search(...) -> { FakeEngine (canned; tests; B1) |
-                                HttpSearchEngine (HTTP -> the C++ server; live; C1) }
+The Searcher agent (B2) is Python and only knows the SearchEngine Protocol (from B1) —
+engine.search(...), engine.read(...). It is deliberately TRANSPORT-AGNOSTIC: it never
+sees HTTP. So you can plug in either implementation:
 
-The JSON shape is defined ONCE and mirrored, not duplicated: A owns the server-side
-contract (advertised via /describe); B1 defines the Python pydantic mirror
-(SearchResponse / Hit / AtomCount); C1 is only the glue mapping HTTP JSON <-> those
-types. Without C1 the server has no in-process Python caller for the agent (only
-curl/CLI); without A the client has nothing to call; B2 needs neither, because
-FakeEngine satisfies the same Protocol with no HTTP.
+  B2 agent  ->  engine.search(...)   (the B1 Protocol)
+                   |-- FakeEngine        -> canned responses           (tests; B1)
+                   \-- HttpSearchEngine  -> POST /tools/cover_search -> C++ server  (live; C1 calls A)
+
+The JSON shape shows up on both ends, but is defined ONCE and mirrored, not duplicated:
+- A owns the server-side JSON contract (and advertises it via /describe).
+- B1 defines the Python mirror of that contract (the SearchResponse / Hit / AtomCount
+  pydantic types).
+- C1 is just the glue: serialize the request -> HTTP -> deserialize the response JSON
+  into the B1 types. No search logic, no schema invention — it conforms to A's contract.
+
+So: A puts the JSON contract INTO the server; C1 writes the Python CLIENT that speaks that
+contract and hands the agent typed objects. Without C1, the server (A) would have no
+in-process Python caller for the agent — only curl/CLI could reach it. Without A, C1 would
+have nothing to call. (That is also why B2 needs neither: it tests against FakeEngine,
+which satisfies the same Protocol with zero HTTP — the whole point of the B1 Protocol seam.)
 
 ## Decomposition (subtasks)
 
