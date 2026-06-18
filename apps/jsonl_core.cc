@@ -598,8 +598,8 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 }
 
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
-                        std::vector<CoverHit> *hits, std::string *error) {
-  hits->clear();
+                        CoverResponse *out, std::string *error) {
+  out->results.clear();
   const std::string container = ":item";
   // word* needs a stemmed stream; fail loudly (no silent fallback to exact).
   std::shared_ptr<Stemmer> stemmer;
@@ -649,7 +649,7 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
           covers.emplace_back(p, q);
     }
     h.summary = cover_summary(warren, covers, body_start, cq, kCoverWindow);
-    hits->push_back(std::move(h));
+    out->results.push_back(std::move(h));
   }
   return true;
 }

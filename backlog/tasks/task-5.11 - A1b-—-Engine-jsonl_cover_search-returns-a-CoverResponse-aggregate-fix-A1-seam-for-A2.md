@@ -3,10 +3,10 @@ id: TASK-5.11
 title: >-
   A1b — Engine: jsonl_cover_search returns a CoverResponse aggregate (fix A1
   seam for A2)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-06-18 18:25'
-updated_date: '2026-06-18 18:25'
+updated_date: '2026-06-18 18:52'
 labels:
   - searcher
 dependencies:
@@ -85,3 +85,51 @@ unchanged). DEPENDS ON A1 (TASK-5.1); BLOCKS A2 (TASK-5.2).
 - [ ] #4 jsonl_cover_search behavior is unchanged from A1 (same hits, ranks, scores, summaries, error paths); search_gcl and the GCL core are untouched.
 - [ ] #5 Full build (//... minus the Boost-blocked targets) is green and //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test all pass.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Pure, behavior-preserving refactor. The emitted cover_search JSON stays BYTE-FOR-BYTE
+identical to A1; only the C++ return type / call form changes. Call sites enumerated below
+from the current tree. On branch claude/trec-rag-2026-design (do NOT branch).
+
+1. apps/jsonl_core.h: between `struct CoverHit {...}` and the jsonl_cover_search declaration,
+   add (mirroring B1's SearchResponse):
+     struct AtomCount { std::string term; long count = 0; };        // A2 populates
+     struct CoverResponse {
+       long total_matches = 0;              // A2 populates
+       long unjudged_matches = 0;           // A2 populates
+       std::vector<AtomCount> atom_counts;  // A2 populates
+       std::vector<CoverHit> results;       // populated here (the A1 hits)
+     };
+   Change the declaration's out-param from std::vector<CoverHit>* to CoverResponse*.
+   CoverHit / CoverSpec are unchanged.
+2. apps/jsonl_core.cc (jsonl_cover_search): param -> CoverResponse* out; at top
+   out->results.clear() (replacing hits->clear()); the push becomes
+   out->results.push_back(std::move(h)). Everything else (stemmer check, cover_rewrite,
+   ssr_ranking, phase-2 cover recovery, cover_summary, all error returns) is UNTOUCHED. The
+   aggregate fields keep their defaults.
+3. apps/jsonl_json.{h,cc}: cover_results_json takes const CoverResponse& and iterates
+   resp.results; it still emits EXACTLY {"results":[{rank,score,docid,summary}]} -- no new
+   fields (A2 adds them). Identical bytes.
+4. Callers (2): apps/cottontail-jsonl-server.cc (POST /tools/cover_search handler) and
+   apps/cottontail-jsonl-query.cc (--cover mode): declare a CoverResponse, pass &resp, hand
+   resp to cover_results_json; add `using cottontail::jsonl::CoverResponse;`.
+5. test/jsonl.cc (9 JsonlCover.* tests): each `std::vector<CoverHit> hits;` -> `CoverResponse
+   resp;`; each jsonl_cover_search(..., &hits, ...) -> &resp; each cover_docids(hits) ->
+   cover_docids(resp.results) (the cover_docids HELPER signature stays vector<CoverHit>&).
+   ResponseShape: hits[0]/hits.empty() -> resp.results[0]/resp.results.empty().
+   SummaryWindowingAndGap: `for (const auto &h : hits)` -> resp.results.
+   test/jsonl_cli.cc and test/jsonl_server.cc drive the binary over CLI/HTTP and assert on
+   JSON, not the C++ type; since the JSON is unchanged they need NO edits and pass as-is
+   (AC#3 is vacuously satisfied for them -- confirm by running, not editing).
+6. NO changes to search_gcl, the GCL core, describe_json, or any doc (wire contract unchanged).
+
+Verify:
+- bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
+- bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test (all green).
+  The existing JsonlCover.* assertions remain valid -> their passing IS the AC#4 regression proof.
+
+Commit: one commit "refactor(jsonl): jsonl_cover_search returns CoverResponse aggregate (A1b)",
+noting it corrects the A1 seam and keeps JSON byte-identical; then check the 5 ACs and set Done.
+<!-- SECTION:PLAN:END -->

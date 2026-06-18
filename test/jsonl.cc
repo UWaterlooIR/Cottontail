@@ -432,19 +432,19 @@ TEST(JsonlCover, FamilyRecallVsBareExact) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
 
   CoverSpec fam;
   fam.query = "bear*";
   ASSERT_TRUE(jsonl_cover_search(w, fam, &hits, &error)) << error;
-  auto fam_ids = cover_docids(hits);
+  auto fam_ids = cover_docids(hits.results);
   EXPECT_EQ(fam_ids.count("c-2"), 1u); // "bears" reached via the family
   EXPECT_EQ(fam_ids.count("c-1"), 1u); // "bear" too
 
   CoverSpec bare;
   bare.query = "bear";
   ASSERT_TRUE(jsonl_cover_search(w, bare, &hits, &error)) << error;
-  auto bare_ids = cover_docids(hits);
+  auto bare_ids = cover_docids(hits.results);
   EXPECT_EQ(bare_ids.count("c-2"), 0u); // only "bears" -> bare "bear" misses
   EXPECT_EQ(bare_ids.count("c-1"), 1u); // literal "bear" still matches
   w->end();
@@ -458,7 +458,7 @@ TEST(JsonlCover, NoStemmedStreamIsAnError) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   std::string qerr;
   CoverSpec spec;
   spec.query = "bear*";
@@ -475,12 +475,12 @@ TEST(JsonlCover, MixedCoverAndStarFreePhrase) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
 
   CoverSpec mix;
   mix.query = "(^ black bear*)";
   ASSERT_TRUE(jsonl_cover_search(w, mix, &hits, &error)) << error;
-  auto ids = cover_docids(hits);
+  auto ids = cover_docids(hits.results);
   EXPECT_EQ(ids.count("c-1"), 1u); // black + bear
   EXPECT_EQ(ids.count("c-4"), 1u); // black + bear
   EXPECT_EQ(ids.count("c-5"), 1u); // black + bears
@@ -490,7 +490,7 @@ TEST(JsonlCover, MixedCoverAndStarFreePhrase) {
   CoverSpec phrase;
   phrase.query = "\"black bear\""; // star-free phrase -> exact, left quoted
   ASSERT_TRUE(jsonl_cover_search(w, phrase, &hits, &error)) << error;
-  auto pids = cover_docids(hits);
+  auto pids = cover_docids(hits.results);
   EXPECT_EQ(pids.count("c-1"), 1u); // adjacent "black bear"
   EXPECT_EQ(pids.count("c-2"), 0u);
   w->end();
@@ -504,11 +504,11 @@ TEST(JsonlCover, UnstemmableStarFallsBackToExact) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   CoverSpec spec;
   spec.query = "ox*";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(cover_docids(hits).count("c-3"), 1u);
+  EXPECT_EQ(cover_docids(hits.results).count("c-3"), 1u);
   w->end();
 }
 
@@ -520,11 +520,11 @@ TEST(JsonlCover, StarHonoredInsidePhrase) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   CoverSpec spec;
   spec.query = "\"black bear*\"";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(cover_docids(hits).count("c-5"), 1u); // "black bears"
+  EXPECT_EQ(cover_docids(hits.results).count("c-5"), 1u); // "black bears"
   w->end();
 }
 
@@ -535,7 +535,7 @@ TEST(JsonlCover, MidTokenStarIsAnError) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   std::string qerr;
   CoverSpec spec;
   spec.query = "at*ack";
@@ -552,11 +552,11 @@ TEST(JsonlCover, TagsAndOperatorsUntouched) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   CoverSpec spec;
   spec.query = "(<< bear* :item)";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(cover_docids(hits).count("c-2"), 1u); // family recall, :item intact
+  EXPECT_EQ(cover_docids(hits.results).count("c-2"), 1u); // family recall, :item intact
   w->end();
 }
 
@@ -569,18 +569,18 @@ TEST(JsonlCover, ResponseShape) {
       << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   CoverSpec spec;
   spec.query = "(^ black bear*)";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
-  ASSERT_FALSE(hits.empty());
-  EXPECT_EQ(hits[0].rank, 1);
-  EXPECT_GT(hits[0].score, 0.0);
-  EXPECT_FALSE(hits[0].docid.empty());
-  EXPECT_FALSE(hits[0].summary.empty());
+  ASSERT_FALSE(hits.results.empty());
+  EXPECT_EQ(hits.results[0].rank, 1);
+  EXPECT_GT(hits.results[0].score, 0.0);
+  EXPECT_FALSE(hits.results[0].docid.empty());
+  EXPECT_FALSE(hits.results[0].summary.empty());
   // The summary is cover-biased: it contains the matched terms.
-  EXPECT_NE(hits[0].summary.find("black"), std::string::npos);
-  EXPECT_NE(hits[0].summary.find("bear"), std::string::npos);
+  EXPECT_NE(hits.results[0].summary.find("black"), std::string::npos);
+  EXPECT_NE(hits.results[0].summary.find("bear"), std::string::npos);
   w->end();
 }
 
@@ -602,13 +602,13 @@ TEST(JsonlCover, SummaryWindowingAndGap) {
   ASSERT_TRUE(build_rows("cover_gap", rows, "porter", &burrow, &error)) << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  std::vector<CoverHit> hits;
+  CoverResponse hits;
   CoverSpec spec;
   spec.query = "needle";
   spec.top_k = 10;
   ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
   std::string g1, g2;
-  for (const auto &h : hits) {
+  for (const auto &h : hits.results) {
     if (h.docid == "g-1")
       g1 = h.summary;
     if (h.docid == "g-2")

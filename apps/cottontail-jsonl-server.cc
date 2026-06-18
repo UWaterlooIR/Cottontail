@@ -24,6 +24,7 @@
 
 namespace {
 using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
@@ -308,16 +309,16 @@ int main(int argc, char **argv) {
              } catch (...) {
                return fail(res, 400, "missing/invalid 'query'", "request");
              }
-             std::vector<CoverHit> hits;
+             CoverResponse resp;
              std::string e;
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
-                   return cottontail::jsonl::jsonl_cover_search(w, spec, &hits,
+                   return cottontail::jsonl::jsonl_cover_search(w, spec, &resp,
                                                                 &e);
                  });
              if (!ok)
                return fail(res, 400, e, "cover_search");
-             res.set_content(cottontail::jsonl::cover_results_json(hits).dump(),
+             res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
                              "application/json");
            });
 

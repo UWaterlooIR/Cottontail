@@ -101,6 +101,22 @@ struct CoverHit {
   std::string summary; // cover-biased extractive summary (replaces best_passage)
 };
 
+// Per query-leaf occurrence count (A2 populates atom_counts). count = total
+// OCCURRENCES of the resolved feature in the corpus (collection frequency).
+struct AtomCount {
+  std::string term;  // the atom AS WRITTEN (e.g. bear*), never the porter: form
+  long count = 0;
+};
+
+// The cover_search response aggregate (mirrors B1's SearchResponse, TASK-5.5).
+// A1 fills only `results`; A2 fills total_matches / unjudged_matches / atom_counts.
+struct CoverResponse {
+  long total_matches = 0;              // A2: documents matching the query in :item
+  long unjudged_matches = 0;           // A2: matches not in exclude_docids
+  std::vector<AtomCount> atom_counts;  // A2: per query-leaf occurrence counts
+  std::vector<CoverHit> results;       // ranked documents (rank/score/docid/summary)
+};
+
 // Rank a cover query by ssr cover density within :item and return, per returned
 // document, a cover-biased extractive summary. `word*` atoms resolve to the
 // burrow's stemmed stream (parity with the index's own Porter). Returns false
@@ -108,8 +124,7 @@ struct CoverHit {
 // or a word* query against a burrow with no stemmed stream (no silent fallback
 // to exact).
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
-                        std::vector<CoverHit> *hits,
-                        std::string *error = nullptr);
+                        CoverResponse *out, std::string *error = nullptr);
 
 // Fetch the full body of the row whose :docno equals `docid`. Sets *found=false
 // (not an error) when no such row exists. Returns false only on a hard error.

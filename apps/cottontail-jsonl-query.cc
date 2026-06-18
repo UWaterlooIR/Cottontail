@@ -16,6 +16,7 @@ namespace {
 using cottontail::jsonl::count_json;
 using cottontail::jsonl::cover_results_json;
 using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::describe_json;
 using cottontail::jsonl::explain_json;
@@ -153,10 +154,10 @@ int main(int argc, char **argv) {
     CoverSpec spec;
     spec.query = cover;
     spec.top_k = base.top_k;
-    std::vector<CoverHit> hits;
-    if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &hits, &error))
+    CoverResponse resp;
+    if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &resp, &error))
       die(error, "cover_search");
-    std::cout << cover_results_json(hits).dump(format == "jsonl" ? -1 : 2)
+    std::cout << cover_results_json(resp).dump(format == "jsonl" ? -1 : 2)
               << "\n";
     warren->end();
     return 0;

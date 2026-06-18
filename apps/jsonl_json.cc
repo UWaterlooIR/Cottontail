@@ -88,10 +88,10 @@ json count_json(const QuerySpec &spec, long count) {
   return o;
 }
 
-json cover_results_json(const std::vector<CoverHit> &hits) {
+json cover_results_json(const CoverResponse &resp) {
   json o;
   json arr = json::array();
-  for (const auto &h : hits) {
+  for (const auto &h : resp.results) {
     json r;
     r["rank"] = h.rank;
     r["score"] = h.score;
@@ -100,6 +100,7 @@ json cover_results_json(const std::vector<CoverHit> &hits) {
     arr.push_back(r);
   }
   o["results"] = arr;
+  // A2 adds total_matches / unjudged_matches / atom_counts here.
   return o;
 }
 
