@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 02:19'
+updated_date: '2026-06-18 02:37'
 labels:
   - searcher
 dependencies: []
@@ -43,6 +43,31 @@ retrieval + RRF fusion). A reusable probe lives at isj/scouting/.
   is stateless); the `judge` verdict tool is controller-side, not a server endpoint.
 - Judgement grade scale is 0-4 (UMBRELA-aligned).
 
+## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
+
+The cover_search HTTP/JSON contract has two ends:
+- SERVER = the A tasks (C++): cottontail-jsonl-server's `cover_search` endpoint — JSON
+  request parsing (spec_from) + response serialization (jsonl_json), registered in the
+  isj profile and advertised by GET /describe. This is the PROVIDER; it does the actual
+  searching (covers, stemming, summary, counts) and emits JSON. It only waits to be
+  called (by curl, the CLI, or a client).
+- CLIENT = C1 (Python): `HttpSearchEngine` — a class in isj_agent/engine/ that implements
+  the B1 SearchEngine Protocol by POSTing to /tools/cover_search and parsing the JSON
+  response into B1's SearchResponse type. It is the CONSUMER / transport glue: no search
+  logic, no schema invention.
+
+The agent (B2) only knows the in-process SearchEngine Protocol (B1) and is
+transport-agnostic:
+  B2 -> engine.search(...) -> { FakeEngine (canned; tests; B1) |
+                                HttpSearchEngine (HTTP -> the C++ server; live; C1) }
+
+The JSON shape is defined ONCE and mirrored, not duplicated: A owns the server-side
+contract (advertised via /describe); B1 defines the Python pydantic mirror
+(SearchResponse / Hit / AtomCount); C1 is only the glue mapping HTTP JSON <-> those
+types. Without C1 the server has no in-process Python caller for the agent (only
+curl/CLI); without A the client has nothing to call; B2 needs neither, because
+FakeEngine satisfies the same Protocol with no HTTP.
+
 ## Decomposition (subtasks)
 
 Engine/server track (C++); dependency A0 -> A1 -> A2:
@@ -61,8 +86,8 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
 - B2 Searcher agent + guardrailed loop controller (search/judge[batch]/read, one tool
   call per turn, GCL-validity + judge-before-search guards, controller-owned
   termination), tested against the mock with a stub LLM. [to write, dep B1]
-- C1 HTTP engine client implementing the Protocol against cover_search (isj profile) +
-  live end-to-end against a real burrow. [to write, dep A0/A1/A2/B1/B2]
+- C1 HTTP engine client (HttpSearchEngine) implementing the Protocol against cover_search
+  (isj profile) + live end-to-end against a real burrow. [to write, dep A0/A1/A2/B1/B2]
 - C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write, dep B1]
 - C3 Orchestrator wiring (Analyst -> Intents -> Searcher-per-intent -> RRF -> final
   ranked list). [to write, dep B2/C2]
