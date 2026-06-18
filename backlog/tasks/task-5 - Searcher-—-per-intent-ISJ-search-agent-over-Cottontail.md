@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 14:19'
+updated_date: '2026-06-18 18:37'
 labels:
   - searcher
 dependencies: []
@@ -100,13 +100,20 @@ which satisfies the same Protocol with zero HTTP — the whole point of the B1 P
 
 ## Decomposition (subtasks)
 
-Engine/server track (C++); dependency A1 -> A2:
+Engine/server track (C++); dependency A1 -> A1b -> A2:
 - A1 (5.1) New cover_search tool (added as a /tools/cover_search endpoint alongside the
   existing tools + a /describe entry): per-atom word* stemming (+ honored in phrases) and
   a cover-biased extractive summary (default window 75 tokens). Leaves search_gcl pure.
+  [DONE, committed + pushed.]
+- A1b (5.11) Pure refactor correcting an A1 seam: jsonl_cover_search returns a CoverResponse
+  aggregate (total_matches/unjudged_matches/atom_counts/results, mirroring B1's
+  SearchResponse) instead of a bare vector<CoverHit>, populating only `results` so the JSON
+  stays byte-for-byte identical to A1. This lets A2 be a pure fill-in with no signature
+  churn. (A1 shipped a narrow return type; since A1 is already pushed its history is not
+  rewritten — the fix lands forward here.) Depends on A1; blocks A2.
 - A2 (5.2) cover_search enrichment: total_matches + unjudged_matches (document counts),
   atom_counts (occurrences, no stream), exclude_docids (container-carve), and a window
-  request override for A1's summary.
+  request override for A1's summary. Depends on A1b.
 - Retire the example agent (5.4): archive examples/agent/, superseded by isj/.
 (Note: an earlier A0 "tool registry + per-agent profiles" task was rejected and archived —
 the server is just a bag of tools; clients choose what their agent uses.)

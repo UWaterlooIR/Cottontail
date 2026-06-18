@@ -6,13 +6,13 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-18 13:45'
+updated_date: '2026-06-18 18:25'
 labels:
   - engine
   - cpp
   - searcher
 dependencies:
-  - TASK-5.1
+  - TASK-5.11
 references:
   - docs/searcher-agent-lessons-June-16-2026.md
   - docs/cottontail-jsonl-cli-spec.md
