@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 05:05'
+updated_date: '2026-06-18 13:31'
 labels:
   - searcher
 dependencies: []
@@ -47,11 +47,13 @@ instead). A reusable probe lives at isj/scouting/.
   GCL validator; the engine raises EngineError and the agent controller handles it
   generally by feeding the message back to the model to self-correct.
 - Judgement grade scale is 0-4 (UMBRELA-aligned).
-- We do NOT fuse the per-intent lists yet. Each intent's results (a RankedList + the
-  verbose loop trace) are written to a run output directory; deciding what to do with them
-  (fusion, Task-R, RAG) is deferred.
+- We do NOT fuse the per-intent lists yet. Each intent's results — a RankedList of judged
+  passages PLUS a STRUCTURED EVENT TRACE (a list of timestamped TraceEvents with durations
+  and type-specific fields, a research artifact) — are written to a run output directory;
+  the trace is saved as intent-NN.trace.jsonl (JSON Lines). Deciding what to do with the
+  results (fusion, Task-R, RAG) is deferred.
 - The user-facing CLI is a SINGLE flag-based entry (no subcommands): it takes a question
-  and runs the whole pipeline, writing the output directory.
+  (--question) and runs the whole pipeline, writing the output directory.
 
 ## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
 
@@ -110,21 +112,23 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   deferred to B2).
 - B2 (5.6) Searcher agent + guardrailed loop controller (search/judge[batch], one tool
   call per turn, judge-before-search guard, engine-delegated error bounce, controller-owned
-  termination), RankedList = all judged (grade desc, score desc); tested vs a stub LLM +
-  FakeEngine.
+  termination incl. a max-turns cap). run(intent) -> SearcherResult { RankedList (all judged,
+  grade desc then score desc) + a structured event trace (list[TraceEvent]) }. Tested vs a
+  stub LLM + FakeEngine.
 - C1 (5.7) HttpSearchEngine (httpx) implementing the B1 Protocol against cover_search (isj
   profile); the [cottontail_http_json_server] config + build_search_engine; MockTransport
   unit tests; and a go-ahead-gated live CONNECTIVITY check (cover_search round-trip +
   EngineError). C1 ships NO CLI entry. (Targets the server A0/A1/A2 modify.)
 - C2 (5.8) Run-output writer: persist a run to an output directory — intents.json (the
-  Intents) + per intent intent-NN.json (the RankedList) + intent-NN.trace.txt (the verbose
-  loop trace). Pure; no fusion.
+  Intents) + per intent intent-NN.json (the RankedList) + intent-NN.trace.jsonl (the
+  structured event trace, JSON Lines). Pure; no fusion.
 - C3 (5.9) The CLI: a SINGLE flag-based entry
   `python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]` (NO
-  subcommands) that runs the whole pipeline — Analyst -> Intents -> per-intent Searcher
-  over the live engine (C1) with a saved + (--verbose) streamed trace -> write the run
-  output directory (C2). It replaces the Analyst-only demo and IS the full real-LLM live
-  integration gate (gpt-oss-120b + Scrapheap/climbmix-1000-utf8-porter.burrow). No fusion.
+  subcommands) that runs the whole pipeline — Analyst -> Intents -> per-intent Searcher over
+  the live engine (C1) -> capture each SearcherResult (RankedList + events) -> write the run
+  output directory (C2); --verbose renders the events live. It replaces the Analyst-only demo
+  and IS the full real-LLM live integration gate (gpt-oss-120b +
+  Scrapheap/climbmix-1000-utf8-porter.burrow). No fusion.
 
 Out of scope of this umbrella: fusion (RRF, dropped for now); Task-R TSV / RAG-JSONL output
 + Writer/Validator; the dev-data eval harness; real-model policy tuning.
