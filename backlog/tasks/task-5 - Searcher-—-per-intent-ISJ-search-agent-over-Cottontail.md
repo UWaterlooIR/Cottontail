@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 02:44'
+updated_date: '2026-06-18 02:48'
 labels:
   - searcher
 dependencies: []
@@ -57,12 +57,15 @@ The cover_search HTTP/JSON contract has two ends:
   logic, no schema invention.
 
 The Searcher agent (B2) is Python and only knows the SearchEngine Protocol (from B1) —
-engine.search(...), engine.read(...). It is deliberately TRANSPORT-AGNOSTIC: it never
+`engine.search(...)`, `engine.read(...)`. It is deliberately TRANSPORT-AGNOSTIC: it never
 sees HTTP. So you can plug in either implementation:
 
-  B2 agent  ->  engine.search(...)   (the B1 Protocol)
-                   |-- FakeEngine        -> canned responses           (tests; B1)
-                   \-- HttpSearchEngine  -> POST /tools/cover_search -> C++ server  (live; C1 calls A)
+```
+B2 agent  ->  engine.search(...)              (the B1 Protocol)
+                 |
+                 |-- FakeEngine        -> canned responses              (tests; B1)
+                 \-- HttpSearchEngine  -> POST /tools/cover_search -> C++ server   (live; C1 calls A)
+```
 
 The JSON shape shows up on both ends, but is defined ONCE and mirrored, not duplicated:
 - A owns the server-side JSON contract (and advertises it via /describe).
