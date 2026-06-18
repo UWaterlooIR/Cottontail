@@ -4,13 +4,12 @@ title: 'A1 — Engine: cover_search tool with per-atom word* family stemming'
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:49'
-updated_date: '2026-06-17 21:55'
+updated_date: '2026-06-18 13:44'
 labels:
   - engine
   - cpp
   - searcher
-dependencies:
-  - TASK-5.3
+dependencies: []
 references:
   - docs/searcher-agent-lessons-June-16-2026.md
   - docs/stemming.md
@@ -31,23 +30,27 @@ ordinal: 6000
 ## Where this lives (architecture — read before touching anything)
 
 C++ change in the JSONL search-tool layer. This task CREATES A NEW TOOL, `cover_search`
-— it does NOT modify the existing `search_gcl`.
+— it does NOT modify the existing `search_gcl`. The Cottontail server is just a collection
+of tools (`/tools/<name>` + `/describe`); it is NOT aware of agents or profiles. cover_search
+is simply one more tool the server offers.
 
 1. GCL core — `src/parse.cc`, `src/gcl.h`, the hoppers. DO NOT MODIFY. Read only.
 2. `search_gcl` — the existing tool, a PURE interface to GCL. LEAVE IT ALONE: it must NOT
-   learn about `word*`.
-3. NEW tool `cover_search` — the ISJ agent's search tool. ALL of this task's behavior
-   goes here: a new function in `apps/jsonl_core.{h,cc}`, a new endpoint
-   `POST /tools/cover_search`, registered into the `isj` profile via A0's registry.
+   learn about `word*`. (The earlier POC agent perverted search_gcl by piling agent
+   conveniences onto it; we are undoing that by adding a separate cover_search tool.)
+3. NEW tool `cover_search` — the ISJ agent's search tool. ALL of this task's behavior goes
+   here: a new function in `apps/jsonl_core.{h,cc}`, a new endpoint `POST /tools/cover_search`
+   added alongside the existing `/tools/*` endpoints in `apps/cottontail-jsonl-server.cc`,
+   and included in `describe_json` (which lists the server's tools).
 4. Python isj agent — separate track; it later calls `cover_search`.
 
 May modify: `apps/jsonl_core.{h,cc}`, `apps/jsonl_json.{h,cc}` (cover_search schema +
-serialization), `apps/cottontail-jsonl-server.cc` (register the endpoint),
+serialization), `apps/cottontail-jsonl-server.cc` (add the endpoint),
 `apps/cottontail-jsonl-query.cc` (a way to run cover_search for testing); tests in
 `test/jsonl.cc`, `test/jsonl_cli.cc`, `test/jsonl_server.cc`; docs `docs/stemming.md`,
 `docs/cottontail-jsonl-cli-spec.md`, `docs/cottontail-search-server-spec.md`.
 Must NOT modify: `src/parse.cc`, `src/gcl.h`, the GCL core, or `search_gcl`'s behavior.
-Language: C++. DEPENDS ON A0 (the tool registry / isj profile this tool registers into).
+Language: C++. No task dependencies (this is the engine track's entry point).
 
 ## Context
 
@@ -58,13 +61,13 @@ encoding. The agent-facing surface is a trailing asterisk on a single word: `bea
 Qwen3.6-27B, gemma-4-31B (docs/searcher-agent-lessons-June-16-2026.md).
 
 `cover_search` is the dedicated tool that understands `word*`. `search_gcl` stays a pure
-GCL primitive (and keeps its own whole-query `--stem` flag); the two coexist in different
-profiles. Stem parity: the stemmed feature is `porter:` + Cottontail's Porter(word), so
-resolve via the burrow's own Porter (`stem_atom(burrow_stemmer(warren), word)`); a second
-(Python) Porter would drift. Porter::stem sets stemmed=true and returns `porter:<stem>`
-for any alphabetic word >= 3 chars (even when the stem equals the word), so the stemmed
-stream is symmetric: `porter:bear` matches both "bear" and "bears". Short/non-alpha words
-fall back to the exact surface form.
+GCL primitive (and keeps its own whole-query `--stem` flag); the two are separate tools.
+Stem parity: the stemmed feature is `porter:` + Cottontail's Porter(word), so resolve via
+the burrow's own Porter (`stem_atom(burrow_stemmer(warren), word)`); a second (Python)
+Porter would drift. Porter::stem sets stemmed=true and returns `porter:<stem>` for any
+alphabetic word >= 3 chars (even when the stem equals the word), so the stemmed stream is
+symmetric: `porter:bear` matches both "bear" and "bears". Short/non-alpha words fall back to
+the exact surface form.
 
 How the stemmed stream works (docs/stemming.md 4-5): an index built with `--stem porter`
 co-locates a stemmed stream; a stemmed feature is `porter:`+Porter(word); GCL leaves
@@ -94,8 +97,10 @@ task replaces that with a real cover-biased summary, see below.)
    `*` is a clear error (CLI exit 2 / server 400), no crash.
 5. `word*` needs a stemmed stream; if the burrow has none and the query uses `word*`,
    fail with a clear error (CLI exit 2 / server 400) — no silent fallback to exact.
-6. Register cover_search into A0's registry under the `isj` profile, with a schema in
-   describe_json so `GET /describe?profile=isj` advertises it.
+6. Add the cover_search endpoint INLINE in cottontail-jsonl-server.cc (the same way the
+   existing `/tools/*` endpoints are registered with svr.Post), and include its schema in
+   describe_json so `GET /describe` lists it. There is NO per-agent filtering — the server
+   simply offers cover_search alongside its other tools.
 
 ## The `summary` field — a cover-biased extractive summary
 
@@ -123,59 +128,60 @@ offsets for later grounding; the text is the required deliverable.)
 - Do NOT add total_matches/unjudged_matches/atom_counts/exclude_docids or the request-side
   `window` override — that is A2 (A2 reuses this summary, parameterized by `window`).
 - Do NOT give cover_search a whole-query stem flag; per-atom `word*` is its mechanism.
+- Do NOT build a tool registry or per-agent/profile filtering on the server (rejected
+  design): the server is just a bag of tools; clients choose what their agent uses.
 - Do NOT touch the Python isj agent. Do NOT write a warren-level stemmer into dna; only
   READ the burrow's stemmer.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A new cover_search tool exists (a jsonl_core function + POST /tools/cover_search), registered into the isj profile via A0; search_gcl is unchanged and remains a pure GCL interface with no word* handling.
-- [ ] #2 In cover_search on a --stem porter burrow, bear* matches a row whose body contains only 'bears' (family recall).
-- [ ] #3 In cover_search, the bare term bear (no asterisk) does NOT match a row containing only 'bears'; an index built without --stem is unaffected.
-- [ ] #4 Mixed cover (^ black bear*) matches with black exact and bear* as a family; a quoted phrase with no asterisk is left exact.
-- [ ] #5 Symmetric fallback: ox* matches a row containing 'ox' (Porter leaves 'ox' unchanged, so the asterisk is dropped and the exact word matches) with no error.
-- [ ] #6 A starred word inside a quoted phrase is honored: a phrase of black followed by bear* matches a row containing 'black bears' (desugar-with-stem before expand_phrases; adjacency preserved via shared addresses).
-- [ ] #7 A non-trailing, mid-token asterisk (e.g. at*ack, or a star mid-word in a phrase) produces a clear error (CLI exit 2 / server 400), with no crash.
-- [ ] #8 A cover_search query using word* against a burrow with no stemmed stream fails with a clear error (CLI exit 2 / server 400) and does NOT silently fall back to exact.
-- [ ] #9 Operators and :tags are untouched: (<< bear* :item) parses and runs with :item intact and only bear* translated.
-- [ ] #10 The word*-to-feature translation is a SINGLE shared helper (used by cover_search ranking and reusable by A2's atom_counts) so the feature searched cannot drift; an unstemmable word* resolves through it to the exact feature.
-- [ ] #11 search_gcl's behavior and response are unchanged (regression check).
-- [ ] #12 cover_search is registered in describe_json so GET /describe?profile=isj advertises it.
-- [ ] #13 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc; docs/stemming.md and the cli/server specs document cover_search and the word* marker as distinct from search_gcl and the whole-query --stem flag.
-- [ ] #14 cover_search's per-document response is {rank, score, docid, summary}: score is the ssr sum over the document's covers of 1/(K+q-p), rank is 1-based, and summary REPLACES the old best_passage.
-- [ ] #15 summary is a cover-biased extractive summary: for each of the query's covers (in document order) center a window of max(window, cover_length) tokens on the cover, shifting inward at a document boundary to preserve the width (clamped to the body); take the union of the windows; merge overlapping or touching windows into one extent with no repeated text.
-- [ ] #16 summary renders each merged extent and joins non-contiguous extents with a spaced-dots separator ( . . . ); extents are never reordered (always document start to end); a single extent has no separator.
-- [ ] #17 The summary window size is a parameter in tokens with default 75 (about 3 sentences at ~25 words); cover_search collects the query's covers within each returned :item to build the summary; A2 adds the request field to override the window.
+- [ ] #1 In cover_search on a --stem porter burrow, bear* matches a row whose body contains only 'bears' (family recall).
+- [ ] #2 In cover_search, the bare term bear (no asterisk) does NOT match a row containing only 'bears'; an index built without --stem is unaffected.
+- [ ] #3 Mixed cover (^ black bear*) matches with black exact and bear* as a family; a quoted phrase with no asterisk is left exact.
+- [ ] #4 Symmetric fallback: ox* matches a row containing 'ox' (Porter leaves 'ox' unchanged, so the asterisk is dropped and the exact word matches) with no error.
+- [ ] #5 A starred word inside a quoted phrase is honored: a phrase of black followed by bear* matches a row containing 'black bears' (desugar-with-stem before expand_phrases; adjacency preserved via shared addresses).
+- [ ] #6 A non-trailing, mid-token asterisk (e.g. at*ack, or a star mid-word in a phrase) produces a clear error (CLI exit 2 / server 400), with no crash.
+- [ ] #7 A cover_search query using word* against a burrow with no stemmed stream fails with a clear error (CLI exit 2 / server 400) and does NOT silently fall back to exact.
+- [ ] #8 Operators and :tags are untouched: (<< bear* :item) parses and runs with :item intact and only bear* translated.
+- [ ] #9 The word*-to-feature translation is a SINGLE shared helper (used by cover_search ranking and reusable by A2's atom_counts) so the feature searched cannot drift; an unstemmable word* resolves through it to the exact feature.
+- [ ] #10 search_gcl's behavior and response are unchanged (regression check).
+- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc; docs/stemming.md and the cli/server specs document cover_search and the word* marker as distinct from search_gcl and the whole-query --stem flag.
+- [ ] #12 cover_search's per-document response is {rank, score, docid, summary}: score is the ssr sum over the document's covers of 1/(K+q-p), rank is 1-based, and summary REPLACES the old best_passage.
+- [ ] #13 summary is a cover-biased extractive summary: for each of the query's covers (in document order) center a window of max(window, cover_length) tokens on the cover, shifting inward at a document boundary to preserve the width (clamped to the body); take the union of the windows; merge overlapping or touching windows into one extent with no repeated text.
+- [ ] #14 summary renders each merged extent and joins non-contiguous extents with a spaced-dots separator ( . . . ); extents are never reordered (always document start to end); a single extent has no separator.
+- [ ] #15 The summary window size is a parameter in tokens with default 75 (about 3 sentences at ~25 words); cover_search collects the query's covers within each returned :item to build the summary; A2 adds the request field to override the window.
+- [ ] #16 A new cover_search tool exists (a jsonl_core function + POST /tools/cover_search endpoint added alongside the existing server tools), included in describe_json; search_gcl is unchanged and remains a pure GCL interface with no word* handling.
+- [ ] #17 cover_search is included in describe_json so GET /describe lists it (the server advertises all its tools; there is no per-agent/profile filtering).
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Depends on A0 (register cover_search into the isj profile). Adapt as needed.
+Grounded in the current code; adapt as needed. No task dependencies.
 
-1. Read A0's tool registry, docs/stemming.md (4-5), burrow_stemmer()/stem_atom()/
-   stem_gcl() in apps/jsonl_core.cc, expand_phrases() in src/parse.cc (read-only), and
-   ssr_ranking() + RankingResult in src/ranking.cc (note ssr currently emits the
-   CONTAINER span, which is why best_passage was the document head).
-2. ONE shared helper resolve_family_atom(stemmer, word) -> stem_atom(...). The single
-   place word* becomes a feature atom; A2's atom_counts reuses it.
-3. cover_search function in apps/jsonl_core.{h,cc}: input a cover query (+ top_k);
-   rewrite word* atoms (bare and phrase-internal, before expand_phrases), error on a
-   non-trailing mid-token `*`; require burrow_stemmer()!=null if word* present; rank docs
-   by ssr within :item. Leave search_gcl untouched.
-4. Build summary per returned doc: enumerate the query's covers WITHIN that :item (e.g.
-   a cover hopper restricted to the doc's container) and apply the summary algorithm
-   (window default 75 tokens; center max(W,cover) per cover; shift at body edges; union;
-   merge overlapping/touching; join non-contiguous extents with the spaced-dots
-   separator; document order). Translate extents to text via txt()->translate.
-5. Register cover_search in A0's registry: POST /tools/cover_search handler + describe_json
-   schema in the isj profile; response { rank, score, docid, summary }.
+1. Read how the existing tools are wired in apps/cottontail-jsonl-server.cc
+   (svr.Post("/tools/<name>", ...)) and apps/jsonl_json.cc (describe_json), docs/stemming.md
+   (4-5), burrow_stemmer()/stem_atom()/stem_gcl() in apps/jsonl_core.cc, expand_phrases() in
+   src/parse.cc (read-only), and ssr_ranking() + RankingResult in src/ranking.cc (note ssr
+   currently emits the CONTAINER span, which is why best_passage was the document head).
+2. ONE shared helper resolve_family_atom(stemmer, word) -> stem_atom(...). The single place
+   word* becomes a feature atom; A2's atom_counts reuses it.
+3. cover_search function in apps/jsonl_core.{h,cc}: input a cover query (+ top_k); rewrite
+   word* atoms (bare and phrase-internal, before expand_phrases), error on a non-trailing
+   mid-token `*`; require burrow_stemmer()!=null if word* present; rank docs by ssr within
+   :item. Leave search_gcl untouched.
+4. Build summary per returned doc: enumerate the query's covers WITHIN that :item (e.g. a
+   cover hopper restricted to the doc's container) and apply the summary algorithm (window
+   default 75 tokens; center max(W,cover) per cover; shift at body edges; union; merge
+   overlapping/touching; join non-contiguous extents with the spaced-dots separator;
+   document order). Translate extents via txt()->translate.
+5. Add a POST /tools/cover_search handler in cottontail-jsonl-server.cc (alongside the
+   existing tools) + its schema in describe_json; response { rank, score, docid, summary }.
 6. CLI: a way to invoke cover_search for testing (e.g. a --cover mode); minimal.
 7. Docs: docs/stemming.md per-atom word* marker (cover_search, honored in phrases);
-   server-spec/cli-spec describe cover_search and the summary field, distinct from
-   search_gcl and the whole-query --stem flag.
+   server-spec/cli-spec describe the cover_search tool, distinct from search_gcl and the
+   whole-query --stem flag.
 
 Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
 Test: bazel test //test:tests //test:hazel_test //test:jsonl_test (plus server test).

@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 04:41'
-updated_date: '2026-06-18 13:30'
+updated_date: '2026-06-18 13:48'
 labels:
   - python
   - isj
@@ -82,8 +82,8 @@ intent-NN.trace.jsonl), and on --verbose renders them to the console.
    events to the console during the run (a human-readable live transcript). C3 builds no
    tracer of its own; the events come from the Searcher.
 
-4. The CLI run IS the full real-LLM live integration GATE. With the C++ stack built (A0/A1/A2
-   cover_search + isj profile), cottontail-jsonl-server running over
+4. The CLI run IS the full real-LLM live integration GATE. With the C++ stack built (A1/A2
+   cover_search), cottontail-jsonl-server running over
    Scrapheap/climbmix-1000-utf8-porter.burrow on a loopback port, and vLLM gpt-oss-120b up,
    running the CLI on a question exercises the WHOLE pipeline live: cover_search with word*,
    exclude_docids accumulation, an EngineError bounce, the controller loop, and a populated
@@ -95,9 +95,22 @@ intent-NN.trace.jsonl), and on --verbose renders them to the console.
 - No subcommands (the CLI is a single flag-based entry).
 - No fusion/RRF, no Task-R TSV / RAG-JSONL output, no Writer/Validator.
 - No multi-question batch — one question per run.
-- No C++ or server changes; no new engine tools. No trace GENERATION (the Searcher/B2 emits
-  the events; C3 only captures, renders, and routes them to C2).
+- No C++ or server changes; no new engine tools; no per-agent/profile filtering. No trace
+  GENERATION (the Searcher/B2 emits the events; C3 only captures, renders, and routes them
+  to C2).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 orchestrator.run_question(question) -> (Intents, list[IntentResult]): Analyst.analyze -> Intents, then for each interpretation in order sr = Searcher.run(interpretation); collect IntentResult{ranked_list: sr.ranked_list, events: sr.events}; it does not write files and does not fuse.
+- [ ] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), runs run_question, writes the output directory via C2 write_run, and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
+- [ ] #3 The per-intent structured event trace is B2's SearcherResult.events (a list of TraceEvent); it is always captured per intent and saved as intent-NN.trace.jsonl via C2 (one event per line); --verbose additionally renders the events to the console live. C3 builds no tracer of its own.
+- [ ] #4 One question per run; one output directory per run; no fusion/RRF.
+- [ ] #5 Automated tests drive run_question with a stub Analyst + a stub/Fake Searcher (no network), assert one IntentResult per interpretation each carrying ranked_list + events, and assert the written output directory contents (intents.json + per-intent json + trace.jsonl).
+- [ ] #6 The CLI run is the full real-LLM live integration gate: with the C++ stack built, cottontail-jsonl-server over Scrapheap/climbmix-1000-utf8-porter.burrow, and vLLM gpt-oss-120b up, running it on a question completes the whole pipeline (cover_search with word*, exclude_docids accumulation, an EngineError bounce) and produces a populated output directory with per-intent event traces; external services require operator go-ahead; the transcript/notes are captured.
+- [ ] #7 uv run --directory isj pytest tests/ exits 0; no automated test contacts a network or a real model.
+- [ ] #8 isj/README.md documents the CLI (--question/--out/--overwrite/--verbose, no subcommands), the run output directory (incl. the per-intent .trace.jsonl event logs), and the live-run prerequisites/go-ahead.
+<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -125,21 +138,9 @@ Python in isj/. Depends on B2, C1, C2. Adapt as needed.
    (--question/--out/--overwrite/--verbose, no subcommands), the output directory (incl. the
    per-intent .trace.jsonl event logs), and the live-run prerequisites (server + vLLM up,
    operator go-ahead).
-6. LIVE gate (after A0/A1/A2/B2/C1/C2 exist + go-ahead): config.toml -> vLLM + the running
+6. LIVE gate (after A1/A2/B2/C1/C2 exist + go-ahead): config.toml -> vLLM + the running
    server over Scrapheap/climbmix-1000-utf8-porter.burrow; run
    `python -m isj_agent.cli --question <q> --out runs/<name> --verbose`; confirm a populated
    output directory with sensible per-intent RankedLists + event traces; debug any contract
    mismatch the trace reveals; capture notes.
 <!-- SECTION:PLAN:END -->
-
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 orchestrator.run_question(question) -> (Intents, list[IntentResult]): Analyst.analyze -> Intents, then for each interpretation in order sr = Searcher.run(interpretation); collect IntentResult{ranked_list: sr.ranked_list, events: sr.events}; it does not write files and does not fuse.
-- [ ] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), runs run_question, writes the output directory via C2 write_run, and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
-- [ ] #3 The per-intent structured event trace is B2's SearcherResult.events (a list of TraceEvent); it is always captured per intent and saved as intent-NN.trace.jsonl via C2 (one event per line); --verbose additionally renders the events to the console live. C3 builds no tracer of its own.
-- [ ] #4 One question per run; one output directory per run; no fusion/RRF.
-- [ ] #5 Automated tests drive run_question with a stub Analyst + a stub/Fake Searcher (no network), assert one IntentResult per interpretation each carrying ranked_list + events, and assert the written output directory contents (intents.json + per-intent json + trace.jsonl).
-- [ ] #6 The CLI run is the full real-LLM live integration gate: with the C++ stack built, cottontail-jsonl-server over Scrapheap/climbmix-1000-utf8-porter.burrow, and vLLM gpt-oss-120b up, running it on a question completes the whole pipeline (cover_search with word*, exclude_docids accumulation, an EngineError bounce) and produces a populated output directory with per-intent event traces; external services require operator go-ahead; the transcript/notes are captured.
-- [ ] #7 uv run --directory isj pytest tests/ exits 0; no automated test contacts a network or a real model.
-- [ ] #8 isj/README.md documents the CLI (--question/--out/--overwrite/--verbose, no subcommands), the run output directory (incl. the per-intent .trace.jsonl event logs), and the live-run prerequisites/go-ahead.
-<!-- AC:END -->

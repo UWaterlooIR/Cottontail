@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-17 22:01'
+updated_date: '2026-06-18 13:45'
 labels:
   - engine
   - cpp
@@ -36,27 +36,29 @@ ordinal: 7000
 ## Where this lives (architecture — read before touching anything)
 
 C++ change that EXTENDS the `cover_search` tool created in A1. It does NOT touch
-`search_gcl` or the GCL core.
+`search_gcl` (the pure GCL primitive) or the GCL core.
 
-1. GCL core — DO NOT MODIFY.
-2. `search_gcl` — pure GCL primitive, different tool/profile. LEAVE ALONE. (cover_search
-   is a clean new tool, so there is NO result_count/truncated/stemmed cleanup.)
-3. `cover_search` (the isj-profile tool from A1) — ALL additions go here.
-4. Python isj agent — separate track; consumes the request/response below.
+1. GCL core — `src/parse.cc`, `src/gcl.h`. DO NOT MODIFY.
+2. `search_gcl` — pure GCL primitive, a DIFFERENT, separate tool. LEAVE ALONE. (Because
+   cover_search is its own new tool, this task adds NOTHING to and removes NOTHING from
+   search_gcl — there is no result_count/truncated/stemmed cleanup to do; cover_search
+   is designed clean from the start in A1.)
+3. `cover_search` (the tool from A1) — ALL of this task's additions go here.
+4. Python isj agent — separate track; consumes the cover_search request/response below.
 
 May modify: `apps/jsonl_core.{h,cc}`, `apps/jsonl_json.{h,cc}`,
-`apps/cottontail-jsonl-server.cc`, `apps/cottontail-jsonl-query.cc`; tests in
-`test/jsonl.cc`, `test/jsonl_cli.cc`, `test/jsonl_server.cc`; docs cli-spec + server-spec.
-Must NOT modify `search_gcl` or the GCL core. Language: C++. DEPENDS ON A1 (it extends
-A1's cover_search, reuses A1's word*->feature helper, and configures A1's summary).
+`apps/cottontail-jsonl-server.cc` (the cover_search handler), `apps/cottontail-jsonl-query.cc`;
+tests in `test/jsonl.cc`, `test/jsonl_cli.cc`, `test/jsonl_server.cc`; docs cli-spec +
+server-spec. Must NOT modify `search_gcl` or the GCL core. Language: C++. DEPENDS ON A1 (it
+extends A1's cover_search and reuses A1's word*->feature helper and summary).
 
 ## The one input, its faces
 
 cover_search's request struct (apps/jsonl_core.h) is populated from: the
 `POST /tools/cover_search` JSON body (parsed by the cover_search handler in the server —
-THIS is the agent's request), the CLI, and advertised via describe_json at
-`GET /describe?profile=isj`. "Add X to the request" = add a field to the struct, parse it
-in the handler and CLI, advertise it in describe_json.
+THIS is the agent's request), the CLI, and advertised via describe_json at `GET /describe`.
+"Add X to the request" = add a field to the struct, parse it in the handler and CLI,
+advertise it in describe_json.
 
 ## What this task adds to cover_search, in two pictures
 
@@ -68,7 +70,7 @@ in the handler and CLI, advertise it in describe_json.
 // AFTER A2 (two new optional inputs)
 { "query": "(^ black bear* attack*)", "top_k": 10,
   "exclude_docids": ["shard_00012_0003", "shard_00018_0044"],   // NEW: judged set to skip
-  "window": 75 }                                                // NEW: summary window size in tokens (default 75)
+  "window": 75 }                                                // NEW: MINIMUM total passage size in tokens, centered on the cover
 ```
 
 ### RESPONSE (cover_search)
@@ -96,7 +98,7 @@ in the handler and CLI, advertise it in describe_json.
 UNITS (state in docs): total_matches and unjudged_matches are DOCUMENT counts (matching
 :item rows); atom_counts[i].count is the atom's total OCCURRENCE count in the corpus
 (collection frequency), NOT a document count; `window` is the summary window size in
-TOKENS (the per-cover context width; see A1 for the summary algorithm).
+TOKENS (a MINIMUM total per the summary algorithm; see A1).
 
 ## Why these signals (the ISJ loop)
 
@@ -123,14 +125,13 @@ CONTAINER (default :item). exclude_docids carves the container:
   Both DOCUMENT counts. Optional: unjudged_matches = total_matches minus excluded docids
   that match Q. Empty exclude -> equal.
 - atom_counts: per leaf {term, count}; term as written; count = total OCCURRENCES of the
-  feature it resolves to (idx()->count) via A1's shared helper (bear* -> family
-  occurrences; ox* -> exact feature); 0 if nothing; no stream. (Fix the misnamed `df`.)
-- window: the request field that sets the SUMMARY window size in tokens (default 75 when
-  absent). A2 does NOT re-implement the summary — A1 builds it (per-cover windows centered
-  and sized max(window, cover_length), union, merge overlapping/touching, join
-  non-contiguous extents with the spaced-dots separator, document order). A2 just plumbs
-  `window` through to A1's summary builder. Larger window -> more context per cover.
-  Ranking/scoring stay on the raw covers (UNCHANGED) regardless of window.
+  feature it resolves to (idx()->count) via A1's shared word*->feature helper (bear* ->
+  family occurrences; ox* -> exact feature); 0 if nothing; no stream. (Fix the misnamed `df`.)
+- window: the request field that sets the SUMMARY window in tokens (default 75 when absent).
+  A2 does NOT re-implement the summary — A1 builds it (per-cover windows centered, MINIMUM
+  total size, union, merge, join with spaced dots, document order). A2 just plumbs `window`
+  through to A1's summary builder. Larger window -> more context per cover. Ranking/scoring
+  stay on the raw covers (UNCHANGED) regardless of window.
 
 RANK/SCORE: score is exclusion-INVARIANT (ssr scores each doc independently — no idf/
 stats). rank is 1-based WITHIN the returned post-exclusion results, RESTARTING at 1 each
@@ -142,8 +143,8 @@ call, no gaps; NOT an absolute position and NOT the TREC submission rank.
 - Do NOT re-implement A1's word* translation or A1's summary algorithm — reuse them.
 - Do NOT add new ranking models or change ssr scoring (window only affects the summary
   text, not rank/score).
-- Do NOT add server-side session/judged-set state (exclude_docids is per-request) or any
-  stream/exact-stemmed field, and never expose porter:.
+- Do NOT add server-side session/judged-set state (exclude_docids is per-request), any
+  stream/exact-stemmed field, or any per-agent/profile filtering; never expose porter:.
 - Do NOT touch the Python isj agent.
 <!-- SECTION:DESCRIPTION:END -->
 
@@ -158,12 +159,12 @@ call, no gaps; NOT an absolute position and NOT the TREC submission rank.
 - [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
 - [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
 - [ ] #9 The server cover_search is stateless: two requests with different exclude_docids do not interfere.
-- [ ] #10 GET /describe?profile=isj advertises cover_search's exclude_docids and window inputs and the total_matches/unjudged_matches/atom_counts/windowed response.
-- [ ] #11 Determinism: tests assert on docid SET membership, not tied order.
-- [ ] #12 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
-- [ ] #13 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude_docids, window, and the rank/score semantics.
-- [ ] #14 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
-- [ ] #15 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, docid, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
+- [ ] #10 Determinism: tests assert on docid SET membership, not tied order.
+- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
+- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude_docids, window, and the rank/score semantics.
+- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
+- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, docid, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
+- [ ] #15 GET /describe lists cover_search and its request fields (including exclude_docids and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -173,7 +174,7 @@ Depends on A1 (extends cover_search; reuses A1's word*->feature helper and summa
 
 1. Read A1's cover_search function (its summary builder + request struct + handler), the
    ssr_ranking container, the exact-string :docno match in jsonl_get, and
-   apps/jsonl_json.{h,cc} + the server's cover_search registration.
+   apps/jsonl_json.{h,cc} + the server's cover_search handler.
 2. cover_search request struct: add exclude_docids (vector<string>) and window (tokens).
    Response carrier gains total_matches, unjudged_matches, atom_counts (vector {term,count}).
 3. Effective container: no exclusions -> ":item"; with exclusions ->
@@ -187,16 +188,17 @@ Depends on A1 (extends cover_search; reuses A1's word*->feature helper and summa
    do not duplicate the algorithm. Verify a larger window yields a longer summary with
    unchanged rank/score.
 7. Serialize total_matches/unjudged_matches/atom_counts in apps/jsonl_json.{h,cc}; parse
-   exclude_docids/window in the cover_search handler and CLI; advertise them in
-   describe_json (isj profile). Server stays stateless.
+   exclude_docids/window in the cover_search handler and CLI; advertise them in describe_json.
+   Server stays stateless.
 8. Tests (test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc): total_matches vs a
    plain :item count; unjudged after exclusion; excluding the would-be #1 hit; score
    unchanged under exclusion; rank restarts at 1; atom_counts {term,count} incl. a zero
-   and a word* family count; window override changes summary length but not rank/score;
+   and a word* family count; window as a minimum total size centered (incl. cover-longer-
+   than-window -> passage equals cover, and an edge-clamp case) with unchanged score;
    statelessness. Determinism: assert docid SET membership.
 9. Docs: cli-spec + server-spec document the cover_search additions (units: matches =
-   documents, atom_counts.count = occurrences/no stream, window = summary window in
-   tokens default 75), exclude_docids, and the rank/score semantics.
+   documents, atom_counts.count = occurrences/no stream, window = MINIMUM total tokens
+   centered, cover never truncated), exclude_docids, window, and the rank/score semantics.
 
 Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
 Test: bazel test //test:tests //test:hazel_test //test:jsonl_test (plus server test).

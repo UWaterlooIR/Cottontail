@@ -4,6 +4,7 @@ title: Retire the example agent (examples/agent/) — superseded by isj/
 status: To Do
 assignee: []
 created_date: '2026-06-17 15:51'
+updated_date: '2026-06-18 13:48'
 labels:
   - cleanup
   - docs
@@ -27,8 +28,8 @@ ordinal: 9000
 Retire the proof-of-concept example agent at `examples/agent/`. It was a POC built
 against an earlier, looser tool contract (it leaned on the whole-query `--stem` flag and
 treated `search_gcl` as a general search tool). The going-forward agent is the ISJ agent
-under `isj/`, and the tool surface is being reshaped to its needs (A0/A1/A2). Keeping the
-old example around invites confusion about which is the real contract.
+under `isj/`, and the tool surface is being reshaped to its needs (A1/A2 + the B/C tasks).
+Keeping the old example around invites confusion about which is the real contract.
 
 ## What to do
 
@@ -36,8 +37,8 @@ old example around invites confusion about which is the real contract.
   superseded material under `archive/`; see archive/README.md), OR delete it if the user
   prefers — default to archiving so the history/example is still readable.
 - Add a one-line note in `archive/example-agent/README` (or the archive README) saying it
-  is a superseded POC; the maintained agent is `isj/` and the tool contract is the ISJ
-  profile (A0) + cover_search (A1/A2).
+  is a superseded POC; the maintained agent is `isj/` and the tool contract is the
+  cover_search tool (A1/A2) reached via the isj client.
 - Update references so nothing authoritative points at it as the contract:
   `docs/running-the-search-stack.md`, the top-level `README.md`, `CLAUDE.md`, and any
   mention in `docs/cottontail-search-agent-spec.md`. Either remove the example-agent
@@ -47,7 +48,8 @@ old example around invites confusion about which is the real contract.
 
 ## Non-goals
 
-- Do NOT touch the C++ tool layer or the isj/ package here (that is A0/A1/A2/B-track).
+- Do NOT touch the C++ tool layer or the isj/ package here (that is the A1/A2 engine work
+  and the B/C agent work).
 - Do NOT remove the search-stack docs themselves — only the example-agent-specific
   pointers; the index/query/server guidance stays.
 <!-- SECTION:DESCRIPTION:END -->
