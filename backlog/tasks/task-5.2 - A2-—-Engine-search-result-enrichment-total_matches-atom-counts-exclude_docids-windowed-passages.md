@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-18 18:45'
+updated_date: '2026-06-18 19:23'
 labels:
   - engine
   - cpp
@@ -175,62 +175,81 @@ Depends on A1b (TASK-5.11), which already introduced the CoverResponse aggregate
 jsonl_cover_search to return CoverResponse*. A2 POPULATES those fields and adds the request
 fields; it does not reintroduce the types. Reuses A1's word*->feature helper and summary. Adapt.
 
+CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
+- Q1 Exclusion is a CONTAINMENT match (the same (>> :docno <phrase>) mechanism jsonl_get
+  uses), NOT a verified-exact match -- the in-GCL carve cannot do jsonl_get's exact
+  post-check. A pathological docid whose :docno token-run is an ordered substring of
+  another's could over-exclude; for climbmix ids this cannot happen. DOCUMENT this caveat in
+  the cli/server specs. (Exact exclusion would require post-filtering, which AC#5 forbids.)
+- Q2 unjudged_matches = total_matches - (the excluded docids that ACTUALLY match Q) =
+  the count of Q within the carved container. It is NOT total - len(exclude_docids):
+  excluding a docid that does not match Q (or is absent) leaves the count unchanged. STATE
+  this explicitly in code comments and docs.
+- Q3 total_matches/unjudged_matches are EXACT full enumerations (no precomputed doc-frequency
+  exists for a cover query). Keep them exact for now; no cap/approximation. (Cost: a very
+  broad query enumerates many rows per call -- accepted.)
+- Q4 atom_counts leaves: dedup by term-AS-WRITTEN (first-seen order); a quoted phrase
+  contributes each inner WORD as a leaf; bare vs word* counted from the resolved feature.
+- Q5 "Fix the misnamed df" = cover_search uses `count` (occurrences); do NOT rename the
+  legacy explain tool's df (different tool, out of scope).
+- Q6 The CLI --cover mode gains --window N and --exclude <docid> (repeatable) for testing.
+- B1 CONSTRAINT: B1's SearchResponse is extra="forbid", so cover_results_json must emit
+  EXACTLY {total_matches, unjudged_matches, atom_counts, results} and NOTHING else (no query
+  echo, no elapsed_ms, no result_count/truncated). Field names/types must match B1 exactly.
+
 1. Read A1's cover_search function (its summary builder + CoverSpec + handler), A1b's
-   CoverResponse/AtomCount, the ssr_ranking container, the exact-string :docno match in
-   jsonl_get, and apps/jsonl_json.{h,cc} + the server's cover_search handler.
+   CoverResponse/AtomCount, the ssr_ranking container arg, the docid phrase in jsonl_get
+   (single token, or (... t1 t2 ...)), and apps/jsonl_json.{h,cc} + the server's handler.
 2. CoverSpec (request) gains exclude_docids (vector<string>) and window (size_t, default 75).
-   CoverResponse already carries total_matches/unjudged_matches/atom_counts (from A1b),
-   currently left at defaults -- A2 fills them.
+   CoverResponse already carries total_matches/unjudged_matches/atom_counts (A1b) -- A2 fills.
 3. Effective container: no exclusions -> ":item"; with exclusions ->
-   (!> :item (+ (>> :docno P1) (>> :docno P2) ...)) where each Pi is the docid phrase
-   jsonl_get builds (single token, or (... t1 t2 ...)). Rank within this carved container so
-   excluded rows never appear and top_k fills. (Containment match, same mechanism jsonl_get
-   uses; note the caveat in docs.)
-4. total_matches = count Q over ":item"; unjudged_matches = count Q over the carved
-   container (equal when exclude is empty). Both DOCUMENT counts -- a small helper iterating
-   (>> <container> <rewritten-query>) like jsonl_count.
-
-5. atom_counts -- ENUMERATE THE QUERY'S LEAVES and report one {term, count} per content term:
-   - A "leaf" is a content term in the query tree: a bare word or a word* marker. Operators
-     (^ + ... <> << >> !> !< # @), parens, and :tags (:item, :docno, ...) are NOT leaves and
-     are skipped. NOTE: jsonl_core.cc's is_gcl_operator currently lists only ^ + ... <> << >>;
-     EXTEND it to the parser's full table (add !> !< # @, from src/parse.cc:19) so those
-     operators are never miscounted as atoms (the explain/gcl_terms path benefits too).
-   - Quoted phrases: treat each WORD inside the phrase as its own leaf, so "black bear*"
-     yields leaves black and bear* -- NOT the quote-mangled tokens ("black, bear").
-   - Dedup leaves by term-AS-WRITTEN, preserving first-seen order (one row per distinct term).
-   - term shown = AS WRITTEN (bear*, never porter:). The COUNT comes from the RESOLVED
-     feature: a word* leaf -> resolve_family_atom (A1's shared helper) -> porter:<stem> (or
-     the exact fallback for an unstemmable word like ox*); a bare leaf -> exact. Then
-     count = idx()->count(featurize(resolved_atom)) = total OCCURRENCES (collection
-     frequency), 0 when nothing matches. NO stream field.
-   - Implement a focused leaf collector (a small scan like gcl_terms, but word*-aware,
-     phrase-aware, and using the full operator set). The query handed to it is the ORIGINAL
-     spec.query, already validated by cover_rewrite, so no mid-token '*' reaches this step.
-   - "Fix the misnamed df": the field is `count` = occurrences, NOT `df`. This does NOT rename
-     the legacy explain tool's df (a different tool, out of scope) -- it just refuses to carry
-     that misnomer into cover_search.
-
-6. window: pass the request `window` (default 75 when absent) into A1's cover_summary instead
-   of the kCoverWindow constant; do NOT duplicate the algorithm. A larger window yields a
-   longer summary with unchanged rank/score.
-7. Serialize total_matches/unjudged_matches/atom_counts in apps/jsonl_json.{h,cc}
-   (cover_results_json now emits them, in addition to results); parse exclude_docids/window in
-   the cover_search handler (cover_spec_from) and the CLI --cover mode (add --exclude
-   repeatable + --window); advertise exclude_docids/window in describe_json. Server stays
-   stateless.
-8. Tests (test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc): total_matches vs a plain
-   :item count and top_k-independence; unjudged after exclusion; excluding the would-be #1
-   hit promotes the next-best; a survivor's score is unchanged under exclusion; rank restarts
-   at 1; atom_counts {term,count} incl. a ZERO case (e.g. zzz*), a word* FAMILY count, a bare
-   exact count, term-as-written (bear*, not porter:), phrase-word leaves, and dedup; window
-   larger -> longer summary with unchanged rank/score; server statelessness across two
-   different excludes; no legacy fields (result_count/truncated/stemmed) in the JSON.
-   Determinism: assert docid SET membership.
-9. Docs: cli-spec + server-spec document the additions (units: matches = documents,
-   atom_counts.count = occurrences/no stream, window = MINIMUM total tokens centered, cover
-   never truncated, leaves = the query's content terms), exclude_docids (+ the containment
-   caveat), window, and the rank/score semantics. (A1 already wrote the "A2 adds ..." stubs.)
+   (!> :item (+ (>> :docno P1) (>> :docno P2) ...)), each Pi the docid phrase jsonl_get
+   builds (CONTAINMENT match per Q1). Rank within this carved container so excluded rows
+   never appear and top_k fills. Build the carve string ONCE and reuse it for ranking and for
+   the unjudged count (no drift).
+4. Counts (a small helper iterating (>> <container> <rewritten-query>), like jsonl_count):
+   - total_matches = count Q over plain ":item" (ignores exclude_docids; independent of top_k).
+   - unjudged_matches = count Q over the CARVED container = total - (excluded docids that
+     actually match Q). Equal to total when exclude is empty. NOT total - len(exclude_docids)
+     (Q2) -- comment this in code. Both are DOCUMENT counts, EXACT (Q3).
+5. atom_counts -- ENUMERATE THE QUERY'S LEAVES, one {term, count} per content term:
+   - A "leaf" is a content term (bare word or word* marker). Operators
+     (^ + ... <> << >> !> !< # @), parens, and :tags are NOT leaves. EXTEND is_gcl_operator
+     to the full parser table (add !> !< # @, src/parse.cc:19) so operators are never
+     miscounted (cover_rewrite/explain benefit too).
+   - Quoted phrases: each WORD inside is its own leaf ("black bear*" -> black, bear*), not the
+     quote-mangled tokens. Dedup by term-AS-WRITTEN, first-seen order (Q4).
+   - term shown = AS WRITTEN (bear*, never porter:); COUNT from the RESOLVED feature: word* ->
+     resolve_family_atom (A1's helper) -> porter:<stem> (or exact fallback, e.g. ox*); bare ->
+     exact. count = idx()->count(featurize(resolved)) = total OCCURRENCES, 0 if none. NO stream.
+   - Implement a focused leaf collector (a scan like gcl_terms, but word*-aware, phrase-aware,
+     full operator set). Input is the ORIGINAL spec.query (already validated by cover_rewrite,
+     so no mid-token '*' reaches here).
+   - "Fix the misnamed df": the field is `count` = occurrences, NOT `df`; do NOT rename the
+     legacy explain tool's df (Q5).
+6. window: pass spec.window (default 75) into A1's cover_summary instead of the kCoverWindow
+   constant; do NOT duplicate the algorithm. Larger window -> longer summary; rank/score
+   unchanged.
+7. Serialize total_matches/unjudged_matches/atom_counts in cover_results_json -- and ONLY
+   those four keys (B1 extra="forbid"). Parse exclude_docids/window in cover_spec_from (server)
+   and the CLI --cover mode (add --exclude repeatable + --window, Q6). Advertise
+   exclude_docids/window in describe_json. Server stays stateless.
+8. Tests (assert docid SET membership, Q10):
+   - test/jsonl.cc: total_matches vs a plain :item count and top_k-independence; unjudged after
+     exclusion (= total - excluded-that-match); excluding the would-be #1 promotes next-best; a
+     survivor's score unchanged under exclusion; rank restarts at 1; atom_counts incl. a ZERO
+     case (zzz*), a word* FAMILY count, a bare exact count, term-as-written, phrase-word
+     leaves, dedup; window larger -> longer summary, rank/score unchanged; excluding a
+     non-matching/absent docid leaves unjudged == total.
+   - test/jsonl_cli.cc: --cover --window N (longer summary) and --cover --exclude <docid>.
+   - test/jsonl_server.cc: exclude_docids over HTTP (excluded docid gone, unjudged decremented,
+     total present); statelessness across two different excludes; NO legacy fields
+     (result_count/truncated/stemmed) in the JSON; /describe lists exclude_docids + window.
+9. Docs: cli-spec §4.8 + server-spec §3 document the additions: total_matches/unjudged_matches
+   as DOCUMENT counts (unjudged = total - excluded-that-match, Q2), atom_counts.count =
+   OCCURRENCES/no stream, leaves = the query's content terms, window = MINIMUM total tokens
+   centered (cover never truncated), exclude_docids (with the Q1 containment-match caveat),
+   and the rank/score semantics. (A1 already wrote the "A2 adds ..." stubs.)
 
 Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
 Test: bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test
