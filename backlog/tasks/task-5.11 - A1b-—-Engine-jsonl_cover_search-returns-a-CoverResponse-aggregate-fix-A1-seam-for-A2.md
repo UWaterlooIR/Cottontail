@@ -3,10 +3,10 @@ id: TASK-5.11
 title: >-
   A1b — Engine: jsonl_cover_search returns a CoverResponse aggregate (fix A1
   seam for A2)
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-06-18 18:25'
-updated_date: '2026-06-18 18:52'
+updated_date: '2026-06-18 18:58'
 labels:
   - searcher
 dependencies:
@@ -79,12 +79,14 @@ unchanged). DEPENDS ON A1 (TASK-5.1); BLOCKS A2 (TASK-5.2).
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 apps/jsonl_core.h defines AtomCount{term,count} and CoverResponse{total_matches,unjudged_matches,atom_counts:vector<AtomCount>,results:vector<CoverHit>} (mirroring B1's SearchResponse), and jsonl_cover_search returns its results via a CoverResponse* out-param: jsonl_cover_search(warren, const CoverSpec&, CoverResponse*, std::string*).
-- [ ] #2 The cover_search JSON is byte-for-byte identical to A1: cover_results_json(const CoverResponse&) emits exactly {"results":[{rank,score,docid,summary}]}; total_matches/unjudged_matches/atom_counts are NOT serialized in this task (deferred to A2).
-- [ ] #3 Both callers (server POST /tools/cover_search; CLI --cover) and all A1 tests (test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc) are updated to the CoverResponse form, with every assertion unchanged in meaning.
-- [ ] #4 jsonl_cover_search behavior is unchanged from A1 (same hits, ranks, scores, summaries, error paths); search_gcl and the GCL core are untouched.
-- [ ] #5 Full build (//... minus the Boost-blocked targets) is green and //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test all pass.
+- [x] #1 apps/jsonl_core.h defines AtomCount{term,count} and CoverResponse{total_matches,unjudged_matches,atom_counts:vector<AtomCount>,results:vector<CoverHit>} (mirroring B1's SearchResponse), and jsonl_cover_search returns its results via a CoverResponse* out-param: jsonl_cover_search(warren, const CoverSpec&, CoverResponse*, std::string*).
+- [x] #2 The cover_search JSON is byte-for-byte identical to A1: cover_results_json(const CoverResponse&) emits exactly {"results":[{rank,score,docid,summary}]}; total_matches/unjudged_matches/atom_counts are NOT serialized in this task (deferred to A2).
+- [x] #3 Both callers (server POST /tools/cover_search; CLI --cover) and all A1 tests (test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc) are updated to the CoverResponse form, with every assertion unchanged in meaning.
+- [x] #4 jsonl_cover_search behavior is unchanged from A1 (same hits, ranks, scores, summaries, error paths); search_gcl and the GCL core are untouched.
+- [x] #5 Full build (//... minus the Boost-blocked targets) is green and //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test all pass.
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
