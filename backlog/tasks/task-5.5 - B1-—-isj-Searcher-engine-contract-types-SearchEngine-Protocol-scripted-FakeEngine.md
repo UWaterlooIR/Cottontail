@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 02:17'
-updated_date: '2026-06-18 03:23'
+updated_date: '2026-06-18 04:05'
 labels:
   - python
   - isj
@@ -189,7 +189,10 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 - [ ] #11 SearchResponse round-trips losslessly (SearchResponse.model_validate(x.model_dump()) equals x); a strictness decision is made and documented (recommended ConfigDict(extra='forbid') on SearchResponse so an unexpected server field raises ValidationError instead of being silently dropped).
 - [ ] #12 isj_agent/engine/base.py defines class EngineError(Exception) with a human-readable message; the SearchEngine Protocol documents that search() and read() MAY raise EngineError to signal any engine-side failure (an invalid query is one case), and there is no Python-side query validation.
 - [ ] #13 FakeEngine supports scripted errors: a script entry may be an EngineError, and the corresponding search() call raises it (with the call still recorded), so B2 can test the engine-error bounce.
+- [ ] #14 read() on the SearchEngine Protocol (and FakeEngine.read) carries a docstring/comment stating it is intentionally part of the engine contract for FUTURE use (a possible agent read-tool, and the downstream RAG grounding/Writer step) even though the B2 MVP does not call it; it must NOT be removed as unused. isj/README notes the same.
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 

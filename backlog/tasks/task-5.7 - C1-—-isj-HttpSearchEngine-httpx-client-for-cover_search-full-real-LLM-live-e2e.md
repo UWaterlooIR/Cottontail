@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:52'
-updated_date: '2026-06-18 03:53'
+updated_date: '2026-06-18 04:06'
 labels:
   - python
   - isj
@@ -183,7 +183,10 @@ protocol scout did), not later. The live e2e:
 - [ ] #11 isj/README.md documents HttpSearchEngine, the [cottontail_http_json_server] config, the live search command, and that external services (server + vLLM) require explicit go-ahead to run.
 - [ ] #12 The JSON server is being MODIFIED by A0/A1/A2 (they add cover_search + the isj profile). B1's SearchResponse is the Python MIRROR of the cover_search JSON the A-built server actually emits (advertised by GET /describe); if the server's real shape differs from B1's types or the MockTransport fixtures, reconcile B1/C1 to match the server rather than inventing a shape.
 - [ ] #13 C1's live e2e can only run once A0/A1/A2 (and B2) are built and the server is running; it is the integration gate that catches any mismatch between the Python mirror (B1 types, C1 fixtures) and the server's real cover_search request/response.
+- [ ] #14 The live-run entry emits a detailed, UNTRUNCATED trace of the loop (a --verbose/--trace mode, in the style of the archived examples/agent's --verbose --trace which showed full LLM I/O): per turn show the full LLM messages (system/user/assistant/tool), the LLM's tool call (the GCL query, or the batch of {docid,grade,reason} judgements), the engine request actually sent (cover_search query/top_k/exclude_docids/window), the engine response (total_matches, unjudged_matches, atom_counts, and the returned results/summaries), any judge-before-search or EngineError bounce, the controller's termination reason, and the final RankedList — so integration problems are visible during the live e2e.
 <!-- AC:END -->
+
+
 
 
 

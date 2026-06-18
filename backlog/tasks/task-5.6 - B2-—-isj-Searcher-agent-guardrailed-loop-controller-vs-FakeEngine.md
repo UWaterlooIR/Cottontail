@@ -4,6 +4,7 @@ title: 'B2 — isj: Searcher agent + guardrailed loop controller (vs FakeEngine)
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:20'
+updated_date: '2026-06-18 04:05'
 labels:
   - python
   - isj
@@ -204,7 +205,10 @@ to raise on that call — so B2 can test the bounce. B2 depends on B1 having the
 - [ ] #11 isj_agent/agents/searcher.md is self-contained: the ISJ loop; a GCL cheatsheet using the word* family marker (full word + *), facet covers, and !> carve; the three-way term model (bare exact / word* family / (+ ) synonyms); a 0-4 relevance rubric; loop rules (judge before re-search, reformulate from what was read, stop when dry, stop = no tool call and write nothing); and it never mentions porter: or index streams.
 - [ ] #12 Tests use a stub LLM (scripted tool-call sequences) + the B1 FakeEngine and cover the happy path (correctly ordered RankedList incl. grade 0), judge-before-search bounce+recovery, EngineError bounce+recovery, stop-on-2-dry, no-progress stop, budget cap, and exclude_docids accumulation; no test contacts a network or a real model.
 - [ ] #13 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0; isj/README.md documents the Searcher (run->RankedList, the two tools, controller guardrails + termination, 0-4 grades) and notes a real-LLM run is a manual step.
+- [ ] #14 searcher.md and isj/README document that the MVP tool set is search + judge BY DESIGN and that the engine's read()/get_document is intentionally NOT exposed as an LLM tool yet (future-proofing for fuller reading and the RAG grounding step); enabling it later is just adding a read tool + a prompt line, with no engine/Protocol change.
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
