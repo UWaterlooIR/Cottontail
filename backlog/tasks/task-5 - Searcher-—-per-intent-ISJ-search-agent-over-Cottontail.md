@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 14:06'
+updated_date: '2026-06-18 14:19'
 labels:
   - searcher
 dependencies: []
@@ -138,6 +138,13 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   non-zero. --verbose renders the events live. It replaces the Analyst-only demo
   and IS the full real-LLM live integration gate (gpt-oss-120b +
   Scrapheap/climbmix-1000-utf8-porter.burrow). No fusion.
+
+Docs track (after archival + CLI land):
+- Docs (5.10) Update the run/usage docs for the isj Searcher once 5.4 (archival) and 5.9
+  (CLI) land: docs/running-the-search-stack.md (the single source) gains the isj path end to
+  end + the run-output layout; isj/README.md drops the Analyst-only demo framing for the full
+  pipeline; CLAUDE.md and any other docs note examples/agent/ as ARCHIVED and point to isj/.
+  Documentation only. Depends on 5.4 + 5.9.
 
 Out of scope of this umbrella: fusion (RRF, dropped for now); Task-R TSV / RAG-JSONL output
 + Writer/Validator; the dev-data eval harness; real-model policy tuning.
