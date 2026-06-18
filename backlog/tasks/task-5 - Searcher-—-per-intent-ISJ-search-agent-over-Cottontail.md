@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 02:48'
+updated_date: '2026-06-18 03:23'
 labels:
   - searcher
 dependencies: []
@@ -41,6 +41,9 @@ retrieval + RRF fusion). A reusable probe lives at isj/scouting/.
   burrow's own Porter), NOT in Python and NOT in GCL/search_gcl.
 - The Python isj agent holds the judged set and passes it as exclude_docids (the engine
   is stateless); the `judge` verdict tool is controller-side, not a server endpoint.
+- GCL validity (and any other engine failure) is the ENGINE's truth: there is no Python
+  GCL validator; the engine raises EngineError and the agent controller handles it
+  generally by feeding the message back to the model to self-correct.
 - Judgement grade scale is 0-4 (UMBRELA-aligned).
 
 ## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
@@ -64,7 +67,7 @@ sees HTTP. So you can plug in either implementation:
 B2 agent  ->  engine.search(...)              (the B1 Protocol)
                  |
                  |-- FakeEngine        -> canned responses              (tests; B1)
-                 \-- HttpSearchEngine  -> POST /tools/cover_search -> C++ server   (live; C1 calls A)
+                 \-- HttpSearchEngine  -> POST /tools/cover_search -> C++ server  (live; C1 calls A)
 ```
 
 The JSON shape shows up on both ends, but is defined ONCE and mirrored, not duplicated:
@@ -93,11 +96,13 @@ Engine/server track (C++); dependency A0 -> A1 -> A2:
 - Retire the example agent (5.4): archive examples/agent/, superseded by isj/.
 
 Python agent track (isj/), mock-tested, independent of the engine track; then converge:
-- B1 (5.5) Searcher engine contract types + SearchEngine Protocol + scripted FakeEngine
-  (SearchResponse/Hit/AtomCount + Judgement grade 0-4; RankedList deferred to B2).
-- B2 Searcher agent + guardrailed loop controller (search/judge[batch]/read, one tool
-  call per turn, GCL-validity + judge-before-search guards, controller-owned
-  termination), tested against the mock with a stub LLM. [to write, dep B1]
+- B1 (5.5) Searcher engine contract types + SearchEngine Protocol (+ EngineError channel)
+  + scripted FakeEngine (SearchResponse/Hit/AtomCount + Judgement grade 0-4; RankedList
+  deferred to B2).
+- B2 (5.6) Searcher agent + guardrailed loop controller (search/judge[batch], one tool
+  call per turn, judge-before-search guard, engine-delegated error bounce, controller-owned
+  termination), RankedList = all judged (grade desc, score desc); tested vs a stub LLM +
+  FakeEngine.
 - C1 HTTP engine client (HttpSearchEngine) implementing the Protocol against cover_search
   (isj profile) + live end-to-end against a real burrow. [to write, dep A0/A1/A2/B1/B2]
 - C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write, dep B1]

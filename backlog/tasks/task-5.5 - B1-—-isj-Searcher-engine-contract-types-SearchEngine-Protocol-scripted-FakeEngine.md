@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 02:17'
-updated_date: '2026-06-18 03:01'
+updated_date: '2026-06-18 03:23'
 labels:
   - python
   - isj
@@ -29,9 +29,9 @@ ordinal: 10000
 
 Python, in the `isj/` uv project (package `isj_agent`, hatchling build; run
 `uv sync --project isj` after changes). NO C++, NO network, NO LLM. New files:
-`isj_agent/protocol/search.py` (types), `isj_agent/engine/base.py` (the Protocol),
-`isj_agent/engine/fake.py` (the scripted FakeEngine); tests in `isj/tests/`. The
-`isj_agent/engine/` package already exists (only `__init__.py`).
+`isj_agent/protocol/search.py` (types), `isj_agent/engine/base.py` (the Protocol +
+EngineError), `isj_agent/engine/fake.py` (the scripted FakeEngine); tests in `isj/tests/`.
+The `isj_agent/engine/` package already exists (only `__init__.py`).
 
 The in-repo exemplar to copy the style from: `isj_agent/protocol/intents.py` (a pydantic
 BaseModel) and `isj_agent/agents/analyst.py` (how a model becomes an LLM JSON-schema and
@@ -137,19 +137,31 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
    method on the engine — judging is controller-side state in B2; B1 only defines the
    Judgement type.
 
+   ERROR CHANNEL (engine-delegated errors): also define, in engine/base.py,
+   `class EngineError(Exception)` carrying a human-readable message. `search()` (and
+   `read()`) MAY raise EngineError to signal ANY engine-side failure — an invalid query the
+   C++ engine rejects is just one cause. The contract is: the engine is the source of truth,
+   and a caller (B2's controller) handles EngineError generally by feeding str(error) back
+   to the model. There is NO Python-side query validation; the engine validates.
+
 3. FakeEngine (isj_agent/engine/fake.py) implementing SearchEngine deterministically from
    a SCRIPT:
-   - Constructed with an ordered list of scripted SearchResponse batches and an optional
-     docid->text map for read().
-   - Each search() returns the next scripted batch; once exhausted it returns a DRY
-     response (total_matches=0, unjudged_matches=0, empty results) so the loop terminates.
-   - Honors exclude_docids: removes any Hit whose docid is in exclude_docids from the
-     returned batch, decrements unjudged_matches by the number removed, leaves
-     total_matches unchanged (exclusions do not change corpus-wide breadth), and re-ranks
-     the surviving Hits 1..N.
+   - Constructed with an ordered list of script ENTRIES — each entry is either a scripted
+     SearchResponse batch OR an EngineError to raise — and an optional docid->text map for
+     read().
+   - Each search() consumes the next script entry: a SearchResponse is returned (after the
+     exclude/re-rank step below); an EngineError entry is RAISED (so B2 can test the
+     engine-error bounce). Either way the call is recorded (see below). Once the script is
+     exhausted, search() returns a DRY response (total_matches=0, unjudged_matches=0, empty
+     results) so the loop terminates.
+   - Honors exclude_docids on SearchResponse entries: removes any Hit whose docid is in
+     exclude_docids from the returned batch, decrements unjudged_matches by the number
+     removed, leaves total_matches unchanged (exclusions do not change corpus-wide breadth),
+     and re-ranks the surviving Hits 1..N.
    - Records every call's arguments (query, top_k, exclude_docids, window) on a public
-     attribute so tests can assert what the controller sent.
-   - read(docid) returns the mapped text or None. No network, no LLM, fully deterministic.
+     attribute so tests can assert what the controller sent — including for calls that raise.
+   - read(docid) returns the mapped text or None (and may raise EngineError if a test
+     scripts it to). No network, no LLM, fully deterministic.
 
 ## Non-goals
 
@@ -157,7 +169,8 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 - Do NOT define the per-intent RankedList type (B2 owns it).
 - The scripted FakeEngine does NOT parse GCL or react to the query content — intentional:
   B2's tests drive the agent with a stub LLM, so query-reactivity is not exercised, and
-  real query/cover semantics are validated in C1 against the live engine.
+  real query/cover semantics are validated in C1 against the live engine. (EngineError
+  entries are scripted explicitly, not derived from the query.)
 - No proximity/cover/word* logic in Python.
 <!-- SECTION:DESCRIPTION:END -->
 
@@ -174,6 +187,8 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 - [ ] #9 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0.
 - [ ] #10 isj/README.md documents the engine/ module (SearchEngine Protocol + scripted FakeEngine), the 0-4 grade scale on Judgement, and that B2 tests against FakeEngine while C1 supplies the real HTTP-backed engine.
 - [ ] #11 SearchResponse round-trips losslessly (SearchResponse.model_validate(x.model_dump()) equals x); a strictness decision is made and documented (recommended ConfigDict(extra='forbid') on SearchResponse so an unexpected server field raises ValidationError instead of being silently dropped).
+- [ ] #12 isj_agent/engine/base.py defines class EngineError(Exception) with a human-readable message; the SearchEngine Protocol documents that search() and read() MAY raise EngineError to signal any engine-side failure (an invalid query is one case), and there is no Python-side query validation.
+- [ ] #13 FakeEngine supports scripted errors: a script entry may be an EngineError, and the corresponding search() call raises it (with the call still recorded), so B2 can test the engine-error bounce.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -187,25 +202,26 @@ description and the exemplar isj_agent/protocol/intents.py + isj_agent/agents/an
    the description (grade: int = Field(ge=0, le=4); SearchResponse with
    ConfigDict(extra="forbid")). Export the names the way intents.py is exported.
 3. isj_agent/engine/base.py: from typing import Protocol, runtime_checkable, Sequence.
-   @runtime_checkable class SearchEngine(Protocol) with search(...) -> SearchResponse and
-   read(docid) -> str | None.
-4. isj_agent/engine/fake.py: class FakeEngine. __init__(self, script: list[SearchResponse],
-   docs: dict[str, str] | None = None). Hold an index and a public `calls` list. search()
-   pops the next batch (or a dry response if exhausted), applies exclude_docids
-   (drop + decrement unjudged + re-rank), appends the call args to `calls`, returns it.
-   read() looks up docs.
+   Define class EngineError(Exception). @runtime_checkable class SearchEngine(Protocol)
+   with search(...) -> SearchResponse and read(docid) -> str | None; document that both
+   MAY raise EngineError.
+4. isj_agent/engine/fake.py: class FakeEngine. __init__(self,
+   script: list[SearchResponse | EngineError], docs: dict[str, str] | None = None). Hold an
+   index and a public `calls` list. search() records the call, then consumes the next entry:
+   raise it if it is an EngineError, else apply exclude_docids (drop + decrement unjudged +
+   re-rank) and return it; a dry response once exhausted. read() looks up docs.
 5. isj/tests/test_engine.py:
-   - type validation: Judgement(grade=4) ok; grade=5 and grade=-1 raise ValidationError
-     (import ValidationError from pydantic, use pytest.raises); SearchResponse round-trips
-     (build one, assert SearchResponse.model_validate(x.model_dump()) == x); with
-     extra="forbid", model_validate of a dict carrying an unexpected key raises.
-   - FakeEngine: batches in order; dry after exhaustion; exclude_docids removes matching
-     Hits, decrements unjudged_matches, leaves total_matches, re-ranks 1..N; `calls`
-     records (query, top_k, exclude_docids, window); read() returns text/None.
+   - type validation: Judgement(grade=4) ok; grade=5 and grade=-1 raise ValidationError;
+     SearchResponse round-trips (assert SearchResponse.model_validate(x.model_dump()) == x);
+     with extra="forbid", model_validate of a dict with an unexpected key raises.
+   - FakeEngine: batches in order; dry after exhaustion; an EngineError script entry causes
+     search() to raise EngineError (and the call is still recorded); exclude_docids removes
+     matching Hits, decrements unjudged_matches, leaves total_matches, re-ranks 1..N;
+     `calls` records (query, top_k, exclude_docids, window); read() returns text/None.
    - conformance: isinstance(FakeEngine([...]), SearchEngine) is True (runtime_checkable).
    - no test contacts a network or an LLM.
 6. uv run --directory isj pytest tests/ -v (green). Update isj/README.md: the engine/
-   module (SearchEngine Protocol + scripted FakeEngine), the 0-4 grade scale, the pydantic
-   round-trip/validation pattern, and that B2 tests against FakeEngine while C1 supplies
-   the real HTTP-backed engine.
+   module (SearchEngine Protocol + EngineError + scripted FakeEngine), the 0-4 grade scale,
+   the pydantic round-trip/validation pattern, and that B2 tests against FakeEngine while C1
+   supplies the real HTTP-backed engine.
 <!-- SECTION:PLAN:END -->
