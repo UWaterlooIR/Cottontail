@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 04:41'
+updated_date: '2026-06-18 05:05'
 labels:
   - searcher
 dependencies: []
@@ -50,6 +50,8 @@ instead). A reusable probe lives at isj/scouting/.
 - We do NOT fuse the per-intent lists yet. Each intent's results (a RankedList + the
   verbose loop trace) are written to a run output directory; deciding what to do with them
   (fusion, Task-R, RAG) is deferred.
+- The user-facing CLI is a SINGLE flag-based entry (no subcommands): it takes a question
+  and runs the whole pipeline, writing the output directory.
 
 ## Server vs. client — where the HTTP work splits (so A and C1 are not redundant)
 
@@ -63,7 +65,8 @@ The cover_search HTTP/JSON contract has two ends:
   the B1 SearchEngine Protocol by POSTing to /tools/cover_search and parsing the JSON
   response into B1's SearchResponse type. It is the CONSUMER / transport glue: no search
   logic, no schema invention. (B1's SearchResponse is the Python MIRROR of A's server
-  JSON; if they diverge, reconcile the mirror to the server — the C1 live e2e catches it.)
+  JSON; if they diverge, reconcile the mirror to the server — C1's live connectivity check
+  and C3's full live run catch it.)
 
 The Searcher agent (B2) is Python and only knows the SearchEngine Protocol (from B1) —
 `engine.search(...)`, `engine.read(...)`. It is deliberately TRANSPORT-AGNOSTIC: it never
@@ -109,15 +112,19 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   call per turn, judge-before-search guard, engine-delegated error bounce, controller-owned
   termination), RankedList = all judged (grade desc, score desc); tested vs a stub LLM +
   FakeEngine.
-- C1 (5.7) HttpSearchEngine (httpx) implementing the Protocol against cover_search (isj
-  profile); config [cottontail_http_json_server] section; full real-LLM live e2e against
-  gpt-oss-120b + Scrapheap/climbmix-1000-utf8-porter.burrow. (Targets the server the A
-  tasks modify; the live e2e is the integration gate.)
+- C1 (5.7) HttpSearchEngine (httpx) implementing the B1 Protocol against cover_search (isj
+  profile); the [cottontail_http_json_server] config + build_search_engine; MockTransport
+  unit tests; and a go-ahead-gated live CONNECTIVITY check (cover_search round-trip +
+  EngineError). C1 ships NO CLI entry. (Targets the server A0/A1/A2 modify.)
 - C2 (5.8) Run-output writer: persist a run to an output directory — intents.json (the
   Intents) + per intent intent-NN.json (the RankedList) + intent-NN.trace.txt (the verbose
   loop trace). Pure; no fusion.
-- C3 (5.9) CLI orchestrator: one question -> Analyst -> Intents -> per-intent Searcher over
-  the live engine (C1) with tracing -> write the run output directory (C2). No fusion.
+- C3 (5.9) The CLI: a SINGLE flag-based entry
+  `python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]` (NO
+  subcommands) that runs the whole pipeline — Analyst -> Intents -> per-intent Searcher
+  over the live engine (C1) with a saved + (--verbose) streamed trace -> write the run
+  output directory (C2). It replaces the Analyst-only demo and IS the full real-LLM live
+  integration gate (gpt-oss-120b + Scrapheap/climbmix-1000-utf8-porter.burrow). No fusion.
 
 Out of scope of this umbrella: fusion (RRF, dropped for now); Task-R TSV / RAG-JSONL output
 + Writer/Validator; the dev-data eval harness; real-model policy tuning.
