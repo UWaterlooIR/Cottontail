@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-18 03:23'
+updated_date: '2026-06-18 03:53'
 labels:
   - searcher
 dependencies: []
@@ -57,7 +57,8 @@ The cover_search HTTP/JSON contract has two ends:
 - CLIENT = C1 (Python): `HttpSearchEngine` — a class in isj_agent/engine/ that implements
   the B1 SearchEngine Protocol by POSTing to /tools/cover_search and parsing the JSON
   response into B1's SearchResponse type. It is the CONSUMER / transport glue: no search
-  logic, no schema invention.
+  logic, no schema invention. (B1's SearchResponse is the Python MIRROR of A's server
+  JSON; if they diverge, reconcile the mirror to the server — the C1 live e2e catches it.)
 
 The Searcher agent (B2) is Python and only knows the SearchEngine Protocol (from B1) —
 `engine.search(...)`, `engine.read(...)`. It is deliberately TRANSPORT-AGNOSTIC: it never
@@ -103,8 +104,10 @@ Python agent track (isj/), mock-tested, independent of the engine track; then co
   call per turn, judge-before-search guard, engine-delegated error bounce, controller-owned
   termination), RankedList = all judged (grade desc, score desc); tested vs a stub LLM +
   FakeEngine.
-- C1 HTTP engine client (HttpSearchEngine) implementing the Protocol against cover_search
-  (isj profile) + live end-to-end against a real burrow. [to write, dep A0/A1/A2/B1/B2]
+- C1 (5.7) HttpSearchEngine (httpx) implementing the Protocol against cover_search (isj
+  profile); config [cottontail_http_json_server] section; full real-LLM live e2e against
+  gpt-oss-120b + Scrapheap/climbmix-1000-utf8-porter.burrow. (Targets the server the A
+  tasks modify; the live e2e is the integration gate.)
 - C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write, dep B1]
 - C3 Orchestrator wiring (Analyst -> Intents -> Searcher-per-intent -> RRF -> final
   ranked list). [to write, dep B2/C2]
