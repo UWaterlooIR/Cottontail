@@ -4,7 +4,7 @@ title: 'B2 — isj: Searcher agent + guardrailed loop controller (vs FakeEngine)
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:20'
-updated_date: '2026-06-18 13:27'
+updated_date: '2026-06-18 14:44'
 labels:
   - python
   - isj
@@ -150,6 +150,80 @@ def run(intent) -> SearcherResult:
 Every event carries ts + duration_ms; bounces COUNT as turns (so repeated invalid-GCL /
 premature-search bounces terminate via the turn cap, not just the search budget).
 
+## The searcher.md prompt — embed this validated prompt, then adapt it
+
+The block below is the EXACT §3 prompt that produced clean behavior in scouting (Probe 6 on
+gpt-oss-120b, re-confirmed on Qwen3.6-27B in Probe 7). The prompt TEXT IS LOAD-BEARING:
+Probe 3 showed that compressing it or dropping the worked example collapses GCL quality.
+Build searcher.md FROM THIS TEXT — do not paraphrase it. The rationale for every line (why
+prefix-only, why word* and never porter:, why the worked example, why each loop rule) is in
+docs/searcher-agent-lessons-June-16-2026.md §3 (per-line annotations) and §8 (the probes
+that justify them); read the lessons doc for the STORY — this task carries the ARTIFACT.
+
+VERBATIM STARTING POINT (a dated 0-3 snapshot — apply the adaptations that follow it):
+
+```
+You are a search analyst exploring a large text collection to answer ONE question.
+You find the passages relevant to it and grade each 0-3.
+
+Write queries in GCL, a Boolean cover language. Use PREFIX form ONLY — never infix,
+never the words AND/OR/NOT.
+  (^ A B C)  all of A,B,C appear together
+  (+ A B C)  any of A,B,C
+  "a b c"    the exact phrase
+  (!> A B)   an A that does NOT contain B  (carve out a false sense you have READ)
+
+Three ways to write a term:
+  black      a bare word matches EXACTLY — use for proper nouns and the question's
+             defining words.
+  bear*      a word followed by * matches that word AND its whole family (bear/bears,
+             attack/attacked/attacking). Write the FULL ordinary word then * — e.g.
+             statistics*, injury* — NEVER a shortened stem. The system expands it.
+             Use it for ordinary content words (not proper nouns/defining terms).
+  (+ X Y Z)  is for SYNONYMS — distinct words for one concept — NOT inflections of one word.
+
+Build each query as a COVER: one facet per concept, AND-ed with ^. Example for
+'Do I need to worry about black bear attacks while hiking in the woods?':
+  (^ black bear* attack*)
+Broaden a facet by SYNONYM, e.g. (+ attack* maul* encounter*) — never by adding plurals.
+
+Loop, ONE tool call per turn:
+1. `search` a GCL query.
+2. JUDGE every returned passage (one `judge` call) before searching again.
+3. Reformulate using words learned from passages.
+4. `search` reports total_matches; if it returns 0 or only grade-0 passages the query
+   is DRY. After at most 2 dry searches in a row, STOP.
+5. At most 8 searches. When done, STOP: no tool call, output nothing.
+```
+
+How to adapt it for B2 (these are the ONLY changes — keep everything else word-for-word):
+1. Grades 0-3 -> 0-4: change line 2 "grade each 0-3" to "grade each 0-4". (The dryness rule's
+   "grade-0" stays: 0 is still the bottom of the scale.)
+2. ADD a 0-4 relevance rubric (the snapshot has none). RECOMMENDED DEFAULT — reconcile with
+   the project's UMBRELA mapping when the eval harness lands:
+     0 — Irrelevant: does not address the intent.
+     1 — Marginal: on-topic mention but no information that helps answer the intent.
+     2 — Related: some useful information, but partial or tangential.
+     3 — Relevant: directly answers the intent with useful, on-topic information.
+     4 — Highly relevant: a focused, complete answer to the intent.
+3. The "At most 8 searches" line is ADVISORY to the model only — the CONTROLLER owns and
+   ENFORCES the real search budget + turn cap (see the controller section). Keep a number in
+   the prompt but let it track the cfg defaults; never rely on the model to honor it.
+4. What the model READS is each Hit's cover-biased `summary` (A1), not a full document — the
+   prompt's "passages" ARE those summaries. No wording change needed; just do not promise
+   full documents.
+5. Do NOT introduce `porter:` or any index-stream / feature syntax. The word* marker is the
+   ONLY stemming the model ever sees — this is the single most important wording choice in
+   the prompt (lessons doc §3 / Probes 5-6: `porter:` cues the model to guess wrong truncated
+   stems that silently miss). The tool translates word* -> Porter; the model must never.
+6. The loop names exactly the tools `search` and `judge` (no read, no finish) — matching the
+   two LLM tools this task defines.
+
+Everything else — PREFIX-ONLY GCL with the full operator list, the three-way term model
+(bare / word* / (+ )), the worked black-bear cover example, "synonyms not inflections", and
+the loop rules — is copied VERBATIM because each line maps to a probed failure it prevents
+(lessons doc §3 annotations). When in doubt, change nothing.
+
 ## Required behavior (the contract)
 
 1. Searcher (agents/searcher.py): run(self, intent: str) -> SearcherResult. Constructed with
@@ -192,13 +266,16 @@ premature-search bounces terminate via the turn cap, not just the search budget)
           type: str; ts: float; duration_ms: float
       class SearcherResult(BaseModel):
           ranked_list: RankedList; events: list[TraceEvent]
-11. searcher.md prompt (self-contained; ADAPT docs/searcher-agent-lessons section 3 to 0-4
-    and summary): the ISJ loop; a GCL cheatsheet using the word* family marker (full word +
-    *), facet covers ((^ ...) of (+ ...) groups), and (!> ...) to carve a false sense you
-    have READ; the three-way term model (bare = exact, word* = family, (+ ...) = synonyms);
-    a 0-4 relevance rubric; loop rules (judge every returned passage before searching again;
-    reformulate using words you read; stop when results dry up; when done, stop and write
-    nothing). It MUST NOT mention `porter:` or index streams.
+11. searcher.md prompt (self-contained): START from the validated §3 prompt EMBEDDED above
+    ("The searcher.md prompt — embed this validated prompt, then adapt it") and apply the
+    adaptations listed there (0-3 -> 0-4 + the rubric; the search count is advisory while the
+    controller enforces the budget/turn cap; keep everything else VERBATIM — it is
+    load-bearing). The finished prompt MUST contain: the ISJ loop; a GCL cheatsheet using the
+    word* family marker (full word + *), facet covers ((^ ...) of (+ ...) groups), and (!> ...)
+    to carve a false sense you have READ; the three-way term model (bare = exact, word* =
+    family, (+ ...) = synonyms); a 0-4 relevance rubric; loop rules (judge every returned
+    passage before searching again; reformulate using words you read; stop when results dry
+    up; when done, stop and write nothing). It MUST NOT mention `porter:` or index streams.
 
 ## Non-goals
 
@@ -214,6 +291,25 @@ premature-search bounces terminate via the turn cap, not just the search budget)
 Engine-delegated error handling requires B1 (TASK-5.5) to provide an `EngineError` the
 engine may raise + FakeEngine scripted-error support (already specced in B1).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 isj_agent/agents/searcher.py defines a Searcher with run(intent: str) -> SearcherResult (ranked_list + events), constructed with an injected OpenAI-compatible client + model and an injected SearchEngine (B1), loading its prompt from a bundled searcher.md.
+- [ ] #2 The LLM is given exactly two tools: search (arg query: str) and judge (arg judgements: list of {docid, grade 0-4, reason}); one tool call per turn, no parallel calls; no read and no finish tool. The LLM-facing search tool maps to the engine's cover_search via the Protocol.
+- [ ] #3 The model writes only the query; the controller injects exclude_docids = the accumulated judged set and supplies top_k and window from config defaults (asserted via FakeEngine.calls).
+- [ ] #4 Judge-before-search guardrail: a search while surfaced passages are unjudged is refused (no engine call) with a tool message naming the docids, recorded as a bounce event, and the model recovers by judging.
+- [ ] #5 Engine-delegated errors: engine.search raising EngineError produces a bounce event and feeds str(error) back as the tool result; the controller never crashes.
+- [ ] #6 Judge handling records only docids that were SURFACED (in pending) and not yet judged; a hallucinated/un-surfaced docid is ignored (not added); each recorded judgement (grade 0 included) takes its summary and score from the surfaced Hit plus its surfacing query; an empty/all-duplicate/all-ignored judge counts as no progress.
+- [ ] #7 Termination is controller-owned: stop on a no-tool-call turn (trailing prose discarded), or >=2 consecutive dry searches, or >=2 consecutive no-progress turns, or the search budget, or a hard max-turns cap; EVERY turn (including bounces) counts toward the turn cap, so repeated invalid-GCL or premature-search bounces cannot loop forever; a stop event records the reason.
+- [ ] #8 The controller emits a structured trace = list[TraceEvent], each with type, ts (epoch seconds), duration_ms, and type-specific fields, returned in SearcherResult.events; this is a research artifact for later statistics. The taxonomy covers at least llm_turn (LLM latency, which tool), search (query/top_k/exclude_count/window + total_matches/unjudged_matches/returned/atom_counts + engine latency), judge (recorded count + grades), bounce (kind = judge_before_search | engine_error, message), and stop (reason).
+- [ ] #9 run(intent) returns a RankedList of ALL judged passages (grade 0 included), ordered by grade desc then engine score desc, ranks assigned 1..N; RankedEntry.rank is the compiled per-intent rank, distinct from the engine Hit.rank (a per-search position).
+- [ ] #10 isj_agent/protocol defines pydantic RankedEntry{rank,docid,grade(0-4),score,summary,reason,surfacing_query}, RankedList{intent,entries}, TraceEvent{type,ts,duration_ms,(+ type-specific fields via extra=allow)}, and SearcherResult{ranked_list,events}.
+- [ ] #11 isj_agent/agents/searcher.md is built from the §3 prompt EMBEDDED in this task (the verbatim starting point), with ONLY the adaptations listed there applied: 0-3 -> 0-4 grades plus a 0-4 relevance rubric, the search-count line left advisory while the controller enforces the budget/turn cap, and everything else kept verbatim. The finished prompt is self-contained and contains the ISJ loop; a GCL cheatsheet using the word* family marker (full word + *), facet covers, and !> carve; the three-way term model (bare exact / word* family / (+ ) synonyms); a 0-4 relevance rubric; and the loop rules (judge before re-search, reformulate from what was read, stop when dry, stop = no tool call and write nothing). It never mentions porter: or index streams.
+- [ ] #12 Tests use a stub LLM (scripted tool-call sequences) + the B1 FakeEngine and cover: the happy path (correctly ordered RankedList incl. grade 0, plus a SearcherResult.events list with the expected event types and recorded durations); judge-before-search bounce+recovery; EngineError bounce+recovery; stop-on-2-dry; no-progress stop; the max-turns cap terminating a repeated-bounce loop; search-budget cap; exclude_docids accumulation; a hallucinated un-surfaced docid not recorded; nothing surfaced left unjudged. No test contacts a network or a real model.
+- [ ] #13 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0; isj/README.md documents the Searcher (run -> SearcherResult, the two tools, controller guardrails + termination incl. the turn cap, 0-4 grades, the structured event trace) and that read() stays on the engine Protocol as future-proofing, not exposed as an LLM tool yet.
+<!-- AC:END -->
+
+
 
 ## Implementation Plan
 
@@ -253,20 +349,3 @@ Python in isj/. Depends on B1 (incl. EngineError + FakeEngine scripted errors). 
    engine Protocol as future-proofing (not exposed as an LLM tool yet). A real-LLM run is a
    manual step (the live integration gate is C3).
 <!-- SECTION:PLAN:END -->
-
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 isj_agent/agents/searcher.py defines a Searcher with run(intent: str) -> SearcherResult (ranked_list + events), constructed with an injected OpenAI-compatible client + model and an injected SearchEngine (B1), loading its prompt from a bundled searcher.md.
-- [ ] #2 The LLM is given exactly two tools: search (arg query: str) and judge (arg judgements: list of {docid, grade 0-4, reason}); one tool call per turn, no parallel calls; no read and no finish tool. The LLM-facing search tool maps to the engine's cover_search via the Protocol.
-- [ ] #3 The model writes only the query; the controller injects exclude_docids = the accumulated judged set and supplies top_k and window from config defaults (asserted via FakeEngine.calls).
-- [ ] #4 Judge-before-search guardrail: a search while surfaced passages are unjudged is refused (no engine call) with a tool message naming the docids, recorded as a bounce event, and the model recovers by judging.
-- [ ] #5 Engine-delegated errors: engine.search raising EngineError produces a bounce event and feeds str(error) back as the tool result; the controller never crashes.
-- [ ] #6 Judge handling records only docids that were SURFACED (in pending) and not yet judged; a hallucinated/un-surfaced docid is ignored (not added); each recorded judgement (grade 0 included) takes its summary and score from the surfaced Hit plus its surfacing query; an empty/all-duplicate/all-ignored judge counts as no progress.
-- [ ] #7 Termination is controller-owned: stop on a no-tool-call turn (trailing prose discarded), or >=2 consecutive dry searches, or >=2 consecutive no-progress turns, or the search budget, or a hard max-turns cap; EVERY turn (including bounces) counts toward the turn cap, so repeated invalid-GCL or premature-search bounces cannot loop forever; a stop event records the reason.
-- [ ] #8 The controller emits a structured trace = list[TraceEvent], each with type, ts (epoch seconds), duration_ms, and type-specific fields, returned in SearcherResult.events; this is a research artifact for later statistics. The taxonomy covers at least llm_turn (LLM latency, which tool), search (query/top_k/exclude_count/window + total_matches/unjudged_matches/returned/atom_counts + engine latency), judge (recorded count + grades), bounce (kind = judge_before_search | engine_error, message), and stop (reason).
-- [ ] #9 run(intent) returns a RankedList of ALL judged passages (grade 0 included), ordered by grade desc then engine score desc, ranks assigned 1..N; RankedEntry.rank is the compiled per-intent rank, distinct from the engine Hit.rank (a per-search position).
-- [ ] #10 isj_agent/protocol defines pydantic RankedEntry{rank,docid,grade(0-4),score,summary,reason,surfacing_query}, RankedList{intent,entries}, TraceEvent{type,ts,duration_ms,(+ type-specific fields via extra=allow)}, and SearcherResult{ranked_list,events}.
-- [ ] #11 isj_agent/agents/searcher.md is self-contained and ADAPTS the dated lessons-doc section 3 to 0-4 grades and the cover-biased summary: the ISJ loop; a GCL cheatsheet using the word* family marker (full word + *), facet covers, and !> carve; the three-way term model (bare exact / word* family / (+ ) synonyms); a 0-4 relevance rubric; loop rules (judge before re-search, reformulate from what was read, stop when dry, stop = no tool call and write nothing); and it never mentions porter: or index streams.
-- [ ] #12 Tests use a stub LLM (scripted tool-call sequences) + the B1 FakeEngine and cover: the happy path (correctly ordered RankedList incl. grade 0, plus a SearcherResult.events list with the expected event types and recorded durations); judge-before-search bounce+recovery; EngineError bounce+recovery; stop-on-2-dry; no-progress stop; the max-turns cap terminating a repeated-bounce loop; search-budget cap; exclude_docids accumulation; a hallucinated un-surfaced docid not recorded; nothing surfaced left unjudged. No test contacts a network or a real model.
-- [ ] #13 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0; isj/README.md documents the Searcher (run -> SearcherResult, the two tools, controller guardrails + termination incl. the turn cap, 0-4 grades, the structured event trace) and that read() stays on the engine Protocol as future-proofing, not exposed as an LLM tool yet.
-<!-- AC:END -->
