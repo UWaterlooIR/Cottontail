@@ -89,7 +89,19 @@ json count_json(const QuerySpec &spec, long count) {
 }
 
 json cover_results_json(const CoverResponse &resp) {
+  // EXACTLY these four keys (B1's SearchResponse is extra="forbid"): no query
+  // echo, no elapsed_ms, no result_count/truncated.
   json o;
+  o["total_matches"] = resp.total_matches;
+  o["unjudged_matches"] = resp.unjudged_matches;
+  json atoms = json::array();
+  for (const auto &a : resp.atom_counts) {
+    json e;
+    e["term"] = a.term;
+    e["count"] = a.count;
+    atoms.push_back(e);
+  }
+  o["atom_counts"] = atoms;
   json arr = json::array();
   for (const auto &h : resp.results) {
     json r;
@@ -100,7 +112,6 @@ json cover_results_json(const CoverResponse &resp) {
     arr.push_back(r);
   }
   o["results"] = arr;
-  // A2 adds total_matches / unjudged_matches / atom_counts here.
   return o;
 }
 
@@ -181,6 +192,19 @@ json describe_json() {
       "then *, never a shortened stem). (+ a b) is for SYNONYMS. \"a b\" is an "
       "exact phrase (a trailing * is honored inside it too).");
   cs["top_k"] = intp("Max documents to return (default 10).");
+  {
+    json items;
+    items["type"] = "string";
+    json arrp;
+    arrp["type"] = "array";
+    arrp["items"] = items;
+    arrp["description"] =
+        "docids already judged, to carve out of this search (the engine skips "
+        "them so top_k fills with new documents).";
+    cs["exclude_docids"] = arrp;
+  }
+  cs["window"] = intp("Summary window size in tokens, centered on each cover "
+                      "(default 75).");
   tools.push_back(tool(
       "cover_search",
       "Ranked cover-density search for the ISJ agent. Ranks documents by "

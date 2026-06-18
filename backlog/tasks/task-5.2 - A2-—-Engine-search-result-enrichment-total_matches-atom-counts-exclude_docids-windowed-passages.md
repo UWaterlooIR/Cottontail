@@ -3,10 +3,10 @@ id: TASK-5.2
 title: >-
   A2 — Engine: cover_search enrichment (total/unjudged matches, atom_counts,
   exclude_docids, windowed passages)
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-18 19:23'
+updated_date: '2026-06-18 19:35'
 labels:
   - engine
   - cpp
@@ -150,22 +150,24 @@ call, no gaps; NOT an absolute position and NOT the TREC submission rank.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude_docids), equal to a plain :item count for that query, independent of top_k.
-- [ ] #2 cover_search response includes unjudged_matches: matching DOCUMENTS not in exclude_docids (the query counted within the exclude-carved container); results are drawn from these; equals total_matches when exclude_docids is empty.
-- [ ] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
-- [ ] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
-- [ ] #5 cover_search request accepts exclude_docids; exclusion is via container-carve DURING ranking (not a post-filter), so with top_k=K and some excluded the response still returns up to K non-excluded hits.
-- [ ] #6 Excluding a docid that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
-- [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
-- [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
-- [ ] #9 The server cover_search is stateless: two requests with different exclude_docids do not interfere.
-- [ ] #10 Determinism: tests assert on docid SET membership, not tied order.
-- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
-- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude_docids, window, and the rank/score semantics.
-- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
-- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, docid, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
-- [ ] #15 GET /describe lists cover_search and its request fields (including exclude_docids and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
+- [x] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude_docids), equal to a plain :item count for that query, independent of top_k.
+- [x] #2 cover_search response includes unjudged_matches: matching DOCUMENTS not in exclude_docids (the query counted within the exclude-carved container); results are drawn from these; equals total_matches when exclude_docids is empty.
+- [x] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
+- [x] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
+- [x] #5 cover_search request accepts exclude_docids; exclusion is via container-carve DURING ranking (not a post-filter), so with top_k=K and some excluded the response still returns up to K non-excluded hits.
+- [x] #6 Excluding a docid that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
+- [x] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
+- [x] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
+- [x] #9 The server cover_search is stateless: two requests with different exclude_docids do not interfere.
+- [x] #10 Determinism: tests assert on docid SET membership, not tied order.
+- [x] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
+- [x] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude_docids, window, and the rank/score semantics.
+- [x] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
+- [x] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, docid, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
+- [x] #15 GET /describe lists cover_search and its request fields (including exclude_docids and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 

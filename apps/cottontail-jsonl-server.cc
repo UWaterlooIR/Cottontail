@@ -102,6 +102,9 @@ CoverSpec cover_spec_from(const json &b) {
   CoverSpec s;
   s.query = b.at("query").get<std::string>();
   s.top_k = b.value("top_k", s.top_k);
+  s.window = b.value("window", s.window);
+  if (b.contains("exclude_docids"))
+    s.exclude_docids = b.at("exclude_docids").get<std::vector<std::string>>();
   return s;
 }
 

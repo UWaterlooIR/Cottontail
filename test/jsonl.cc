@@ -93,6 +93,14 @@ std::set<std::string> cover_docids(const std::vector<CoverHit> &hits) {
   return s;
 }
 
+// The atom_counts entry for `term` (as written), or -1 if absent.
+long atom_count(const CoverResponse &r, const std::string &term) {
+  for (const auto &a : r.atom_counts)
+    if (a.term == term)
+      return a.count;
+  return -1;
+}
+
 // Fixtures for cover_search (TASK-5.1 / A1). Lowercase so case folding is not a
 // variable. c-1/c-4 have "bear"; c-2 has only "bears"; c-3 has "ox"; c-5 has the
 // adjacent phrase "black bears".
@@ -618,6 +626,153 @@ TEST(JsonlCover, SummaryWindowingAndGap) {
   ASSERT_FALSE(g2.empty());
   EXPECT_NE(g1.find(" . . . "), std::string::npos); // far apart -> gap shown
   EXPECT_EQ(g2.find(" . . . "), std::string::npos); // adjacent -> merged
+  w->end();
+}
+
+// --- cover_search enrichment: counts, exclusion, atom_counts, window (A2) --
+
+// AC#1 / AC#2 / AC#5 / Q2: total/unjudged document counts and exclude_docids.
+TEST(JsonlCover, TotalAndUnjudgedMatchesAndExclude) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_counts", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  CoverSpec spec;
+  spec.query = "bear*"; // matches c-1, c-2, c-4, c-5 (not c-3)
+
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.total_matches, 4);
+  EXPECT_EQ(resp.unjudged_matches, 4); // no exclusion -> equal
+
+  // total_matches is independent of top_k.
+  spec.top_k = 1;
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.total_matches, 4);
+  spec.top_k = 10;
+
+  // Excluding a MATCHING docid drops unjudged by one; total is unchanged; the
+  // excluded docid is gone from the results (carve during ranking, AC#5).
+  spec.exclude_docids = {"c-2"};
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.total_matches, 4);
+  EXPECT_EQ(resp.unjudged_matches, 3);
+  EXPECT_EQ(cover_docids(resp.results).count("c-2"), 0u);
+
+  // Excluding a NON-matching docid (c-3 has no bear) leaves unjudged == total
+  // (unjudged = total - excluded-that-match, NOT total - len(exclude), Q2).
+  spec.exclude_docids = {"c-3"};
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.unjudged_matches, 4);
+  w->end();
+}
+
+// AC#6 / AC#7: excluding the top hit promotes the next-best to rank 1; surviving
+// scores are exclusion-invariant; rank restarts at 1 with no gaps.
+TEST(JsonlCover, ExcludePromotesNextBestScoreInvariant) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_promote", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp1;
+  CoverSpec spec;
+  spec.query = "bear*";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp1, &error)) << error;
+  ASSERT_GE(resp1.results.size(), 2u);
+  std::string top = resp1.results[0].docid;
+  std::string survivor;
+  double survivor_score = 0.0;
+  for (const auto &h : resp1.results)
+    if (h.docid != top) {
+      survivor = h.docid;
+      survivor_score = h.score;
+      break;
+    }
+  ASSERT_FALSE(survivor.empty());
+
+  CoverResponse resp2;
+  spec.exclude_docids = {top};
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp2, &error)) << error;
+  EXPECT_EQ(cover_docids(resp2.results).count(top), 0u); // top carved out
+  ASSERT_FALSE(resp2.results.empty());
+  EXPECT_NE(resp2.results[0].docid, top); // next-best is now rank 1
+  int expect_rank = 1;
+  for (const auto &h : resp2.results) {
+    EXPECT_EQ(h.rank, expect_rank++); // restarts at 1, no gaps
+    if (h.docid == survivor)
+      EXPECT_DOUBLE_EQ(h.score, survivor_score); // score is per-document
+  }
+  w->end();
+}
+
+// AC#3 / AC#4 / Q4: atom_counts (occurrences, term-as-written, zero flags a dead
+// atom, word* family vs exact, dedup, phrase words as leaves).
+TEST(JsonlCover, AtomCounts) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_atoms", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  CoverSpec spec;
+  spec.query = "(^ black bear* zzz*)";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.atom_counts.size(), 3u);
+  EXPECT_GT(atom_count(resp, "black"), 0);
+  EXPECT_GT(atom_count(resp, "bear*"), 0);
+  EXPECT_EQ(atom_count(resp, "zzz*"), 0);       // dead atom -> 0 occurrences
+  EXPECT_EQ(atom_count(resp, "porter:bear"), -1); // never the porter: form
+
+  // ox* is unstemmable -> resolves to the exact feature and counts it (AC#4).
+  spec.query = "ox*";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.atom_counts.size(), 1u);
+  EXPECT_GT(atom_count(resp, "ox*"), 0);
+
+  // Phrase words are individual leaves; bare "bear" and family "bear*" are
+  // distinct leaves (family count >= exact count); dedup keeps one row per term.
+  spec.query = "(^ \"black bear\" bear*)";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.atom_counts.size(), 3u); // black, bear, bear*
+  EXPECT_GT(atom_count(resp, "black"), 0);
+  EXPECT_GT(atom_count(resp, "bear"), 0);
+  EXPECT_GT(atom_count(resp, "bear*"), 0);
+  EXPECT_GE(atom_count(resp, "bear*"), atom_count(resp, "bear"));
+  w->end();
+}
+
+// AC#13 / AC#14: a larger window yields a longer summary; rank and score are
+// unchanged (window affects only the summary text, not ranking).
+TEST(JsonlCover, WindowOverrideLongerSummary) {
+  std::string body = "lead ";
+  for (int i = 0; i < 100; i++)
+    body += "alpha ";
+  body += "target ";
+  for (int i = 0; i < 100; i++)
+    body += "beta ";
+  body += "end";
+  std::vector<std::string> rows = {
+      std::string(R"({"docid":"w-1","contents":")") + body + R"("})"};
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_window", rows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  CoverResponse small, large;
+  CoverSpec spec;
+  spec.query = "target";
+  spec.window = 8;
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &small, &error)) << error;
+  spec.window = 80;
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &large, &error)) << error;
+  ASSERT_FALSE(small.results.empty());
+  ASSERT_FALSE(large.results.empty());
+  EXPECT_GT(large.results[0].summary.size(), small.results[0].summary.size());
+  EXPECT_DOUBLE_EQ(small.results[0].score, large.results[0].score);
+  EXPECT_EQ(small.results[0].rank, large.results[0].rank);
   w->end();
 }
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -92,8 +93,10 @@ std::string all_of(const std::vector<std::string> &terms) {
 }
 
 bool is_gcl_operator(const std::string &t) {
+  // The full prefix-operator set the parser accepts (src/parse.cc:19), so cover
+  // rewriting and atom-count leaf enumeration never mistake an operator for a term.
   return t == "^" || t == "+" || t == "..." || t == "<>" || t == "<<" ||
-         t == ">>";
+         t == ">>" || t == "!<" || t == "!>" || t == "#" || t == "@";
 }
 
 // True for things in a GCL expression that are not bare query terms: operators
@@ -212,8 +215,6 @@ std::vector<std::string> gcl_terms(const std::string &gcl) {
 }
 
 // ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
-
-constexpr addr kCoverWindow = 75; // default summary window in tokens (~3 sentences)
 
 // The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
 // reuses this). `word` is the bare word WITHOUT the trailing '*'. Resolves
@@ -378,6 +379,123 @@ std::string cover_summary(std::shared_ptr<Warren> warren,
       out += " . . . ";
     out += trim(warren->txt()->translate(merged[i].first, merged[i].second));
   }
+  return out;
+}
+
+// ---- cover_search enrichment helpers (TASK-5.2 / A2) ----------------------
+
+// The :docno match phrase for one docid -- the SAME form jsonl_get builds: a
+// single token, or (... t1 t2 ...) for a multi-token id. (Containment match per
+// the A2 Q1 decision, NOT a verified-exact match; documented in the specs.)
+std::string docid_phrase(std::shared_ptr<Warren> warren,
+                         const std::string &docid) {
+  std::vector<std::string> terms = warren->tokenizer()->split(docid);
+  if (terms.empty())
+    return "";
+  if (terms.size() == 1)
+    return terms[0];
+  std::string p = "(...";
+  for (const auto &t : terms)
+    p += " " + t;
+  p += ")";
+  return p;
+}
+
+// The ranking/counting container: plain ":item" when nothing is excluded, else
+// :item rows that do NOT contain any excluded docid's :docno -- carved DURING
+// ranking so excluded rows never appear and top_k fills.
+std::string exclusion_container(std::shared_ptr<Warren> warren,
+                                const std::vector<std::string> &exclude) {
+  std::vector<std::string> parts;
+  for (const auto &d : exclude) {
+    std::string ph = docid_phrase(warren, d);
+    if (!ph.empty())
+      parts.push_back("(>> :docno " + ph + ")");
+  }
+  if (parts.empty())
+    return ":item";
+  std::string excl;
+  if (parts.size() == 1) {
+    excl = parts[0];
+  } else {
+    excl = "(+";
+    for (const auto &p : parts)
+      excl += " " + p;
+    excl += ")";
+  }
+  return "(!> :item " + excl + ")";
+}
+
+// Count the DOCUMENTS in `container` that match `query` -- the :item-style rows
+// containing a cover of the query. Exact (Q3): a full enumeration, since no
+// precomputed document frequency exists for a cover query.
+bool count_container_matches(std::shared_ptr<Warren> warren,
+                             const std::string &container,
+                             const std::string &query, long *count,
+                             std::string *error) {
+  *count = 0;
+  std::string gcl = "(>> " + container + " " + query + ")";
+  auto hopper = warren->hopper_from_gcl(gcl, error);
+  if (hopper == nullptr)
+    return false;
+  addr p, q;
+  long n = 0;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q))
+    n++;
+  *count = n;
+  return true;
+}
+
+// The query's content-term LEAVES (bare words and word* markers), AS WRITTEN,
+// deduped first-seen. Operators / parens / :tags are skipped; each word inside a
+// quoted phrase is its own leaf. Used to build atom_counts. The query has already
+// been validated by cover_rewrite, so no mid-token '*' reaches here.
+std::vector<std::string> cover_leaves(const std::string &gcl) {
+  std::vector<std::string> out;
+  std::set<std::string> seen;
+  auto add = [&](const std::string &t) {
+    if (t.empty() || is_gcl_nonterm(t))
+      return;
+    if (seen.insert(t).second)
+      out.push_back(t);
+  };
+  std::string tok, phrase;
+  bool in_phrase = false;
+  for (char c : gcl) {
+    if (c == '"') {
+      if (!in_phrase) {
+        add(tok);
+        tok.clear();
+        in_phrase = true;
+        phrase.clear();
+      } else {
+        std::string w;
+        for (char pc : phrase) {
+          if (pc == ' ' || pc == '\t' || pc == '\n') {
+            if (!w.empty()) {
+              add(w);
+              w.clear();
+            }
+          } else {
+            w.push_back(pc);
+          }
+        }
+        if (!w.empty())
+          add(w);
+        in_phrase = false;
+      }
+    } else if (in_phrase) {
+      phrase.push_back(c);
+    } else if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n') {
+      add(tok);
+      tok.clear();
+    } else {
+      tok.push_back(c);
+    }
+  }
+  if (!in_phrase)
+    add(tok);
   return out;
 }
 
@@ -600,7 +718,9 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
                         CoverResponse *out, std::string *error) {
   out->results.clear();
-  const std::string container = ":item";
+  out->atom_counts.clear();
+  out->total_matches = 0;
+  out->unjudged_matches = 0;
   // word* needs a stemmed stream; fail loudly (no silent fallback to exact).
   std::shared_ptr<Stemmer> stemmer;
   if (spec.query.find('*') != std::string::npos) {
@@ -616,12 +736,40 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   if (!cover_rewrite(spec.query, stemmer, &rewritten, error))
     return false;
   if (rewritten.empty())
-    return true; // nothing to search -> no hits
+    return true; // nothing to search -> no hits, zero counts, no atoms
   // Validate up front so malformed GCL is a reported error, not a silent empty.
   auto check = warren->hopper_from_gcl(rewritten, error);
   if (check == nullptr)
     return false;
-  // PHASE 1: rank documents (:item) by ssr cover density.
+  // The exclude_docids carve lives in the CONTAINER (built once, reused for
+  // ranking and the unjudged count) so excluded rows never appear and top_k fills.
+  const std::string container = exclusion_container(warren, spec.exclude_docids);
+  // Breadth/novelty signals (exact document counts, Q3). total ignores excludes;
+  // unjudged = total - (excluded docids that ACTUALLY match the query) = the
+  // query counted within the carved container (NOT total - len(exclude_docids), Q2).
+  if (!count_container_matches(warren, ":item", rewritten, &out->total_matches,
+                               error))
+    return false;
+  if (!count_container_matches(warren, container, rewritten,
+                               &out->unjudged_matches, error))
+    return false;
+  // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
+  // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
+  for (const auto &leaf : cover_leaves(spec.query)) {
+    std::string atom;
+    auto star = leaf.find('*');
+    if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
+        stemmer != nullptr)
+      atom = resolve_family_atom(stemmer, leaf.substr(0, star));
+    else
+      atom = leaf; // bare exact (validated: no mid-token '*')
+    AtomCount ac;
+    ac.term = leaf;
+    ac.count =
+        (long)warren->idx()->count(warren->featurizer()->featurize(atom));
+    out->atom_counts.push_back(std::move(ac));
+  }
+  // PHASE 1: rank documents by ssr cover density within the (carved) container.
   std::vector<RankingResult> ranked =
       ssr_ranking(warren, rewritten, container, spec.top_k);
   auto docno = warren->hopper_from_gcl(":docno", error);
@@ -648,7 +796,8 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
         if (p >= cp)
           covers.emplace_back(p, q);
     }
-    h.summary = cover_summary(warren, covers, body_start, cq, kCoverWindow);
+    h.summary =
+        cover_summary(warren, covers, body_start, cq, (addr)spec.window);
     out->results.push_back(std::move(h));
   }
   return true;

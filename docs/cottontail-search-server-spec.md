@@ -75,7 +75,7 @@ URL. All bodies and responses are JSON; `Content-Type: application/json`.
 | `GET /describe` | yes | — | the tool schema array (`describe_json()`) |
 | `POST /tools/search_text` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "ranker"?, "snippet_chars"?}` | search results (`results_json`) |
 | `POST /tools/search_gcl` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "snippet_chars"?}` | search results |
-| `POST /tools/cover_search` | yes | `{"query", "top_k"?}` | cover results (`cover_results_json`): `{"results":[{rank,score,docid,summary}]}` |
+| `POST /tools/cover_search` | yes | `{"query", "top_k"?, "exclude_docids"?, "window"?}` | cover results (`cover_results_json`): `{"total_matches","unjudged_matches","atom_counts":[{term,count}],"results":[{rank,score,docid,summary}]}` |
 | `POST /tools/explain` | yes | `{"query", "is_gcl"?, "stem"?}` | explain (`explain_json`) |
 | `POST /tools/get_document` | yes | `{"docid"}` | `{"docid","found","text"}` |
 | `POST /tools/count_matches` | yes | `{"query", "is_gcl"?, "stem"?}` | `{"query","query_mode","stemmed","match_count"}` |
@@ -91,9 +91,14 @@ Notes:
   `word*` family marker (per-term stemming via the burrow's Porter; see
   `docs/stemming.md §6a`). It requires a `--stem porter` burrow; a `word*` query
   against a non-stemmed burrow, a non-trailing `*`, or malformed GCL → `400` with
-  an `{error, where}` body. `summary` is a cover-biased extractive summary. (A2
-  adds `exclude_docids`/`window` to the request and `total_matches`/
-  `unjudged_matches`/`atom_counts` to the response.)
+  an `{error, where}` body. The response is EXACTLY `total_matches`,
+  `unjudged_matches`, `atom_counts`, `results` — no `result_count`/`truncated`/
+  `query` (the Python client mirror is strict). `total_matches`/`unjudged_matches`
+  are document counts (`unjudged = total − excluded-docids-that-match`);
+  `atom_counts` is per query leaf `{term, count}` (occurrences, term as written,
+  no `stream`); `exclude_docids` carves rows by a **containment** `:docno` match
+  during ranking (not a post-filter), `window` sizes the summary. The server is
+  stateless: `exclude_docids` is per-request and does not persist.
 - Unknown tool name under `/tools/...` → `404`.
 
 ### Request → QuerySpec mapping

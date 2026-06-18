@@ -188,6 +188,38 @@ TEST(JsonlCli, CoverWordStarPlainBurrowExits2) {
   EXPECT_TRUE(json::parse(out).contains("error"));
 }
 
+TEST(JsonlCli, CoverWindowAndExcludeFlags) {
+  std::string b = tmpdir() + "/cli_cover_a2.burrow";
+  int code;
+  run(std::string(kIndexBin) + " --input test/jsonl/plain --burrow " + b +
+          " --stem porter --overwrite",
+      &code);
+  // --window runs and returns the matching doc with the A2 response fields.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"run*\" --window 50 --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_TRUE(j.contains("total_matches"));
+  EXPECT_TRUE(j.contains("atom_counts"));
+  bool found = false;
+  for (const auto &r : j["results"])
+    if (r["docid"] == "doc-002")
+      found = true;
+  EXPECT_TRUE(found) << out;
+
+  // --exclude carves doc-002 (the only run* match): unjudged 0, results empty,
+  // total unchanged.
+  out = run(std::string(kQueryBin) + " --burrow " + b +
+                " --cover \"run*\" --exclude doc-002 --format jsonl",
+            &code);
+  ASSERT_EQ(code, 0) << out;
+  j = json::parse(out);
+  EXPECT_EQ(j["total_matches"], 1);
+  EXPECT_EQ(j["unjudged_matches"], 0);
+  EXPECT_TRUE(j["results"].empty()) << out;
+}
+
 TEST(JsonlCli, GetDocument) {
   std::string b = build_burrow("cli_get");
   int code;

@@ -238,9 +238,10 @@ of the process.
   `ssr` cover density and returns `{rank, score, docid, summary}` where `summary`
   is a cover-biased extractive summary (see §4.8). Requires a `--stem porter`
   burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`
-  (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`. (A2
-  adds `exclude_docids`, a `window` override, and `total_matches`/`unjudged_matches`/
-  `atom_counts`.)
+  (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`.
+  `--exclude <docid>` (repeatable) carves judged documents out of the search;
+  `--window N` sets the summary window in tokens. The response also carries
+  `total_matches`/`unjudged_matches`/`atom_counts` (see §4.8).
 
 Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 
@@ -252,6 +253,8 @@ Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 | `--text` / `--gcl` / `--cover` | — | Query (see 4.2). |
 | `--ranker <name>` | `icover` | Cover-density ranker for `--text` (`icover`/`ssr`/`tiered`). |
 | `--top-k <n>` | 10 | Number of ranked rows to return. |
+| `--window <n>` | 75 | `--cover` only: summary window size in tokens, centered on each cover. |
+| `--exclude <docid>` | — | `--cover` only, repeatable: carve a judged document out of the search. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
 | `--snippet-chars <n>` | 240 | Max chars of the best-passage text when `--full-text` is off. |
 | `--explain` | off | Dry run: parse + cheap diagnostics, no ranking (see 4.5). |
@@ -341,8 +344,16 @@ each shaped like 4.4 with an added `"input_index"` field. A malformed input line
 
 ### 4.8 Cover-search output schema (`--cover`)
 
+Request: `{ "query", "top_k"?, "exclude_docids"? : [docid,…], "window"? : tokens }`.
+
 ```jsonc
 {
+  "total_matches": 50,          // DOCUMENTS matching the query in :item (ignores exclude_docids)
+  "unjudged_matches": 4,        // matching documents NOT excluded; results are drawn from these
+  "atom_counts": [              // per query leaf -> total OCCURRENCES of the feature it resolves to
+    { "term": "black",   "count": 1840 },
+    { "term": "bear*",   "count": 9004 }
+  ],
   "results": [
     { "rank": 1, "score": 12.3, "docid": "doc-002",
       "summary": "…cover-biased extractive summary…" }
@@ -350,16 +361,37 @@ each shaped like 4.4 with an added `"input_index"` field. A malformed input line
 }
 ```
 
-- `rank` — 1-based position in this response. `score` — the `ssr` cover-density
-  score (sum over the document's covers of `1/(K+q−p)`).
+These four keys are the whole response — nothing else (the Python client mirror
+is strict).
+
+- `total_matches` / `unjudged_matches` — **document** counts (matching `:item`
+  rows), exact. `total_matches` ignores `exclude_docids`; `unjudged_matches` =
+  `total_matches − (excluded docids that actually match the query)` (excluding a
+  docid that does not match, or is absent, leaves it unchanged). Both are
+  independent of `top_k`.
+- `atom_counts` — one `{term, count}` per query **leaf** (the content terms: bare
+  words and `word*` markers; operators/`:tags` skipped, phrase words counted
+  individually, deduped). `term` is **as written** (`bear*`, never `porter:…`);
+  `count` is the total **occurrences** (collection frequency) of the feature it
+  resolves to, `0` when nothing matches (a dead atom). No `stream` field.
+- `exclude_docids` — judged docids to carve out. Exclusion is a **containment**
+  match on `:docno` (the same mechanism `get_document` uses), applied to the
+  ranking **container** so excluded rows never appear and `top_k` fills (not a
+  post-filter). It is not a verified-exact match: a docid whose `:docno` token run
+  is an ordered substring of another's could over-exclude — not a concern for
+  unique ids like `shard_00012_0003`.
+- `window` — summary window size in tokens (default 75); affects only the
+  `summary` text, never `rank`/`score`.
+- `rank` — 1-based position within the returned (post-exclusion) results,
+  restarting at 1 each call, no gaps; NOT an absolute corpus position or the TREC
+  submission rank. `score` — `ssr` cover density (sum over the document's covers
+  of `1/(K+q−p)`), per-document and exclusion-invariant.
 - `summary` — a cover-biased extractive summary built from the query's covers
-  *within* that document: a window (default 75 tokens) centered on each cover,
-  shifted inward at the body edges, overlapping/touching windows merged,
-  non-contiguous extents joined by ` . . . `. It **replaces** `best_passage`.
+  *within* that document: a `window`-token window centered on each cover, shifted
+  inward at the body edges, overlapping/touching windows merged, non-contiguous
+  extents joined by ` . . . `. It **replaces** `best_passage`.
 - Errors (exit `2`, `{error, where}`): a `word*` query against a non-stemmed
   burrow; a non-trailing `*`; malformed GCL.
-- A2 adds the request fields `exclude_docids` and `window`, and the response
-  fields `total_matches`, `unjudged_matches`, and `atom_counts`.
 
 ---
 
