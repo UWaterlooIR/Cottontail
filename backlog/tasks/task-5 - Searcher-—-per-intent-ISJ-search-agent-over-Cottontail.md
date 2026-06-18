@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-17 22:03'
+updated_date: '2026-06-18 02:19'
 labels:
   - searcher
 dependencies: []
@@ -41,6 +41,7 @@ retrieval + RRF fusion). A reusable probe lives at isj/scouting/.
   burrow's own Porter), NOT in Python and NOT in GCL/search_gcl.
 - The Python isj agent holds the judged set and passes it as exclude_docids (the engine
   is stateless); the `judge` verdict tool is controller-side, not a server endpoint.
+- Judgement grade scale is 0-4 (UMBRELA-aligned).
 
 ## Decomposition (subtasks)
 
@@ -55,16 +56,16 @@ Engine/server track (C++); dependency A0 -> A1 -> A2:
 - Retire the example agent (5.4): archive examples/agent/, superseded by isj/.
 
 Python agent track (isj/), mock-tested, independent of the engine track; then converge:
-- B1 Searcher contracts + canned engine: the SearchEngine Protocol (shaped to the
-  cover_search request/response), result/judgement types, FakeEngine. [to write]
+- B1 (5.5) Searcher engine contract types + SearchEngine Protocol + scripted FakeEngine
+  (SearchResponse/Hit/AtomCount + Judgement grade 0-4; RankedList deferred to B2).
 - B2 Searcher agent + guardrailed loop controller (search/judge[batch]/read, one tool
   call per turn, GCL-validity + judge-before-search guards, controller-owned
-  termination), tested against the mock with a stub LLM. [to write]
+  termination), tested against the mock with a stub LLM. [to write, dep B1]
 - C1 HTTP engine client implementing the Protocol against cover_search (isj profile) +
-  live end-to-end against a real burrow. [to write]
-- C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write]
+  live end-to-end against a real burrow. [to write, dep A0/A1/A2/B1/B2]
+- C2 RRF fusion (pure function; doc-3, k=60, single-intent no-op). [to write, dep B1]
 - C3 Orchestrator wiring (Analyst -> Intents -> Searcher-per-intent -> RRF -> final
-  ranked list). [to write]
+  ranked list). [to write, dep B2/C2]
 
 Out of scope of this umbrella (downstream): Task-R TSV / RAG-JSONL output + Writer/
 Validator, the dev-data eval harness, real-model policy tuning.
