@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 02:17'
-updated_date: '2026-06-18 13:54'
+updated_date: '2026-06-18 14:49'
 labels:
   - python
   - isj
@@ -57,6 +57,16 @@ The cover_search contract this mirrors (A1 = TASK-5.1, A2 = TASK-5.2):
   summary).
 The agent holds the judged set and passes it as exclude_docids each call (the engine is
 stateless). Judgement grade scale is 0-4 (UMBRELA-aligned).
+
+NOTE ON DEPENDENCIES (why B1 has none yet mirrors A2's shape): B1 carries NO task
+dependency — it is pure Python and can be built/tested standalone, mock-only. But its
+SearchResponse intentionally mirrors the A1+A2 COMBINED (enriched) response:
+total_matches, unjudged_matches, and atom_counts are A2 (TASK-5.2) additions, not part of
+A1's base response. Because SearchResponse is extra="forbid" (see the strictness decision),
+it therefore will NOT parse an A1-only (base) response — and that is intended: the only
+live consumer, HttpSearchEngine (C1), DEPENDS ON A2, so it always speaks the enriched shape.
+B1 encodes the FINAL cover_search contract, not an A1-only interim one; do not "relax" it to
+match A1 alone.
 
 ## Pydantic v2 — how this project uses it (bake-in; read if unfamiliar)
 
@@ -191,8 +201,6 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 - [ ] #13 read() on the SearchEngine Protocol (and FakeEngine.read) carries a docstring/comment stating it is intentionally part of the engine contract for FUTURE use (a possible agent read-tool, and the downstream RAG grounding/Writer step) even though the B2 MVP does not call it; it must NOT be removed as unused. isj/README notes the same.
 - [ ] #14 isj_agent/engine/base.py defines a runtime_checkable SearchEngine typing.Protocol with search(query, *, top_k=10, exclude_docids=(), window=75) -> SearchResponse and read(docid) -> str | None, mirroring the server's cover_search and get_document tools; the engine has no judge method.
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
