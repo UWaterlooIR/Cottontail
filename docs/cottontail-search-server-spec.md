@@ -75,6 +75,7 @@ URL. All bodies and responses are JSON; `Content-Type: application/json`.
 | `GET /describe` | yes | — | the tool schema array (`describe_json()`) |
 | `POST /tools/search_text` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "ranker"?, "snippet_chars"?}` | search results (`results_json`) |
 | `POST /tools/search_gcl` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "snippet_chars"?}` | search results |
+| `POST /tools/cover_search` | yes | `{"query", "top_k"?}` | cover results (`cover_results_json`): `{"results":[{rank,score,docid,summary}]}` |
 | `POST /tools/explain` | yes | `{"query", "is_gcl"?, "stem"?}` | explain (`explain_json`) |
 | `POST /tools/get_document` | yes | `{"docid"}` | `{"docid","found","text"}` |
 | `POST /tools/count_matches` | yes | `{"query", "is_gcl"?, "stem"?}` | `{"query","query_mode","stemmed","match_count"}` |
@@ -85,6 +86,14 @@ Notes:
   `result_count` and `truncated`).
 - Field names match the `--describe` schema exactly (`query`, not `q`) so the
   request body **is** the tool-call arguments object.
+- `cover_search` (the ISJ agent's tool, distinct from `search_gcl`) calls
+  `jsonl_cover_search` and returns `cover_results_json`. Its query may use the
+  `word*` family marker (per-term stemming via the burrow's Porter; see
+  `docs/stemming.md §6a`). It requires a `--stem porter` burrow; a `word*` query
+  against a non-stemmed burrow, a non-trailing `*`, or malformed GCL → `400` with
+  an `{error, where}` body. `summary` is a cover-biased extractive summary. (A2
+  adds `exclude_docids`/`window` to the request and `total_matches`/
+  `unjudged_matches`/`atom_counts` to the response.)
 - Unknown tool name under `/tools/...` → `404`.
 
 ### Request → QuerySpec mapping

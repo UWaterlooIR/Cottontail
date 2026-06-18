@@ -88,6 +88,21 @@ json count_json(const QuerySpec &spec, long count) {
   return o;
 }
 
+json cover_results_json(const std::vector<CoverHit> &hits) {
+  json o;
+  json arr = json::array();
+  for (const auto &h : hits) {
+    json r;
+    r["rank"] = h.rank;
+    r["score"] = h.score;
+    r["docid"] = h.docid;
+    r["summary"] = h.summary;
+    arr.push_back(r);
+  }
+  o["results"] = arr;
+  return o;
+}
+
 // The agent tool schema (OpenAI/Anthropic function shape). The example agent and
 // the server's /describe both emit this verbatim.
 json describe_json() {
@@ -155,6 +170,23 @@ json describe_json() {
       "Structured search for precision: Boolean, phrase, proximity, containment. "
       "Use when bag-of-words is too noisy. Same ranked output as search_text.",
       sg, {"query"}));
+
+  json cs;
+  cs["query"] = strp(
+      "A GCL cover query. Build it as a COVER: one facet per concept, AND-ed "
+      "with ^, e.g. (^ black bear* attack*). A bare word matches EXACTLY (use "
+      "for proper nouns / defining words). A word followed by * matches that "
+      "word AND its whole family (bear* -> bear, bears; write the FULL word "
+      "then *, never a shortened stem). (+ a b) is for SYNONYMS. \"a b\" is an "
+      "exact phrase (a trailing * is honored inside it too).");
+  cs["top_k"] = intp("Max documents to return (default 10).");
+  tools.push_back(tool(
+      "cover_search",
+      "Ranked cover-density search for the ISJ agent. Ranks documents by "
+      "proximity of the query's facets and returns, per document, a "
+      "cover-biased extractive summary to read and judge. Use the word* family "
+      "marker for ordinary content words so you need not enumerate inflections.",
+      cs, {"query"}));
 
   json ex;
   ex["query"] = strp("The query to analyze.");

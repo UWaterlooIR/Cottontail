@@ -231,15 +231,25 @@ of the process.
 - **`--ranker <icover|ssr|tiered>`** — optional ranker selection for `--text`
   (default `icover`). All three are cover-density / proximity rankers requiring no
   precompute. (There is intentionally no BM25/LMD/PRF option — see §0.2.)
+- **`--cover "<cover query>"`** — the ISJ agent's search tool (`cover_search`,
+  distinct from `--gcl`/`search_gcl`). A GCL cover query that may use the **`word*`
+  family marker** (a full word + trailing `*` → the word *and* its morphological
+  family; bare terms stay exact; honored inside quoted phrases). Ranks `:item` by
+  `ssr` cover density and returns `{rank, score, docid, summary}` where `summary`
+  is a cover-biased extractive summary (see §4.8). Requires a `--stem porter`
+  burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`
+  (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`. (A2
+  adds `exclude_docids`, a `window` override, and `total_matches`/`unjudged_matches`/
+  `atom_counts`.)
 
-Exactly one of `--text` / `--gcl` (or `--batch`) must be supplied.
+Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 
 ### 4.3 Options
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--burrow <path>` | (required) | Burrow to open read-only as a `SimpleWarren`. |
-| `--text` / `--gcl` | — | Query (see 4.2). |
+| `--text` / `--gcl` / `--cover` | — | Query (see 4.2). |
 | `--ranker <name>` | `icover` | Cover-density ranker for `--text` (`icover`/`ssr`/`tiered`). |
 | `--top-k <n>` | 10 | Number of ranked rows to return. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
@@ -328,6 +338,28 @@ each shaped like 4.4 with an added `"input_index"` field. A malformed input line
 - Zero results → exit `0` with an empty `results` array.
 - Open the burrow **once** and reuse the handle. (A one-shot CLI needs one handle; if you
   ever thread query handling, clone per thread.)
+
+### 4.8 Cover-search output schema (`--cover`)
+
+```jsonc
+{
+  "results": [
+    { "rank": 1, "score": 12.3, "docid": "doc-002",
+      "summary": "…cover-biased extractive summary…" }
+  ]
+}
+```
+
+- `rank` — 1-based position in this response. `score` — the `ssr` cover-density
+  score (sum over the document's covers of `1/(K+q−p)`).
+- `summary` — a cover-biased extractive summary built from the query's covers
+  *within* that document: a window (default 75 tokens) centered on each cover,
+  shifted inward at the body edges, overlapping/touching windows merged,
+  non-contiguous extents joined by ` . . . `. It **replaces** `best_passage`.
+- Errors (exit `2`, `{error, where}`): a `word*` query against a non-stemmed
+  burrow; a non-trailing `*`; malformed GCL.
+- A2 adds the request fields `exclude_docids` and `window`, and the response
+  fields `total_matches`, `unjudged_matches`, and `atom_counts`.
 
 ---
 

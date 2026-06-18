@@ -210,6 +210,177 @@ std::vector<std::string> gcl_terms(const std::string &gcl) {
   flush();
   return out;
 }
+
+// ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
+
+constexpr addr kCoverWindow = 75; // default summary window in tokens (~3 sentences)
+
+// The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
+// reuses this). `word` is the bare word WITHOUT the trailing '*'. Resolves
+// through the burrow's own Porter, so bear -> porter:bear (the symmetric stemmed
+// stream) and an unstemmable word -> the exact surface form (ox -> ox).
+std::string resolve_family_atom(std::shared_ptr<Stemmer> stemmer,
+                                const std::string &word) {
+  return stem_atom(stemmer, word);
+}
+
+// Translate one bareword token under the word* rules into *out. Operators and
+// :tags pass verbatim; a token with a single TRAILING '*' becomes its family
+// atom; any other '*' (mid-token, repeated, or a lone '*') is a hard error.
+bool emit_cover_term(const std::string &t, std::shared_ptr<Stemmer> stemmer,
+                     std::string *out, std::string *error) {
+  if (t.empty())
+    return true;
+  if (is_gcl_nonterm(t)) {
+    *out += t;
+    return true;
+  }
+  auto star = t.find('*');
+  if (star == std::string::npos) {
+    *out += t; // bare term -> exact
+    return true;
+  }
+  if (star == t.size() - 1 && star > 0 && t.find('*') == t.rfind('*')) {
+    *out += resolve_family_atom(stemmer, t.substr(0, star));
+    return true;
+  }
+  safe_error(error) =
+      "invalid '*' in term '" + t +
+      "': the family marker must be a single trailing '*' (e.g. bear*)";
+  return false;
+}
+
+// Rewrite a cover query, translating word* markers to stemmed-stream atoms. Bare
+// terms stay exact; operators/:tags are untouched. A quoted phrase that uses
+// word* is desugared HERE (before the normal expand_phrases pass) into the
+// explicit (>> (# n) (... ...)) form with each word translated -- splitting the
+// phrase on WHITESPACE so a trailing '*' survives (the tokenizer would drop it).
+// A star-free phrase is left quoted for the standard pass. Returns false on a
+// malformed '*' or an unterminated phrase.
+bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
+                   std::string *out, std::string *error) {
+  out->clear();
+  std::string tok, phrase;
+  bool in_phrase = false;
+  auto flush = [&]() -> bool {
+    bool ok = emit_cover_term(tok, stemmer, out, error);
+    tok.clear();
+    return ok;
+  };
+  auto emit_phrase = [&]() -> bool {
+    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted
+      *out += '"';
+      *out += phrase;
+      *out += '"';
+      return true;
+    }
+    std::vector<std::string> words;
+    std::string w;
+    for (char c : phrase) {
+      if (c == ' ' || c == '\t' || c == '\n') {
+        if (!w.empty()) {
+          words.push_back(w);
+          w.clear();
+        }
+      } else {
+        w.push_back(c);
+      }
+    }
+    if (!w.empty())
+      words.push_back(w);
+    std::vector<std::string> atoms;
+    for (const auto &word : words) {
+      std::string a;
+      if (!emit_cover_term(word, stemmer, &a, error))
+        return false;
+      atoms.push_back(a);
+    }
+    if (atoms.empty())
+      return true;
+    if (atoms.size() == 1) {
+      *out += atoms[0];
+      return true;
+    }
+    *out += "(>> (# " + std::to_string(atoms.size()) + ") (...";
+    for (const auto &a : atoms)
+      *out += " " + a;
+    *out += "))";
+    return true;
+  };
+  for (char c : gcl) {
+    if (c == '"') {
+      if (!in_phrase) {
+        if (!flush())
+          return false;
+        in_phrase = true;
+        phrase.clear();
+      } else {
+        if (!emit_phrase())
+          return false;
+        in_phrase = false;
+      }
+    } else if (in_phrase) {
+      phrase.push_back(c);
+    } else if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n') {
+      if (!flush())
+        return false;
+      *out += c;
+    } else {
+      tok.push_back(c);
+    }
+  }
+  if (in_phrase) {
+    safe_error(error) = "unterminated phrase quote in cover query";
+    return false;
+  }
+  return flush();
+}
+
+// Build a cover-biased extractive summary from a document's covers (in document
+// order). Per cover: a window of max(W, cover_length) tokens centered on the
+// cover, shifted inward at the body edges to keep the width (clamped to the body
+// when it is shorter). Overlapping or touching windows merge; non-contiguous
+// extents join with " . . . ". Translates the token extents to text.
+std::string cover_summary(std::shared_ptr<Warren> warren,
+                          const std::vector<std::pair<addr, addr>> &covers,
+                          addr body_start, addr body_end, addr W) {
+  if (covers.empty() || body_end < body_start)
+    return "";
+  std::vector<std::pair<addr, addr>> wins;
+  for (const auto &c : covers) {
+    addr p = c.first, q = c.second;
+    addr cover_len = q - p + 1;
+    addr T = std::max<addr>(W, cover_len);
+    addr start = p + cover_len / 2 - T / 2;
+    addr end = start + T - 1;
+    if (end > body_end) {
+      start -= (end - body_end);
+      end = body_end;
+    }
+    if (start < body_start) {
+      start = body_start;
+      end = start + T - 1;
+      if (end > body_end)
+        end = body_end;
+    }
+    wins.emplace_back(start, end);
+  }
+  std::vector<std::pair<addr, addr>> merged;
+  for (const auto &w : wins) {
+    if (!merged.empty() && w.first <= merged.back().second + 1)
+      merged.back().second = std::max(merged.back().second, w.second);
+    else
+      merged.push_back(w);
+  }
+  std::string out;
+  for (size_t i = 0; i < merged.size(); i++) {
+    if (i)
+      out += " . . . ";
+    out += trim(warren->txt()->translate(merged[i].first, merged[i].second));
+  }
+  return out;
+}
+
 } // namespace
 
 bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
@@ -421,6 +592,63 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
       h.full_text = warren->txt()->translate(body_start, r.container_q());
       h.has_full_text = true;
     }
+    hits->push_back(std::move(h));
+  }
+  return true;
+}
+
+bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
+                        std::vector<CoverHit> *hits, std::string *error) {
+  hits->clear();
+  const std::string container = ":item";
+  // word* needs a stemmed stream; fail loudly (no silent fallback to exact).
+  std::shared_ptr<Stemmer> stemmer;
+  if (spec.query.find('*') != std::string::npos) {
+    stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "cover_search query uses the word* family marker but this burrow has "
+          "no stemmed stream (rebuild the index with --stem porter)";
+      return false;
+    }
+  }
+  std::string rewritten;
+  if (!cover_rewrite(spec.query, stemmer, &rewritten, error))
+    return false;
+  if (rewritten.empty())
+    return true; // nothing to search -> no hits
+  // Validate up front so malformed GCL is a reported error, not a silent empty.
+  auto check = warren->hopper_from_gcl(rewritten, error);
+  if (check == nullptr)
+    return false;
+  // PHASE 1: rank documents (:item) by ssr cover density.
+  std::vector<RankingResult> ranked =
+      ssr_ranking(warren, rewritten, container, spec.top_k);
+  auto docno = warren->hopper_from_gcl(":docno", error);
+  int rank = 1;
+  for (const auto &r : ranked) {
+    CoverHit h;
+    h.rank = rank++;
+    h.score = r.score();
+    addr cp = r.container_p(), cq = r.container_q();
+    addr dp = 0, dq = -1;
+    if (docno != nullptr) {
+      docno->tau(cp, &dp, &dq);
+      h.docid = trim(warren->txt()->translate(dp, dq));
+    }
+    addr body_start = (dq >= 0 ? dq + 1 : cp);
+    // PHASE 2: recover THIS document's covers (ssr discards them, returning only
+    // the container span) by walking the query hopper within [cp,cq]. This is a
+    // localized re-walk over the top_k results -- NOT a second corpus pass.
+    std::vector<std::pair<addr, addr>> covers;
+    auto qh = warren->hopper_from_gcl(rewritten, error);
+    if (qh != nullptr) {
+      addr p, q;
+      for (qh->tau(cp, &p, &q); p < maxfinity && q <= cq; qh->tau(p + 1, &p, &q))
+        if (p >= cp)
+          covers.emplace_back(p, q);
+    }
+    h.summary = cover_summary(warren, covers, body_start, cq, kCoverWindow);
     hits->push_back(std::move(h));
   }
   return true;

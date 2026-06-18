@@ -23,6 +23,8 @@
 #include "src/nlohmann.h"
 
 namespace {
+using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
@@ -92,6 +94,13 @@ QuerySpec spec_from(const json &b, bool is_gcl) {
   s.full_text = b.value("full_text", s.full_text);
   s.ranker = b.value("ranker", s.ranker);
   s.snippet_chars = b.value("snippet_chars", s.snippet_chars);
+  return s;
+}
+
+CoverSpec cover_spec_from(const json &b) {
+  CoverSpec s;
+  s.query = b.at("query").get<std::string>();
+  s.top_k = b.value("top_k", s.top_k);
   return s;
 }
 
@@ -284,6 +293,33 @@ int main(int argc, char **argv) {
   };
   svr.Post("/tools/search_text", search(false));
   svr.Post("/tools/search_gcl", search(true));
+
+  svr.Post("/tools/cover_search",
+           [&](const httplib::Request &req, httplib::Response &res) {
+             json b;
+             try {
+               b = json::parse(req.body);
+             } catch (...) {
+               return fail(res, 400, "bad JSON body", "request");
+             }
+             CoverSpec spec;
+             try {
+               spec = cover_spec_from(b);
+             } catch (...) {
+               return fail(res, 400, "missing/invalid 'query'", "request");
+             }
+             std::vector<CoverHit> hits;
+             std::string e;
+             bool ok = provider.with(
+                 [&](std::shared_ptr<cottontail::Warren> &w) {
+                   return cottontail::jsonl::jsonl_cover_search(w, spec, &hits,
+                                                                &e);
+                 });
+             if (!ok)
+               return fail(res, 400, e, "cover_search");
+             res.set_content(cottontail::jsonl::cover_results_json(hits).dump(),
+                             "application/json");
+           });
 
   svr.Post("/tools/explain",
            [&](const httplib::Request &req, httplib::Response &res) {

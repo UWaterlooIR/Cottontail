@@ -156,6 +156,65 @@ TEST(JsonlServer, EndToEnd) {
     EXPECT_EQ(names.count("search_text"), 1u);
     EXPECT_EQ(names.count("get_document"), 1u);
     EXPECT_EQ(names.count("count_matches"), 1u);
+    EXPECT_EQ(names.count("cover_search"), 1u); // A1 tool advertised
+  }
+
+  ::kill(pid, SIGTERM);
+  int status = 0;
+  ::waitpid(pid, &status, 0);
+}
+
+// cover_search over a stemmed burrow: a word* query round-trips and returns
+// {rank,score,docid,summary}; a malformed cover query is a 400.
+TEST(JsonlServer, CoverSearch) {
+  std::string burrow = tmpdir() + "/server_cover.burrow";
+  std::string build = std::string(kIndexBin) +
+                      " --input test/jsonl/plain --burrow " + burrow +
+                      " --stem porter --overwrite >/dev/null 2>&1";
+  ASSERT_EQ(std::system(build.c_str()), 0);
+
+  int port = free_port();
+  pid_t pid = start_server(burrow, port);
+  ASSERT_GT(pid, 0);
+
+  httplib::Client cli("127.0.0.1", port);
+  cli.set_connection_timeout(2, 0);
+  bool up = false;
+  for (int i = 0; i < 100 && !up; ++i) {
+    if (auto r = cli.Get("/healthz"); r && r->status == 200)
+      up = true;
+    else
+      ::usleep(50 * 1000);
+  }
+  ASSERT_TRUE(up) << "server did not start";
+  const httplib::Headers auth = {
+      {"Authorization", std::string("Bearer ") + kToken}};
+
+  // run* reaches doc-002 ("runs") via the word* family marker.
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"run*"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    ASSERT_TRUE(j.contains("results"));
+    bool found = false;
+    for (const auto &res : j["results"]) {
+      EXPECT_TRUE(res.contains("rank"));
+      EXPECT_TRUE(res.contains("score"));
+      EXPECT_TRUE(res.contains("summary"));
+      if (res["docid"] == "doc-002")
+        found = true;
+    }
+    EXPECT_TRUE(found) << r->body;
+  }
+  // A non-trailing '*' is a 400 with an error body.
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"ru*n"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->status, 400) << r->body;
+    EXPECT_TRUE(json::parse(r->body).contains("error"));
   }
 
   ::kill(pid, SIGTERM);

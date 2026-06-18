@@ -30,6 +30,10 @@ json get_json(const std::string &docid, bool found, const std::string &text);
 // Selectivity: {query, query_mode, stemmed, match_count}.
 json count_json(const QuerySpec &spec, long count);
 
+// cover_search results (TASK-5.1 / A1): {results:[{rank,score,docid,summary}]}.
+// A2 adds total_matches / unjudged_matches / atom_counts.
+json cover_results_json(const std::vector<CoverHit> &hits);
+
 // The agent tool schema (OpenAI/Anthropic function shape) as a JSON array.
 json describe_json();
 

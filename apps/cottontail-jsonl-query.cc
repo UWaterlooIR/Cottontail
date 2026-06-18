@@ -14,6 +14,9 @@
 
 namespace {
 using cottontail::jsonl::count_json;
+using cottontail::jsonl::cover_results_json;
+using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::describe_json;
 using cottontail::jsonl::explain_json;
 using cottontail::jsonl::ExplainResult;
@@ -26,6 +29,7 @@ void usage(const char *prog) {
   std::cerr << "usage:\n"
             << "  " << prog << " --burrow <path> --text \"<words>\" [options]\n"
             << "  " << prog << " --burrow <path> --gcl \"<expr>\" [options]\n"
+            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N]\n"
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
             << "  " << prog << " --burrow <path> --get <docid>\n"
@@ -55,9 +59,9 @@ void usage(const char *prog) {
 
 int main(int argc, char **argv) {
   std::string burrow;
-  std::string text, gcl, get_docid;
+  std::string text, gcl, get_docid, cover;
   bool have_text = false, have_gcl = false, batch = false, explain = false;
-  bool have_get = false, count = false, describe = false;
+  bool have_get = false, count = false, describe = false, have_cover = false;
   QuerySpec base;
   std::string format = "json";
 
@@ -76,6 +80,8 @@ int main(int argc, char **argv) {
       text = next(), have_text = true;
     else if (a == "--gcl")
       gcl = next(), have_gcl = true;
+    else if (a == "--cover")
+      cover = next(), have_cover = true;
     else if (a == "--get")
       get_docid = next(), have_get = true;
     else if (a == "--count")
@@ -119,9 +125,10 @@ int main(int argc, char **argv) {
     return 1;
   }
   int modes = (have_text ? 1 : 0) + (have_gcl ? 1 : 0) + (have_get ? 1 : 0) +
-              (batch ? 1 : 0);
+              (batch ? 1 : 0) + (have_cover ? 1 : 0);
   if (modes != 1) {
-    std::cerr << "supply exactly one of --text / --gcl / --get / --batch\n";
+    std::cerr
+        << "supply exactly one of --text / --gcl / --cover / --get / --batch\n";
     usage(argv[0]);
     return 1;
   }
@@ -137,6 +144,19 @@ int main(int argc, char **argv) {
     if (!cottontail::jsonl::jsonl_get(warren, get_docid, &body, &found, &error))
       die(error, "get");
     std::cout << get_json(get_docid, found, body).dump(format == "jsonl" ? -1 : 2)
+              << "\n";
+    warren->end();
+    return 0;
+  }
+
+  if (have_cover) {
+    CoverSpec spec;
+    spec.query = cover;
+    spec.top_k = base.top_k;
+    std::vector<CoverHit> hits;
+    if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &hits, &error))
+      die(error, "cover_search");
+    std::cout << cover_results_json(hits).dump(format == "jsonl" ? -1 : 2)
               << "\n";
     warren->end();
     return 0;

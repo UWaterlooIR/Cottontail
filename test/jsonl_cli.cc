@@ -142,6 +142,52 @@ TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
   EXPECT_TRUE(j.contains("error"));
 }
 
+TEST(JsonlCli, CoverSearchWordStar) {
+  std::string b = tmpdir() + "/cli_cover.burrow";
+  int code;
+  std::string idx = run(std::string(kIndexBin) +
+                            " --input test/jsonl/plain --burrow " + b +
+                            " --stem porter --overwrite",
+                        &code);
+  ASSERT_EQ(code, 0) << idx;
+  // --cover "run*" reaches doc-002 ("runs") via the word* family marker.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"run*\" --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  bool found = false;
+  for (const auto &r : j["results"]) {
+    if (r["docid"] == "doc-002")
+      found = true;
+    EXPECT_TRUE(r.contains("summary")); // cover-biased summary, not best_passage
+  }
+  EXPECT_TRUE(found) << out;
+}
+
+TEST(JsonlCli, CoverMidTokenStarExits2) {
+  std::string b = tmpdir() + "/cli_cover_badstar.burrow";
+  int code;
+  run(std::string(kIndexBin) + " --input test/jsonl/plain --burrow " + b +
+          " --stem porter --overwrite",
+      &code);
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"ru*n\"",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  EXPECT_TRUE(json::parse(out).contains("error"));
+}
+
+TEST(JsonlCli, CoverWordStarPlainBurrowExits2) {
+  std::string b = build_burrow("cli_cover_plain"); // built without --stem
+  int code;
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"run*\"",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  EXPECT_TRUE(json::parse(out).contains("error"));
+}
+
 TEST(JsonlCli, GetDocument) {
   std::string b = build_burrow("cli_get");
   int code;

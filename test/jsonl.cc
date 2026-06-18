@@ -85,6 +85,24 @@ const std::vector<std::string> kStemRows = {
     R"({"docid":"s-2","contents":"organization of organs"})",
     R"({"docid":"s-3","contents":"an ox and a cat"})",
 };
+
+std::set<std::string> cover_docids(const std::vector<CoverHit> &hits) {
+  std::set<std::string> s;
+  for (const auto &h : hits)
+    s.insert(h.docid);
+  return s;
+}
+
+// Fixtures for cover_search (TASK-5.1 / A1). Lowercase so case folding is not a
+// variable. c-1/c-4 have "bear"; c-2 has only "bears"; c-3 has "ox"; c-5 has the
+// adjacent phrase "black bears".
+const std::vector<std::string> kCoverRows = {
+    R"({"docid":"c-1","contents":"black bear attacks on hikers are rare in the forest"})",
+    R"({"docid":"c-2","contents":"the bears attacked a camp near the river"})",
+    R"({"docid":"c-3","contents":"an ox pulled the cart along the trail"})",
+    R"({"docid":"c-4","contents":"grizzly bear encounters differ from black bear behavior"})",
+    R"({"docid":"c-5","contents":"black bears roam the quiet woods"})",
+};
 } // namespace
 
 TEST(JsonlIndex, BuildCounts) {
@@ -401,6 +419,205 @@ TEST(JsonlStem, ExplainStreamLabeling) {
   EXPECT_GT(el->df, 0);
   EXPECT_EQ(ox->stream, "exact"); // ox unstemmable -> exact stream
   EXPECT_GT(ox->df, 0);
+  w->end();
+}
+
+// --- cover_search: word* family marker + cover-biased summary (A1) ---------
+
+// AC#1 / AC#2: bear* matches a row whose body has only "bears"; bare bear does
+// not, while still matching rows that literally contain "bear".
+TEST(JsonlCover, FamilyRecallVsBareExact) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_family", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+
+  CoverSpec fam;
+  fam.query = "bear*";
+  ASSERT_TRUE(jsonl_cover_search(w, fam, &hits, &error)) << error;
+  auto fam_ids = cover_docids(hits);
+  EXPECT_EQ(fam_ids.count("c-2"), 1u); // "bears" reached via the family
+  EXPECT_EQ(fam_ids.count("c-1"), 1u); // "bear" too
+
+  CoverSpec bare;
+  bare.query = "bear";
+  ASSERT_TRUE(jsonl_cover_search(w, bare, &hits, &error)) << error;
+  auto bare_ids = cover_docids(hits);
+  EXPECT_EQ(bare_ids.count("c-2"), 0u); // only "bears" -> bare "bear" misses
+  EXPECT_EQ(bare_ids.count("c-1"), 1u); // literal "bear" still matches
+  w->end();
+}
+
+// AC#2 (second clause): a burrow built without a stemmer is unaffected, and a
+// word* query against it is a hard error (no silent fallback) -- AC#7.
+TEST(JsonlCover, NoStemmedStreamIsAnError) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_nostem", kCoverRows, "", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  std::string qerr;
+  CoverSpec spec;
+  spec.query = "bear*";
+  EXPECT_FALSE(jsonl_cover_search(w, spec, &hits, &qerr));
+  EXPECT_FALSE(qerr.empty());
+  w->end();
+}
+
+// AC#3: a mixed cover (^ black bear*) keeps black exact and bear* a family; a
+// star-free quoted phrase is left exact.
+TEST(JsonlCover, MixedCoverAndStarFreePhrase) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_mixed", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+
+  CoverSpec mix;
+  mix.query = "(^ black bear*)";
+  ASSERT_TRUE(jsonl_cover_search(w, mix, &hits, &error)) << error;
+  auto ids = cover_docids(hits);
+  EXPECT_EQ(ids.count("c-1"), 1u); // black + bear
+  EXPECT_EQ(ids.count("c-4"), 1u); // black + bear
+  EXPECT_EQ(ids.count("c-5"), 1u); // black + bears
+  EXPECT_EQ(ids.count("c-2"), 0u); // bears but no black
+  EXPECT_EQ(ids.count("c-3"), 0u); // neither
+
+  CoverSpec phrase;
+  phrase.query = "\"black bear\""; // star-free phrase -> exact, left quoted
+  ASSERT_TRUE(jsonl_cover_search(w, phrase, &hits, &error)) << error;
+  auto pids = cover_docids(hits);
+  EXPECT_EQ(pids.count("c-1"), 1u); // adjacent "black bear"
+  EXPECT_EQ(pids.count("c-2"), 0u);
+  w->end();
+}
+
+// AC#4 / AC#9: ox* resolves through the single shared helper to the exact
+// feature (Porter leaves "ox" unchanged) and matches, with no error.
+TEST(JsonlCover, UnstemmableStarFallsBackToExact) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_ox", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  CoverSpec spec;
+  spec.query = "ox*";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(cover_docids(hits).count("c-3"), 1u);
+  w->end();
+}
+
+// AC#5: a starred word inside a quoted phrase is honored (desugar-with-stem
+// before expand_phrases); "black bear*" matches the adjacent "black bears".
+TEST(JsonlCover, StarHonoredInsidePhrase) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_phrase", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  CoverSpec spec;
+  spec.query = "\"black bear*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(cover_docids(hits).count("c-5"), 1u); // "black bears"
+  w->end();
+}
+
+// AC#6: a non-trailing, mid-token '*' is a hard error (no crash).
+TEST(JsonlCover, MidTokenStarIsAnError) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_badstar", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  std::string qerr;
+  CoverSpec spec;
+  spec.query = "at*ack";
+  EXPECT_FALSE(jsonl_cover_search(w, spec, &hits, &qerr));
+  EXPECT_FALSE(qerr.empty());
+  w->end();
+}
+
+// AC#8: operators and :tags survive the rewrite; (<< bear* :item) runs with
+// :item intact and only bear* translated.
+TEST(JsonlCover, TagsAndOperatorsUntouched) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_tags", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  CoverSpec spec;
+  spec.query = "(<< bear* :item)";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+  EXPECT_EQ(cover_docids(hits).count("c-2"), 1u); // family recall, :item intact
+  w->end();
+}
+
+// AC#12: the per-document response is {rank, score, docid, summary}: rank is
+// 1-based, score is the ssr sum (> 0 for a match), and summary is populated
+// (it replaces the old best_passage).
+TEST(JsonlCover, ResponseShape) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_shape", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  CoverSpec spec;
+  spec.query = "(^ black bear*)";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+  ASSERT_FALSE(hits.empty());
+  EXPECT_EQ(hits[0].rank, 1);
+  EXPECT_GT(hits[0].score, 0.0);
+  EXPECT_FALSE(hits[0].docid.empty());
+  EXPECT_FALSE(hits[0].summary.empty());
+  // The summary is cover-biased: it contains the matched terms.
+  EXPECT_NE(hits[0].summary.find("black"), std::string::npos);
+  EXPECT_NE(hits[0].summary.find("bear"), std::string::npos);
+  w->end();
+}
+
+// AC#13 / AC#14: with two well-separated covers the summary is two extents
+// joined by the spaced-dots separator; nearby covers merge into one extent (no
+// separator). Built in code to make the gap exceed the default 75-token window.
+TEST(JsonlCover, SummaryWindowingAndGap) {
+  std::string filler;
+  for (int i = 0; i < 200; i++)
+    filler += "alpha ";
+  // needle ... (200 tokens) ... needle  -> two covers far enough apart that
+  // their 75-token windows do not overlap even after edge-clamping.
+  std::string content = "needle " + filler + "needle tail words here";
+  std::vector<std::string> rows = {
+      std::string(R"({"docid":"g-1","contents":")") + content + R"("})",
+      R"({"docid":"g-2","contents":"needle needle close together once more"})",
+  };
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_gap", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  std::vector<CoverHit> hits;
+  CoverSpec spec;
+  spec.query = "needle";
+  spec.top_k = 10;
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+  std::string g1, g2;
+  for (const auto &h : hits) {
+    if (h.docid == "g-1")
+      g1 = h.summary;
+    if (h.docid == "g-2")
+      g2 = h.summary;
+  }
+  ASSERT_FALSE(g1.empty());
+  ASSERT_FALSE(g2.empty());
+  EXPECT_NE(g1.find(" . . . "), std::string::npos); // far apart -> gap shown
+  EXPECT_EQ(g2.find(" . . . "), std::string::npos); // adjacent -> merged
   w->end();
 }
 

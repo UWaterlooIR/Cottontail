@@ -82,6 +82,35 @@ struct QuerySpec {
 bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  std::vector<Hit> *hits, std::string *error = nullptr);
 
+// ---- cover_search: the ISJ agent's search tool (TASK-5.1 / A1) ------------
+// A NEW tool, separate from jsonl_query / search_gcl. It understands the `word*`
+// family marker (a full word + a trailing '*' -> the word AND its morphological
+// family) and returns, per ranked document, a cover-biased extractive summary
+// built from the query's covers within that document. search_gcl stays a pure
+// GCL primitive and is unaffected by any of this.
+struct CoverSpec {
+  std::string query;  // a GCL cover query that MAY use the word* family marker
+  size_t top_k = 10;
+  // A2 extends this with exclude_docids and a request-side `window` override.
+};
+
+struct CoverHit {
+  int rank = 0;        // 1-based position within this response
+  double score = 0.0;  // ssr cover-density score (sum over covers of 1/(K+q-p))
+  std::string docid;
+  std::string summary; // cover-biased extractive summary (replaces best_passage)
+};
+
+// Rank a cover query by ssr cover density within :item and return, per returned
+// document, a cover-biased extractive summary. `word*` atoms resolve to the
+// burrow's stemmed stream (parity with the index's own Porter). Returns false
+// (with *error) on a hard failure: malformed GCL, a non-trailing '*' in a term,
+// or a word* query against a burrow with no stemmed stream (no silent fallback
+// to exact).
+bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
+                        std::vector<CoverHit> *hits,
+                        std::string *error = nullptr);
+
 // Fetch the full body of the row whose :docno equals `docid`. Sets *found=false
 // (not an error) when no such row exists. Returns false only on a hard error.
 bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
