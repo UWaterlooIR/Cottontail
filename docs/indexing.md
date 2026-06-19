@@ -107,21 +107,30 @@ The over-fetch is cheap at any scale: the judged set is bounded by the ISJ budge
 (tens to a few hundred per intent), so `depth = top_k + |exclude|` stays small even
 against 500M documents.
 
-> **Open question — match counts at 500M.** Exact `total_matches` /
-> `unjudged_matches` mean enumerating the whole match set, which for a broad query
-> against 500M documents can be hundreds of millions of rows per call — likely
-> infeasible as a per-turn signal. Options: cap the count ("≥ N matches"), sample,
-> report a cheaper per-page signal ("k of the top results were already judged"), or
-> drop `unjudged_matches` entirely. The A2 plan (TASK-5.2) currently computes these
-> exactly (full enumeration); that choice is what is in doubt at 500M and needs
-> revisiting.
+> **Note — match counts come free with ranking; do not pay for them twice.**
+> `ssr_ranking` makes a full pass over every cover of the query (it does *not*
+> stop early at `top_k`), so it already **visits every matching document**. Exact
+> `total_matches`/`unjudged_matches` are therefore the **same cost class as the
+> ranking we already do**, and should be computed as a **byproduct of that single
+> pass**: count each matching container as the ssr loop closes it (`q > cq`), and
+> for `unjudged_matches` check whether the container's `cp` is in the exclude set.
+> The A2 plan (TASK-5.2) currently computes them with **separate** `(>> :item Q)`
+> enumerations on top of ranking (~3 passes where 1 suffices) — that redundancy is
+> the only inefficiency to fix; the counts themselves are not a separate scaling
+> problem under ssr.
 >
-> This is specifically about the **document** match counts. The per-atom
-> `atom_counts` signal is *not* affected: it reads each query leaf's collection
-> frequency straight from the index directory (`idx()->count(feature)` — an
-> `O(log F)` lookup, cached, no posting-list load or document scan), so it stays
-> cheap at 500M. The expensive thing is enumerating which/how-many *documents*
-> match a cover, not counting an atom's occurrences.
+> The cost of *any* of this is governed by query **selectivity** (the combined
+> posting length of the query's atoms / number of covers), not by `top_k`: a broad
+> cover led by a hyper-frequent atom is expensive to rank — and equally to count —
+> no matter how few results are requested. Exact counts would only become the
+> relatively expensive odd-one-out if ranking later adopts a **skipping ranker
+> (WAND/MaxScore)** that finds top-k without visiting every match; with ssr that
+> does not arise.
+>
+> The per-atom `atom_counts` signal is cheaper still and entirely separate: it
+> reads each query leaf's collection frequency from the index directory
+> (`idx()->count(feature)` — an `O(log F)` lookup, cached, no posting-list load or
+> document scan), independent of the document match counts above.
 
 ## 5. Fetching document contents
 
