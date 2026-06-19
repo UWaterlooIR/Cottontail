@@ -1,10 +1,12 @@
 ---
 id: TASK-6.2
-title: 'JSONL index: build the cp<->docno sidecar via the generic module'
+title: >-
+  JSONL index: produce the new-style (TREC-generic) index via the generic
+  indexer
 status: To Do
 assignee: []
 created_date: '2026-06-19 03:44'
-updated_date: '2026-06-19 03:50'
+updated_date: '2026-06-19 04:04'
 labels:
   - cpp
 dependencies:
@@ -23,90 +25,50 @@ ordinal: 18000
 <!-- SECTION:DESCRIPTION:BEGIN -->
 ## Goal
 
-The JSONL indexer **steps up to the generic module** (Child A, TASK-6.1): when
-asked, `cottontail-jsonl-index` builds the `cp <-> docno` sidecar so the produced
-static warren carries it. Per doc-4 / docs/indexing.md, this is the first concrete
-use of the internal-id + sidecar model on our real collection.
+`cottontail-jsonl-index` produces the **new-style (TREC-generic) index** by using
+the Child A generic indexer (TASK-6.1): per document **contents + one `:item`
+annotation + the `cp <-> docno` sidecar** (built by default). The internal id is
+the `:item` start `cp`; the docno lives only in the sidecar. See docs/indexing.md /
+doc-4.
 
-## IMPORTANT — additive and non-breaking (read this)
+This **replaces** the old style — there is no docno tokenization, no `:docno`
+annotation, and no opt-in flag. We have no use for the old-style index, so the
+indexer simply produces the new one.
 
-The index format and the query readers are coupled: today the JSONL stack tokenizes
-the docid and annotates `:docno`, and `jsonl_get` / `jsonl_query` / `cover_search`
-read `:docno` (cover_search also has a `(>> :docno ...)` exclusion carve). Removing
-`:docno` now would break those readers and their tests, dragging in the retrieval
-cutover that doc-4 **defers**.
+## What to do
 
-So this task is strictly **ADDITIVE**: keep the current indexing (docid + `:docno`
-+ `:item`) exactly as-is, and — when the operator opts in — ALSO build the sidecar
-alongside it. Nothing in the query path changes; the build stays green. The cutover
-(dropping the docid tokenization / `:docno` and migrating readers + exclusion +
-B1/B2 to `cp`) is deferred to be planned AFTER this lands. Do NOT do it here.
+1. In `jsonl_index` (apps/jsonl_core.cc), parse each row to `(docid, contents)` and
+   call the generic indexer's `add_document(docid, contents)`; `finalize()` writes
+   the sidecar. Remove the old `add_text(docid)` + `:docno` indexing. docno
+   uniqueness is validated by the indexer (a duplicate docid fails the build).
+2. `cottontail-jsonl-index` produces the new-style burrow by default (no flag — the
+   sidecar is intrinsic to the generic indexing). Update usage/help and
+   `IndexSummary` as needed.
+3. Docs: note in `docs/cottontail-jsonl-cli-spec.md` / `docs/indexing.md` that the
+   indexer now produces the new-style index (contents + `:item` + sidecar).
 
-## CLI exposure (how the operator turns it on)
+## The query side is being REDONE — not preserved here
 
-The sidecar is built **during the index pass** (it needs each row's `cp` and docno
-as rows are added), so it is a build-time option on `cottontail-jsonl-index`, not a
-separate binary:
-
-- Add `bool sidecar = false;` to `IndexOptions` (apps/jsonl_core.h).
-- Add a boolean flag **`--sidecar`** to `cottontail-jsonl-index` (mirroring
-  `--overwrite` / `--strict` / `--verbose`: `else if (a == "--sidecar")
-  opts.sidecar = true;`) and a usage/help line, e.g.
-  `--sidecar  also build the cp<->docno sidecar (docs/indexing.md)`.
-- **Default OFF** (opt-in) for this transitional phase: with the flag absent, the
-  index run is byte-for-byte what it is today (truly additive / non-breaking). With
-  `--sidecar`, the run additionally writes the sidecar. (The eventual target,
-  post-cutover, is for the sidecar to be standard — out of scope here.)
-- Report it: `IndexSummary` gains a `bool sidecar` (and/or the sidecar path), and
-  the index CLI's summary output notes whether the sidecar was written.
-
-## Required behavior
-
-1. In `jsonl_index` (apps/jsonl_core.cc), while indexing each row, capture that
-   document's `cp` (the `:item` container start — `container_p`; today `:item` =
-   `[p_id, q_body]`, so `cp = p_id`) and its `docno` (the JSON docid), plus the
-   final document end. Keep the existing `add_text(docid)` / `:docno` / `:item`
-   calls unchanged.
-2. **When `opts.sidecar` is set**, after indexing call the Child A builder to write
-   the sidecar into the burrow working dir; otherwise do nothing new (default path
-   unchanged). Surface the builder's duplicate-docno detection as an index failure
-   with a clear message.
-3. The static warren produced with `--sidecar` contains the sidecar; opening the
-   burrow can load it. (No reader is required to USE it yet — that is the deferred
-   cutover — but the data is present and verifiable.)
-4. `IndexSummary`/output reflects whether the sidecar was built (see CLI exposure).
-
-## Verify
-
-- A test (test/jsonl.cc or test/jsonl_cli.cc) indexes a small fixture **with the
-  sidecar enabled**, then loads the sidecar from the burrow and round-trips: a known
-  docid -> its `cp`, and `cp` -> docno; `text_by_docno`/`text_by_cp` return the
-  right body; a fixture with a duplicate docid fails indexing.
-- A run **without** `--sidecar` is unchanged (no sidecar file; existing assertions
-  hold). All existing JSONL tests still pass.
-
-## Where it lives / may modify
-
-`apps/jsonl_core.{h,cc}`, `apps/cottontail-jsonl-index.cc`; tests in
-`test/jsonl.cc` / `test/jsonl_cli.cc`; a note in `docs/cottontail-jsonl-cli-spec.md`
-and/or `docs/indexing.md` that the indexer gained `--sidecar` (transitional:
-`:docno` retained for now). Depends on Child A (TASK-6.1).
+`jsonl_get` / `jsonl_query` / `cover_search` read `:docno` and are incompatible with
+the new-style burrow; they (and B1/B2) are slated for a separate redo against the
+`cp`/sidecar model (the deferred cutover, doc-4). Do **not** try to keep them
+working here. To leave the repo building and the suite green, **retire/quarantine
+the now-obsolete query-path tests** (the `:docno`-dependent cases in `test/jsonl.cc`,
+`test/jsonl_cli.cc`, `test/jsonl_server.cc`); the query functions themselves can
+remain in source until the redo. Add a sidecar round-trip test in their place.
 
 ## Non-goals
 
-- Do NOT remove the docid tokenization or `:docno`, and do NOT touch
-  `jsonl_get` / `jsonl_query` / `cover_search` / exclusion / B1 / B2 — that is the
-  deferred cutover (doc-4).
-- No new query behavior; no retrieval-side use of `cp` yet.
+- No old-style index, no flag, no additive coexistence.
+- Do NOT rebuild the query side (cover_search/get/query) or B1/B2 — that is the
+  separate redo.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 cottontail-jsonl-index, while indexing, captures each document's cp (the :item container start) and docno (the JSON docid) plus the final end, and after indexing builds the cp<->docno sidecar (Child A) into the burrow working dir; the existing add_text(docid)/:docno/:item indexing is unchanged (additive).
-- [ ] #2 A duplicate docid in the input is detected (via the builder) and reported as an index failure with a clear message.
-- [ ] #3 The produced static warren contains the sidecar and it loads from the opened burrow; a test round-trips docid->cp and cp->docno and fetches the body via text_by_cp/text_by_docno, and a duplicate-docid fixture fails indexing.
-- [ ] #4 No query-path change: jsonl_get / jsonl_query / cover_search / exclusion are untouched, and all existing JSONL tests (//test:jsonl_test //test:jsonl_server_test) still pass unchanged.
-- [ ] #5 docs (cli-spec and/or indexing.md) note that the indexer now also emits the cp<->docno sidecar, transitionally alongside the retained :docno; the full cutover is deferred per doc-4.
-- [ ] #6 Full build (//... minus the Boost-blocked targets) and //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test are green.
-- [ ] #7 cottontail-jsonl-index exposes the sidecar build via an opt-in boolean flag --sidecar (IndexOptions.sidecar, default false) with a usage/help line; with the flag absent the index run is unchanged (no sidecar), and with it present the sidecar is built; the index summary reports whether the sidecar was written.
+- [ ] #1 cottontail-jsonl-index produces the new-style index via the TASK-6.1 generic indexer: per row it parses (docid, contents) and calls add_document; the burrow has contents + one :item per document + the cp<->docno sidecar built by default; there is NO add_text(docid) and NO :docno annotation; the internal id is the :item start cp. The old style is removed (no docno tokenization, no opt-in flag).
+- [ ] #2 docno uniqueness is validated: a duplicate docid fails indexing with a clear message.
+- [ ] #3 A test indexes a small fixture and, from the produced burrow + sidecar, round-trips docid->cp and cp->docno and fetches the body via text_by_cp/text_by_docno.
+- [ ] #4 The repo builds (//... minus the Boost-blocked targets) and the test suite is green: the :docno-dependent query-path tests (jsonl_get/jsonl_query/cover_search cases in test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc) are retired/quarantined since that side is being redone; no attempt is made to keep old-style query behavior working.
+- [ ] #5 docs (cli-spec, indexing.md) state that cottontail-jsonl-index now produces the new-style (TREC-generic) index with the sidecar, and that the query side is pending the redo.
 <!-- AC:END -->
