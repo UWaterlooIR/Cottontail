@@ -112,8 +112,9 @@ against 500M documents.
 > against 500M documents can be hundreds of millions of rows per call — likely
 > infeasible as a per-turn signal. Options: cap the count ("≥ N matches"), sample,
 > report a cheaper per-page signal ("k of the top results were already judged"), or
-> drop `unjudged_matches` entirely. To be decided — but "keep them exact" does not
-> obviously survive 500M.
+> drop `unjudged_matches` entirely. The A2 plan (TASK-5.2) currently computes these
+> exactly (full enumeration); that choice is what is in doubt at 500M and needs
+> revisiting.
 >
 > This is specifically about the **document** match counts. The per-atom
 > `atom_counts` signal is *not* affected: it reads each query leaf's collection
