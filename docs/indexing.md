@@ -114,6 +114,13 @@ against 500M documents.
 > report a cheaper per-page signal ("k of the top results were already judged"), or
 > drop `unjudged_matches` entirely. To be decided — but "keep them exact" does not
 > obviously survive 500M.
+>
+> This is specifically about the **document** match counts. The per-atom
+> `atom_counts` signal is *not* affected: it reads each query leaf's collection
+> frequency straight from the index directory (`idx()->count(feature)` — an
+> `O(log F)` lookup, cached, no posting-list load or document scan), so it stays
+> cheap at 500M. The expensive thing is enumerating which/how-many *documents*
+> match a cover, not counting an atom's occurrences.
 
 ## 5. Fetching document contents
 
