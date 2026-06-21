@@ -3,11 +3,11 @@ id: TASK-6.2
 title: >-
   JSONL index: produce the new-style (TREC-generic) index via the generic
   indexer
-status: Done
+status: To Do
 assignee:
   - '@claude'
 created_date: '2026-06-19 03:44'
-updated_date: '2026-06-20 21:09'
+updated_date: '2026-06-21 18:41'
 labels:
   - cpp
 dependencies:
@@ -65,15 +65,6 @@ remain in source until the redo. Add a sidecar round-trip test in their place.
   separate redo.
 <!-- SECTION:DESCRIPTION:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [x] #1 cottontail-jsonl-index produces the new-style index via the TASK-6.1 generic indexer: per row it parses (docid, contents) and calls add_document; the burrow has contents + one :item per document + the cp<->docno sidecar built by default; there is NO add_text(docid) and NO :docno annotation; the internal id is the :item start cp. The old style is removed (no docno tokenization, no opt-in flag).
-- [x] #2 docno uniqueness is validated: a duplicate docid fails indexing with a clear message.
-- [x] #3 A test indexes a small fixture and, from the produced burrow + sidecar, round-trips docid->cp and cp->docno and fetches the body via text_by_cp/text_by_docno.
-- [x] #4 The repo builds (//... minus the Boost-blocked targets) and the test suite is green: the :docno-dependent query-path tests (jsonl_get/jsonl_query/cover_search cases in test/jsonl.cc, test/jsonl_cli.cc, test/jsonl_server.cc) are retired/quarantined since that side is being redone; no attempt is made to keep old-style query behavior working.
-- [x] #5 docs (cli-spec, indexing.md) state that cottontail-jsonl-index now produces the new-style (TREC-generic) index with the sidecar, and that the query side is pending the redo.
-<!-- AC:END -->
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -114,6 +105,8 @@ bazel build //... minus the four Boost-blocked targets; then bazel test //test:t
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented. jsonl_index now drives DocnoContentsIndexer (apps/jsonl_core.cc): per row add_document(docid, contents); an add_document failure (empty docid/contents or zero-token contents) is a SKIP (++rows_skipped, fatal only under --strict, per Q1); indexer->finalize writes the sidecar and fails the build on a duplicate docid. Removed the old add_text(docid)+:docno block. Header comments updated in jsonl_core.h and cottontail-jsonl-index.cc. Query side (jsonl_query/get/count/explain/cover_search) left in source unchanged (pending the doc-4 cutover). Tests: 45 :docno/query-dependent cases quarantined with DISABLED_ (34 in jsonl.cc, 8 in jsonl_cli.cc, 3 in jsonl_server.cc) via an allowlist script that asserted each rename hit exactly once; the 16 indexing/structure cases kept; added JsonlSidecar.RoundTrip (AC#3) and JsonlIndex.DuplicateDocidFails (AC#2). Docs: cli-spec 3.3/3.4 + a query-side pending-redo banner on 4 + 7/8 fixes; indexing.md 1. Verified: bazel build //... minus the 4 Boost targets (47 targets) green; bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test all green.
+
+RE-SPEC for cp-native (doc-6, 2026-06-21). jsonl_index uses the TASK-6.1 cp-native CONTENT indexer (add_document(contents) -> cp) and, per row, dumps a flat (docid<TAB>cp) file alongside the burrow INSTEAD of building a sidecar. CHANGES: no sidecar; the burrow is cp-native (contents + :item only); docno uniqueness is NOT validated here -- it is enforced when the SQLite map is built (TASK-6.3, the UNIQUE index). KEPT: contentless rows skipped (fatal under --strict). The SQLite map + the Python front-door CLI are TASK-6.3. ACs replaced. Authoritative: doc-6 + docs/indexing.md.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
@@ -121,3 +114,12 @@ Implemented. jsonl_index now drives DocnoContentsIndexer (apps/jsonl_core.cc): p
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 cottontail-jsonl-index now produces the new-style (TREC-generic) burrow via the TASK-6.1 generic indexer: each document is stored as contents + one :item annotation, with the docid only in the cp<->docno sidecar (no docno tokenization, no :docno, no opt-in flag). jsonl_index calls DocnoContentsIndexer::add_document per row (contentless rows skipped like malformed rows; fatal under --strict) and indexer->finalize (writes the sidecar; a duplicate docid fails the build with a clear message). The :docno-based query side (jsonl_query/get/count/explain/cover_search and the server tools) is left in source unchanged and is the deferred cp/sidecar cutover (doc-4) -- its query-path tests are quarantined with DISABLED_ (45 cases) and the indexing/structure tests stay green; new tests JsonlSidecar.RoundTrip and JsonlIndex.DuplicateDocidFails cover the new behavior. Docs (cli-spec 3.3/3.4/4/7/8, indexing.md 1) state the new-style index + sidecar and that the query side is pending the redo. Verified: full build minus the Boost targets and all four test targets green.
 <!-- SECTION:FINAL_SUMMARY:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 cottontail-jsonl-index produces a cp-native burrow via the TASK-6.1 content indexer: per row parse (docid, contents), cp = add_document(contents); the burrow has contents + one :item per document, no :docno, no docno tokens. There is NO add_text(docid) and no sidecar.
+- [ ] #2 The indexer writes a flat (docid<TAB>cp) file alongside the burrow, one line per indexed row, cp matching that row :item start. (A docno-less corpus writes no flat file.)
+- [ ] #3 Contentless rows (empty/zero-token contents) are skipped (rows_skipped; fatal under --strict). docno uniqueness is NOT checked here -- it is enforced at SQLite build (TASK-6.3 UNIQUE index).
+- [ ] #4 The repo builds (//... minus the Boost-blocked targets) and the suite is green; the :docno-dependent query-path tests stay quarantined (the query side is redone cp-native under TASK-5).
+- [ ] #5 A test indexes a small fixture and asserts the burrow has no :docno / no docno tokens and the flat file lists (docid, cp) for each indexed row with cp matching the :item container_p(); docs (cli-spec, indexing.md) state cottontail-jsonl-index produces a cp-native burrow + a flat (docid,cp) dump, with the SQLite map built by the index CLI (TASK-6.3).
+<!-- AC:END -->

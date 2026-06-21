@@ -1,13 +1,13 @@
 ---
 id: TASK-6.1
 title: >-
-  Generic TREC-like indexing (src/): documents -> contents + :item + cp<->docno
-  sidecar
-status: Done
+  Generic cp-native content indexer (src/): add_document(contents) -> cp (no
+  docno, no sidecar)
+status: To Do
 assignee:
   - '@claude'
 created_date: '2026-06-19 03:43'
-updated_date: '2026-06-20 20:45'
+updated_date: '2026-06-21 18:47'
 labels:
   - cpp
 dependencies: []
@@ -73,17 +73,6 @@ Child B), and do NOT touch the existing query path / `:docno` consumers.
   (doc-4).
 <!-- SECTION:DESCRIPTION:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [x] #1 A new src/ module provides a generic indexer over a builder: add_document(docno, contents) indexes the contents (add_text) plus one :item annotation per document (internal id = the :item start cp) and does NOT tokenize the docno / creates no :docno; finalize() writes the cp<->docno sidecar BY DEFAULT (intrinsic, not opt-in) and validates docno uniqueness (a duplicate docno is a hard error). It depends only on the Cottontail core (no apps/JSONL coupling) and is wired into src/BUILD.
-- [x] #2 A sidecar reader loads from a burrow's working dir with docno_of(cp), span_of(cp)->(cp,cq), and cp_of(docno); fetch helpers text_by_cp(warren,cp) and text_by_docno(warren,docno) return the body via txt()->translate; an unknown cp/docno is not-found (not an error).
-- [x] #3 Layout sized for ~500M docs: cp[] resident and binary-searched (O(log m)); cq NOT stored but derived as cp_{i+1}-1 (final cq stored once); docno text read lazily from the on-disk blob; reverse docno->cp need not be RAM-resident.
-- [x] #4 Unit tests (test/, wired into test/BUILD) index a few (docno, contents) documents via the module and assert: the index contains NO :docno annotation and no docno tokens; cp<->docno round-trips; span_of derives cq correctly incl. the last document; text_by_cp/text_by_docno fetch the right body; an unknown docno/cp is not-found; a duplicate docno is rejected at finalize.
-- [x] #5 bazel build //src:cottontail and the new test target (plus //test:tests //test:hazel_test) are green.
-- [x] #6 add_document rejects empty or whitespace-only contents AND an empty docno as a HARD ERROR (not a silent skip): an empty body occupies no address range, so its cp would collide with the next document and break the unique-id invariant. Tests cover both rejections.
-- [x] #7 The reverse docno->cp lookup is DISK-BASED, not RAM-resident: cp_of binary-searches an on-disk docno-sorted permutation (sidecar.perm), reading each probed permutation entry and its docno text lazily from disk (O(log m) small reads), so one lookup never loads the full docno or permutation set into RAM. Firms up AC item 3 (need not be RAM-resident) into a requirement.
-<!-- AC:END -->
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -145,6 +134,8 @@ bazel build //src:cottontail; bazel test //test:tests //test:hazel_test (green).
 Empty-span guard confirmed against src/simple_builder.cc:568-592: add_text returns q<p (and does NOT advance the address) both for an empty string and for non-empty text that tokenizes to zero tokens (whitespace/punctuation-only). add_document therefore guards on (q_body < p_body) after add_text -> hard error, covering all no-indexable-token cases, not just the empty string. perm stored as native uint32 (m < 2^32 guarded at finalize).
 
 Implemented src/docno_contents_index.{h,cc} (DocnoContentsIndexer + DocnoContentsSidecar) and test/docno_contents_index.cc (5 test cases). Verified: bazel build //src:cottontail green; bazel test //test:tests //test:hazel_test green (tests 43.2s, hazel 0.4s). The new tests are picked up automatically by the //test:tests glob; no BUILD edits. Reader random-access (FileReader seeks to where, src/working.cc:44) confirms the lazy docno/perm reads work. The only build warnings are the pre-existing simple_posting operator== C++20 ambiguity (known backlog item), not from this module. Nothing in apps/ or the query path was touched.
+
+RE-SPEC for cp-native (doc-6, 2026-06-21). Reframed from a docno+sidecar indexer to a THIN cp-native CONTENT indexer. CHANGES: add_document takes ONLY contents and RETURNS cp (the :item start); it does NOT take or store a docno and builds NO map/sidecar. The custom DocnoContentsSidecar (binary cp<->docno format, docno-sorted permutation, lazy readers) is DELETED -- the cp<->docno map is now a SQLite store built by the index CLI (TASK-6.3) from a flat (docno,cp) dump the caller writes. docno is the application concern (doc-6), not this module concern. KEPT: the empty/zero-token contents hard error (the cp-uniqueness invariant). Rename the module/file to a cp-native name (no docno). ACs replaced. Authoritative: doc-6 + docs/indexing.md.
 <!-- SECTION:NOTES:END -->
 
 ## Comments
@@ -162,3 +153,13 @@ Plan + 2 new ACs added per the 2026-06-20 design discussion. Differences vs prio
 <!-- SECTION:FINAL_SUMMARY:BEGIN -->
 Added a generic, format-agnostic TREC-like indexing module in src/. DocnoContentsIndexer drives a Builder to store contents + one :item annotation per document (no docno tokenization, no :docno); the internal id is the :item start address cp. add_document hard-errors on empty docno/contents or zero-token contents (protects the unique-cp invariant). finalize() writes a cp<->docno sidecar by default (sidecar.index = header + post-compressed cp[]/offset[] loaded resident; sidecar.docno = uncompressed docno blob read lazily; sidecar.perm = docno-sorted uint32 permutation read lazily) and validates docno uniqueness via the sort that builds the reverse index. DocnoContentsSidecar reads back docno_of/span_of (cq derived as cp_{i+1}-1, final cq stored once)/cp_of (disk-based binary search, no full load) + text_by_cp/text_by_docno fetch via translate. Sized for ~500M docs per docs/indexing.md sec 6. Verified by test/docno_contents_index.cc and the full suite (//test:tests //test:hazel_test green).
 <!-- SECTION:FINAL_SUMMARY:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 A src/ module provides a thin cp-native content indexer over a builder: add_document(contents) -> cp does add_text(contents) + one :item annotation per document (cp = the :item start) and RETURNS cp. It takes no docno, stores no docno, and builds no map/sidecar. Depends only on the Cottontail core; wired into src/BUILD.
+- [ ] #2 The returned cp equals the :item container start (what ssr_ranking reports as container_p()), unique and strictly increasing by construction; finalize() finalizes the underlying builder.
+- [ ] #3 add_document rejects empty/whitespace-only contents, and contents that yield no indexable tokens, as a HARD ERROR (an empty body occupies no address range, so its cp would collide with the next document). This is the cp-uniqueness invariant, independent of docno.
+- [ ] #4 The custom DocnoContentsSidecar (binary cp<->docno format, permutation, lazy readers) and the docno parameter are REMOVED; the module/file is renamed to a cp-native name; the burrow has no :docno annotation and no docno tokens.
+- [ ] #5 Unit tests (test/, wired into test/BUILD) index a few contents and assert: cp values are distinct and strictly increasing; the returned cp matches the :item container_p() (verified via a hopper over :item); the index has no :docno and no docno tokens; empty/zero-token contents are rejected.
+- [ ] #6 bazel build //src:cottontail and the new test target (plus //test:tests //test:hazel_test) are green.
+<!-- AC:END -->
