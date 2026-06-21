@@ -162,9 +162,10 @@ in the document length). Two access paths, by identity:
   from a ranking result, so reading a document is `translate(cp, cq)` directly — no
   docno, no map. This is the ISJ loop's read-a-candidate path.
 - **By `docno` (the boundary path).** A human at the CLI, or another agent/task,
-  that holds only a **docno** fetches via the SQLite map: `docno → cp` (§6), then
-  `translate(cp, cq)` (with `cq` taken from the `:item` container at `cp`).
-  Occasional and latency-tolerant; the multi-threaded query path never does this.
+  that holds only a **docno** resolves `docno → cp` via the SQLite map **in Python**
+  (§6), then fetches the text by `cp` (the C++ get-by-`cp`: `translate(cp, cq)`, with
+  `cq` from the `:item` container at `cp`). Occasional and latency-tolerant; the
+  multi-threaded query path never touches the map.
 
 ## 6. The `cp ↔ docno` map — a SQLite store, off the hot path
 
@@ -188,12 +189,13 @@ store, built once at index time and read occasionally (decision doc-6):
   For a corpus with no docnos, step 1 writes no flat file and step 2 builds no
   store — a cp-only burrow.
 
-- **Read.** Python (`sqlite3`, stdlib) does the run-output `cp → docno` rewrite (a
-  bounded batch per intent) and the `docno → cp` lookup; the C++
-  `get_document`-by-docno tool reads the same file (`docno → cp`, then `translate`
-  over the `:item` span at that `cp`). The document *text* always comes from the
-  warren; the store holds only the identity mapping (`cq` is derived from the
-  `:item` container at `cp`, not stored).
+- **Read.** **Python owns the map** (`sqlite3`, stdlib): the run-output `cp → docno`
+  rewrite (a bounded batch per intent) and the `docno → cp` lookup. **C++ stays
+  SQLite-free** — the engine offers `get_document` **by `cp`**; a human/external
+  fetch by docno is a Python step (`docno → cp` via this map) followed by the C++
+  get-by-`cp` (`translate` over the `:item` span at that `cp`). The document *text*
+  always comes from the warren; the store holds only the identity mapping (`cq` is
+  derived from the `:item` container at `cp`, not stored).
 
 This replaces the earlier custom binary sidecar (a packed, compressed, lazily-read
 `cp ↔ docno` file with a docno-sorted permutation). That design was justified only
