@@ -1,5 +1,8 @@
 // cottontail-jsonl-index — index a directory tree of *.jsonl / *.jsonl.gz into a
-// static SimpleWarren burrow. See docs/cottontail-jsonl-cli-spec.md.
+// static SimpleWarren burrow. Each document is stored as its contents plus one
+// ":item" annotation; the docid lives only in a cp<->docno sidecar built at
+// index time (no ":docno", no docno tokens). See docs/indexing.md (doc-4) and
+// docs/cottontail-jsonl-cli-spec.md.
 //
 // Progress/warnings -> stderr; the final summary -> stdout as JSON.
 

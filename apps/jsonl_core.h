@@ -5,8 +5,16 @@
 // The CLIs are thin argv/JSON wrappers over these functions so the behavior is
 // unit-testable without spawning processes (see docs/cottontail-jsonl-cli-spec.md
 // §11). The index is a static, disk-based SimpleWarren with one document per JSON
-// row: a ":item" annotation spans the whole row, ":docno" marks the identifier.
-// Retrieval is cover-density / proximity ranking with no precomputed statistics.
+// row: it stores the contents plus one ":item" annotation over the body, and
+// nothing else (no docno tokenization, no ":docno"). The unique internal id is
+// the ":item" start address (cp); the docid lives only in a cp<->docno sidecar
+// built at index time (jsonl_index, via DocnoContentsIndexer). See
+// docs/indexing.md (decision doc-4).
+//
+// NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
+// jsonl_explain / jsonl_cover_search) still reads ":docno" and is therefore
+// INCOMPATIBLE with the new-style burrow -- it is pending the cp/sidecar redo
+// (the deferred cutover, doc-4) and is left in source unchanged for now.
 
 #include <cstdint>
 #include <memory>

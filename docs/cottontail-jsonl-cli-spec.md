@@ -135,22 +135,34 @@ is no matching flag on the query side. Default retrieval is exact surface tokens
 ### 3.3 JSONL parsing rules
 
 - One JSON object per line; blank lines skipped silently.
-- A line that fails to parse, or is missing the docid/contents field, is **skipped,
-  counted, and logged** at `--verbose`. It must **not** abort the run unless `--strict`.
+- A line that fails to parse, is missing the docid/contents field, or is
+  **contentless** (empty docid/contents, or contents with no indexable tokens) is
+  **skipped, counted, and logged** at `--verbose`. It must **not** abort the run
+  unless `--strict`.
+- A **duplicate docid** is a hard build failure (the sidecar requires unique
+  docids); it is reported at `finalize()` regardless of `--strict`.
 - Only `docid` and `contents` are read; every other field (including `id`) is ignored.
 
 ### 3.4 Indexing model (one row = one document)
 
-For each row, drive the builder directly (the `treccast21-build.cc` idiom), producing two
-structural annotations per row:
+For each row, the **generic indexer** (`DocnoContentsIndexer`,
+`src/docno_contents_index.h`) stores **only the contents**, bracketed by one
+structural annotation:
 
 ```
-add_text(docid)            -> (p_id,  q_id)      ; add_annotation(":docno", p_id, q_id)
-add_text(contents)         -> (p_body, q_body)   ; add_annotation(":item",  p_id, q_body)
+add_document(docid, contents):
+  add_text(contents) -> (p_body, q_body) ; add_annotation(":item", p_body, q_body)
+  record (cp = p_body, docid) for the sidecar
 ```
 
-- `:item` spans the **whole row** (id + body) and is the document/container extent.
-- `:docno` marks the identifier so every hit resolves back to its `docid`.
+- `:item` spans the **body** and is the document/container extent.
+- The docid is **not** tokenized and there is **no `:docno`** annotation. Indexing
+  the docid would bloat the inverted index with tokens we never search (e.g.
+  `shard_*`) — see `docs/indexing.md` §2.
+- The unique internal id is the `:item` start address `cp`. The docid lives only
+  in a `cp ↔ docno` **sidecar** the indexer writes by default at `finalize()`
+  (`sidecar.{index,docno,perm}` in the burrow dir); see `docs/indexing.md`
+  (decision doc-4). docids must be **unique** — a duplicate fails the build.
 - Body text is indexed **verbatim**.
 
 Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
@@ -158,8 +170,7 @@ Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokeniz
 folding). `--tokenizer ascii` selects the byte-level `ascii`/`noxml` tokenizer
 instead (faster, but non-ASCII bytes are separators, so e.g. `café` → `caf`).
 Neither tokenizer needs body sanitization: `<`, `>`, `&` are ordinary characters.
-The container/id are referenced at query time as the bare GCL tags `:item` and
-`:docno`.
+The container is referenced at query time as the bare GCL tag `:item`.
 
 ### 3.5 Build path & resource behavior
 
@@ -201,6 +212,18 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 ---
 
 ## 4. Program 2 — `cottontail-jsonl-query`
+
+> ⚠️ **Pending the cp/sidecar redo.** As of TASK-6.2 the indexer produces the
+> new-style burrow (contents + `:item` + sidecar, **no `:docno`**, see §3.4). The
+> query side described below (`--text`/`--gcl`/`--get`/`--count`/`--cover`,
+> `jsonl_query`/`jsonl_get`/`jsonl_count`/`jsonl_explain`/`jsonl_cover_search`,
+> and the server's `/tools/*`) still reads `:docno`, so it does **not** work
+> against new-style burrows: results carry empty docids and docid filters/fetches
+> miss. This is the deliberately deferred **retrieval-side cutover** (decision
+> doc-4): the query path will be reframed on `cp` + the sidecar (results emit the
+> docid via `cp → docno`; exclusion post-filters on `cp`; `get_document` does
+> `docno → cp → translate`). The sections below describe the *current* (old-model)
+> behavior and are retained for that redo.
 
 ### 4.1 Synopsis
 
@@ -442,7 +465,8 @@ Pass `--gcl` expressions through unchanged. The operator tokens are:
 | `<<` | CONTAINED_IN | left operand contained in right |
 | `>>` | CONTAINING | left operand containing right |
 
-Useful patterns for this corpus (container tag `:item`, id tag `:docno`):
+Useful patterns for this corpus (container tag `:item`; the docid is no longer a
+GCL tag — it lives in the sidecar, see §3.4):
 
 - Documents containing both terms: `(>> :item (^ influenza vaccination))`
 - Documents with the terms in order/proximity: `(>> :item (... influenza vaccination))`
@@ -457,7 +481,7 @@ Useful patterns for this corpus (container tag `:item`, id tag `:docno`):
 This is the exact path proven to build and query a static `SimpleWarren` over the corpus
 (see §9 for measured behavior). Bind to the real API; names below are accurate.
 
-**Index build (per the `treccast21-build.cc` idiom):**
+**Index build (via the generic indexer; new-style, see §3.4 / `docs/indexing.md`):**
 
 ```cpp
 auto working    = Working::mkdir(burrow, &error);
@@ -465,13 +489,15 @@ auto featurizer = Featurizer::make("hashing", "", &error, working);
 auto tokenizer  = Tokenizer::make("ascii", "noxml", &error);
 auto builder    = SimpleBuilder::make(working, featurizer, tokenizer, &error,
                                       buffer_records, buffer_records);
-// for each row:
-//   add_text(docid)    -> p_id, q_id ; add_annotation(":docno", p_id, q_id, 0.0)
-//   add_text(contents) -> p_b,  q_b  ; add_annotation(":item",  p_id, q_b,  0.0)
-builder->finalize(&error);                 // writes idx/pst/txt + dna; this IS the only precompute
+auto indexer    = DocnoContentsIndexer::make(builder, working, &error);
+// for each row:  indexer->add_document(docid, contents, &error);
+//   -> add_text(contents) + one ":item" over the body; records (cp, docid).
+//      NO add_text(docid), NO ":docno".
+indexer->finalize(&error);  // builder->finalize() + writes the cp<->docno sidecar
 ```
 
-**Query (read-only):**
+**Query (read-only)** — *old-model, pending the cp/sidecar redo (see the §4 banner);
+the `:docno` recovery below does not work against a new-style burrow:*
 
 ```cpp
 auto warren = Warren::make("simple", burrow, &error);

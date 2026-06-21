@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "src/builder.h"
+#include "src/docno_contents_index.h"
 #include "src/nlohmann.h"
 #include "src/ranking.h"
 #include "src/recipe.h"
@@ -551,6 +552,12 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
   if (builder == nullptr)
     return false;
   builder->verbose(opts.verbose);
+  // The generic indexer (docs/indexing.md, doc-4) stores each document as
+  // contents + one ":item" annotation and, at finalize(), writes the cp<->docno
+  // sidecar. It does NOT tokenize the docid and creates no ":docno".
+  auto indexer = DocnoContentsIndexer::make(builder, working, error);
+  if (indexer == nullptr)
+    return false;
 
   addr t0 = now();
   size_t rows = 0, skipped = 0, files_seen = 0;
@@ -599,16 +606,23 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
         }
         continue;
       }
-      addr p_id, q_id, p_body, q_body;
-      if (!builder->add_text(docid, &p_id, &q_id, error) ||
-          !builder->add_annotation(":docno", p_id, q_id, 0.0, error) ||
-          !builder->add_text(contents, &p_body, &q_body, error) ||
-          !builder->add_annotation(":item", p_id, q_body, 0.0, error))
-        return false;
+      std::string row_error;
+      if (!indexer->add_document(docid, contents, &row_error)) {
+        // A contentless row -- empty docid/contents, or contents with no
+        // indexable tokens -- is handled like a malformed row: skipped, fatal
+        // only under --strict. (A duplicate docid is caught later, by the
+        // indexer's finalize().)
+        skipped++;
+        if (opts.strict) {
+          safe_error(error) = row_error + " in " + file;
+          return false;
+        }
+        continue;
+      }
       rows++;
     }
   }
-  if (!builder->finalize(error))
+  if (!indexer->finalize(error))
     return false;
 
   if (summary != nullptr) {
