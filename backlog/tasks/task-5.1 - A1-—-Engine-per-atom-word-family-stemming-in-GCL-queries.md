@@ -4,12 +4,13 @@ title: 'A1 — Engine: cover_search tool with per-atom word* family stemming'
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:49'
-updated_date: '2026-06-21 01:37'
+updated_date: '2026-06-21 04:44'
 labels:
   - engine
   - cpp
   - searcher
-dependencies: []
+dependencies:
+  - TASK-5.12
 references:
   - docs/searcher-agent-lessons-June-16-2026.md
   - docs/stemming.md
@@ -207,5 +208,5 @@ Determinism: stemmed and exact share addresses -- assert docid SET membership, n
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-SPEC for the new-style index (doc-5, 2026-06-21). cover_search is redone on the cp/sidecar model. The word*/family-stemming and cover-biased summary behavior (ACs 1-11, 13-15, 18) is UNCHANGED in intent. What changes: (a) the response docid (AC 12) is now sourced via the sidecar cp->docno at emit time, NOT a :docno hopper; (b) ranking is within plain :item with the burrow sidecar opened alongside the warren; (c) cp stays engine-internal and is never emitted (doc-5 invariant). This task also establishes the shared engine plumbing reused by get_document and search emission: open the burrow + its sidecar plus a process-lifetime docno->cp cache. ACs were unchecked on reopen; re-verify against Scrapheap/climbmix-100k-porter.burrow with the TASK-6.2-quarantined cover tests restored as new-model tests. FOLDED IN here (no separate subtask yet): get_document reframed to docno->cp->translate, the search_text/search_gcl docid emission to cp->docno, and restoring their quarantined query-path tests -- split into its own subtask if preferred. Authoritative: doc-5 + docs/indexing.md sections 3-6.
+RE-SPEC for the new-style index (doc-5, 2026-06-21). cover_search is redone on the cp/sidecar model. The word*/family-stemming and cover-biased summary behavior (ACs 1-11, 13-15, 18) is UNCHANGED in intent. What changes: (a) the response docid (AC 12) is now sourced via the sidecar cp->docno at emit time, NOT a :docno hopper; (b) ranking is within plain :item with the burrow sidecar opened alongside the warren; (c) cp stays engine-internal and is never emitted (doc-5 invariant). This task DEPENDS ON TASK-5.12 (A3) for the shared engine plumbing it uses (the open-burrow-plus-sidecar helper and the process-lifetime docno->cp cache). ACs were unchecked on reopen; re-verify against Scrapheap/climbmix-100k-porter.burrow with the TASK-6.2-quarantined cover tests restored as new-model tests. The rest of the query-path cutover -- get_document (docno->cp->translate), the search_text/search_gcl docid emission (cp->docno), the shared sidecar plumbing above, and restoring the non-cover quarantined tests -- is tracked in TASK-5.12 (A3). Authoritative: doc-5 + docs/indexing.md sections 3-6.
 <!-- SECTION:NOTES:END -->

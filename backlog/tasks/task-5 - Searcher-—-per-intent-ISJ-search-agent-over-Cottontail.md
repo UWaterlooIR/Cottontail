@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-21 01:10'
+updated_date: '2026-06-21 04:44'
 labels:
   - searcher
 dependencies: []
@@ -107,7 +107,12 @@ instead). A reusable probe lives at isj/scouting/.
 
 ## Decomposition (subtasks)
 
-Engine/server track (C++) -- REDO on the cp/sidecar model; A1 -> A1b -> A2:
+Engine/server track (C++) -- REDO on the cp/sidecar model; A3 (plumbing) first, then A1 -> A1b -> A2:
+- A3 (5.12) cp/sidecar query-path plumbing: the shared open-burrow-plus-sidecar
+  helper + a docno->cp cache; get_document reframed (docno -> cp -> translate); the
+  search_text/search_gcl docid emission (cp -> docno); the cottontail-jsonl-query
+  CLI + server /tools/* opened on the sidecar; and the quarantined (non-cover)
+  query-path tests restored as new-model tests. A1/A2 build on its plumbing.
 - A1 (5.1) cover_search: word* stemming + cover-biased summary; carry the sidecar,
   rank plain `:item`, emit docno via cp->docno. [REOPENED -- shipped on :docno.]
 - A1b (5.11) cover_search returns a CoverResponse aggregate. [shape unchanged;
@@ -115,9 +120,6 @@ Engine/server track (C++) -- REDO on the cp/sidecar model; A1 -> A1b -> A2:
 - A2 (5.2) enrichment: total/unjudged_matches as a byproduct of the single pass;
   exclusion as a `cp` post-filter (resolve exclude docnos -> cp, cached);
   atom_counts; window override. [REOPENED -- shipped on :docno.]
-- Plus, in this track: get_document reframed (docno -> cp -> translate); the
-  cottontail-jsonl-query CLI + server /tools/* open the sidecar and use the new
-  functions; the quarantined query-path tests come back as new-model tests.
 - Retire the example agent (5.4): archive examples/agent/, superseded by isj/.
 
 Python agent track (isj/) -- docno-keyed, LIGHT re-spec; mock-tested, then converge:
