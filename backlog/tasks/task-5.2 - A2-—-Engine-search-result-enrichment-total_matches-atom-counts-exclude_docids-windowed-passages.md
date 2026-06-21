@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-21 19:08'
+updated_date: '2026-06-21 19:35'
 labels:
   - engine
   - cpp
@@ -149,6 +149,24 @@ call, no gaps; NOT an absolute position and NOT the TREC submission rank.
 - Do NOT touch the Python isj agent.
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude), equal to a plain :item count for that query, independent of top_k.
+- [ ] #2 cover_search response includes unjudged_matches: matching DOCUMENTS whose cp is NOT in the exclude set, computed as a byproduct of the single ssr ranking pass; results are drawn from these; equals total_matches when exclude is empty.
+- [ ] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
+- [ ] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
+- [ ] #5 cover_search request accepts exclude (a list of cp integers); it excludes by a direct cp POST-FILTER on the ranked results, over-fetching depth = top_k + size of exclude, so with top_k=K and some excluded the response still returns up to K non-excluded hits.
+- [ ] #6 Excluding a cp that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
+- [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
+- [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
+- [ ] #9 The server cover_search is stateless: two requests with different exclude do not interfere.
+- [ ] #10 Determinism: tests assert on cp SET membership, not tied order.
+- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
+- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude, window, and the rank/score semantics.
+- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
+- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, cp, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
+- [ ] #15 GET /describe lists cover_search and its request fields (including exclude and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
+<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -159,7 +177,7 @@ jsonl_cover_search to return CoverResponse*. A2 POPULATES those fields and adds 
 fields; it does not reintroduce the types. Reuses A1's word*->feature helper and summary. Adapt.
 
 CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
-- Q1 [REVISED per doc-5] Exclusion is an EXACT cp post-filter, not a GCL containment carve.
+- Q1 [REVISED per doc-6] Exclusion is an EXACT cp post-filter, not a GCL containment carve.
   Resolving each docno to its cp (sidecar reverse) and testing cp membership is exact and
   collision-free by construction, so the old containment / over-exclusion caveat no longer
   applies (and there is nothing to document about it).
@@ -240,22 +258,3 @@ Test: bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_s
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. Exclusion is a DIRECT cp post-filter: the request `exclude` is a list of cp integers (no docno, no resolution, no sidecar/cache); over-fetch top_k + |exclude|; drop hits whose cp is in the exclude set. Each returned hit carries its cp (response {rank, score, cp, summary}). total/unjudged_matches are a byproduct of the single ssr pass (unjudged = matching cps not in exclude). atom_counts/window/rank/score unchanged. Authoritative: doc-6 + docs/indexing.md section 4.
 <!-- SECTION:NOTES:END -->
-
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude), equal to a plain :item count for that query, independent of top_k.
-- [ ] #2 cover_search response includes unjudged_matches: matching DOCUMENTS whose cp is NOT in the exclude set, computed as a byproduct of the single ssr ranking pass; results are drawn from these; equals total_matches when exclude is empty.
-- [ ] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
-- [ ] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
-- [ ] #5 cover_search request accepts exclude (a list of cp integers); it excludes by a direct cp POST-FILTER on the ranked results, over-fetching depth = top_k + size of exclude, so with top_k=K and some excluded the response still returns up to K non-excluded hits.
-- [ ] #6 Excluding a cp that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
-- [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
-- [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
-- [ ] #9 The server cover_search is stateless: two requests with different exclude do not interfere.
-- [ ] #10 Determinism: tests assert on cp SET membership, not tied order.
-- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
-- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude, window, and the rank/score semantics.
-- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
-- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, cp, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
-- [ ] #15 GET /describe lists cover_search and its request fields (including exclude and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
-<!-- AC:END -->

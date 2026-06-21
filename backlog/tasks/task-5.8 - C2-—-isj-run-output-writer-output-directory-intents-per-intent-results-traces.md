@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 04:40'
-updated_date: '2026-06-21 19:00'
+updated_date: '2026-06-21 19:41'
 labels:
   - python
   - isj
@@ -45,7 +45,7 @@ and catches the errors.
 The types:
 - Intents (isj_agent/protocol/intents.py): { question: str, interpretations: list[str] }.
 - RankedList (B2): { intent: str, entries: list[RankedEntry] }, RankedEntry =
-  { rank, docid, grade (0-4), score, summary, reason, surfacing_query }.
+  { rank, cp, grade (0-4), score, summary, reason, surfacing_query }.
 - TraceEvent (B2): { type, ts (epoch seconds), duration_ms, ...type-specific fields }
   (extra="allow") — the trace is a list of these (a research artifact for statistics).
 
@@ -101,18 +101,6 @@ The types:
   serializes them to JSON Lines and writes errors.log from the errors it is given.
 <!-- SECTION:DESCRIPTION:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 isj_agent/run_output.py defines the run-directory layout and a writer (write_run) that, given an Intents and the per-intent results, writes <outdir>/intents.json plus intent-NN.json and intent-NN.trace.jsonl as specified.
-- [ ] #2 intents.json is Intents.model_dump_json(indent=2); each intent-NN.json is the RankedList for interpretations[NN] (model_dump_json indent=2); NN is zero-based, zero-padded (>=2 digits), and matches the interpretation index.
-- [ ] #3 intent-NN.trace.jsonl is the per-intent event trace serialized as JSON Lines — one TraceEvent JSON object per line (event.model_dump_json() per line); an empty event list writes an empty file.
-- [ ] #4 The writer creates the output directory and refuses to overwrite a non-empty existing directory unless overwrite=True.
-- [ ] #5 C2 is pure (filesystem only): no network, no LLM, no Searcher logic, no trace generation; it persists whatever RankedList + events it is given.
-- [ ] #6 Tests (no network) write a run to a temp dir and assert: intents.json round-trips to the Intents; each intent-NN.json round-trips to its RankedList; intent-NN.trace.jsonl has one JSON object per line that round-trips to a TraceEvent and preserves order; file count and NN padding are correct; the count-mismatch and overwrite guards work.
-- [ ] #7 uv run --directory isj pytest tests/ exits 0; isj/README.md documents the run-output directory layout and that intent-NN.trace.jsonl is a JSON-Lines event log (a research artifact).
-- [ ] #8 write_run takes one outcome per interpretation, in order (len(outcomes) == len(intents.interpretations)); each is a success (IntentResult) or a failure (RunError); a count mismatch raises.
-- [ ] #9 errors.log is written IFF at least one outcome is a failure (or a run-level error is passed): it contains the error messages, each tagged with the failing intent's index (and interpretation) where intent-specific. Its ABSENCE means every intent completed successfully; a failed intent has no intent-NN.json/.trace.jsonl and appears only in errors.log.
-<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -145,3 +133,17 @@ Pure Python in isj/. Depends on B2's RankedList/TraceEvent/SearcherResult. Adapt
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. CHANGE: C2 now performs the cp->docno REWRITE at write time -- it maps each persisted result/trace cp to its docno via the TASK-6.3 SQLite reader, so the saved files carry docno (portable), never a raw cp. Results are cp in memory; docno on disk. (A docno-less corpus persists cp.) The intents + per-intent RankedList + trace.jsonl + errors.log layout is unchanged. Authoritative: doc-6 + TASK-6.3.
 <!-- SECTION:NOTES:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 isj_agent/run_output.py defines the run-directory layout and a writer (write_run) that, given an Intents and the per-intent results, writes <outdir>/intents.json plus intent-NN.json and intent-NN.trace.jsonl as specified.
+- [ ] #2 intents.json is Intents.model_dump_json(indent=2); each intent-NN.json is the RankedList for interpretations[NN] (model_dump_json indent=2); NN is zero-based, zero-padded (>=2 digits), and matches the interpretation index.
+- [ ] #3 intent-NN.trace.jsonl is the per-intent event trace serialized as JSON Lines — one TraceEvent JSON object per line (event.model_dump_json() per line); an empty event list writes an empty file.
+- [ ] #4 The writer creates the output directory and refuses to overwrite a non-empty existing directory unless overwrite=True.
+- [ ] #5 C2 is pure (filesystem only): no network, no LLM, no Searcher logic, no trace generation; it persists whatever RankedList + events it is given.
+- [ ] #6 Tests (no network) write a run to a temp dir and assert: intents.json round-trips to the Intents; each intent-NN.json round-trips to its RankedList; intent-NN.trace.jsonl has one JSON object per line that round-trips to a TraceEvent and preserves order; file count and NN padding are correct; the count-mismatch and overwrite guards work.
+- [ ] #7 uv run --directory isj pytest tests/ exits 0; isj/README.md documents the run-output directory layout and that intent-NN.trace.jsonl is a JSON-Lines event log (a research artifact).
+- [ ] #8 write_run takes one outcome per interpretation, in order (len(outcomes) == len(intents.interpretations)); each is a success (IntentResult) or a failure (RunError); a count mismatch raises.
+- [ ] #9 errors.log is written IFF at least one outcome is a failure (or a run-level error is passed): it contains the error messages, each tagged with the failing intent's index (and interpretation) where intent-specific. Its ABSENCE means every intent completed successfully; a failed intent has no intent-NN.json/.trace.jsonl and appears only in errors.log.
+- [ ] #10 Before persisting, C2 rewrites each RankedEntry cp to its docno via the TASK-6.3 SQLite reader, so the written intent-NN.json carries docno (portable), never a raw cp; a docno-less corpus (no map) persists cp.
+<!-- AC:END -->

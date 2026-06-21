@@ -4,7 +4,7 @@ title: 'A1 — Engine: cover_search tool with per-atom word* family stemming'
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:49'
-updated_date: '2026-06-21 18:57'
+updated_date: '2026-06-21 19:35'
 labels:
   - engine
   - cpp
@@ -86,7 +86,7 @@ task replaces that with a real cover-biased summary, see below.)
    `ssr` cover density (score = sum over the document's covers of 1/(K+q-p)), and returns
    per document: { rank, score, cp, summary }. `summary` REPLACES the old
    `best_passage` (which was merely the document head). (A2 adds the request `window`
-   override plus total_matches/unjudged_matches/atom_counts/exclude_docids.)
+   override plus total_matches/unjudged_matches/atom_counts/exclude.)
 2. `word*` (a single word token ending in a literal `*`) -> the stemmed-stream atom via a
    SHARED helper resolve_family_atom(stemmer, word) = stem_atom(stemmer, word). cover_search
    ALWAYS interprets `word*` (no flag). Symmetric fallback for unstemmable words (`ox*` ->
@@ -140,7 +140,7 @@ offsets for later grounding; the text is the required deliverable.)
 ## Non-goals
 
 - Do NOT modify `search_gcl` (pure GCL) or the GCL core.
-- Do NOT add total_matches/unjudged_matches/atom_counts/exclude_docids or the request-side
+- Do NOT add total_matches/unjudged_matches/atom_counts/exclude or the request-side
   `window` override — that is A2 (A2 reuses this summary, parameterized by `window`).
 - Do NOT give cover_search a whole-query stem flag; per-atom `word*` is its mechanism.
 - Do NOT build a tool registry or per-agent/profile filtering on the server (rejected
@@ -148,47 +148,6 @@ offsets for later grounding; the text is the required deliverable.)
 - Do NOT touch the Python isj agent. Do NOT write a warren-level stemmer into dna; only
   READ the burrow's stemmer.
 <!-- SECTION:DESCRIPTION:END -->
-
-
-## Implementation Plan
-
-<!-- SECTION:PLAN:BEGIN -->
-Grounded in the current code (verified): hopper_from_gcl = from_string -> expand_phrases(tokenizer,'"') -> to_hopper; ssr_ranking takes a GCL STRING and re-parses it; stem_gcl is already a string-level rewriter; ssr_ranking returns only the container span (covers discarded). On branch claude/trec-rag-2026-design (do NOT branch). Adapt as needed.
-
-DESIGN DECISIONS (made during the read; flagged to the user):
-- D1 Rewrite word* at the STRING level (a new cover_rewrite, mirroring stem_gcl), producing an ordinary GCL string fed to BOTH ssr_ranking (phase 1) and hopper_from_gcl (phase 2). Avoids touching the GCL core and reuses existing parsing.
-- D2 Phrase-internal word* must be desugared BEFORE the standard expand_phrases (which would tokenize porter:<stem> wrongly): in cover_rewrite, a star-containing quoted phrase is split on WHITESPACE (to preserve each word's trailing *), each word* translated, emitted as the explicit (>> (# n) (... a b ...)); n = whitespace-token count. Star-free phrases stay quoted for the normal pass. (Known simplification: whitespace split, not tokenizer->split; fine for the corpus; note in docs.)
-- D3 The summary window W is an INTERNAL parameter (default 75) in A1; A1 does NOT parse a request-side window (that is A2's boundary).
-
-1. resolve_family_atom(stemmer, word) -> stem_atom(stemmer, word): the SINGLE shared word*->feature helper (A2's atom_counts reuses it). bear -> porter:bear; ox -> ox (symmetric fallback).
-2. cover_rewrite(query, stemmer, &error) in apps/jsonl_core.cc (anon ns): scan like stem_gcl. Operators/:tags verbatim; a token ending in * -> strip the star, error on any remaining * (mid-token) or empty word, else resolve_family_atom; bare token exact; inside quotes desugar star-containing phrases per D2, leave star-free phrases quoted. Returns the rewritten GCL string (false/error on a mid-token star).
-3. Structs in jsonl_core.h: CoverSpec { string query; size_t top_k = 10; } and CoverHit { int rank; double score; string docid; string summary; }. (A2 extends CoverSpec with exclude_docids/window.)
-4. jsonl_cover_search(warren, CoverSpec, vector<CoverHit>*, &error) in jsonl_core.cc:
-   a. If the query uses word* and burrow_stemmer(warren)==nullptr -> error (no stemmed stream; CLI exit 2 / server 400).
-   b. rewritten = cover_rewrite(...); validate via hopper_from_gcl (bad GCL / mid-token star -> error).
-   c. PHASE 1: ssr_ranking(warren, rewritten, ":item", top_k) -> container spans + scores; each hit carries its cp (= container_p()).
-   d. PHASE 2 (per RETURNED container only): build the query hopper from rewritten; tau(cp); iterate while q<=cq collecting that doc's (p,q) covers (mirroring ranking.cc:327-345). Do NOT re-rank the corpus and do NOT read covers off RankingResult.
-   e. cover_summary(warren, covers, body_start=dq+1, body_end=cq, W=75) -> summary.
-5. cover_summary(warren, covers, body_start, body_end, W): per cover width T=max(W,cover_len), center on the cover, shift inward at body edges (clamp to body if shorter than T); union in document order; merge overlapping/touching extents; render each via txt()->translate; join non-contiguous extents with " . . . "; single extent no separator.
-6. apps/jsonl_json.{h,cc}: cover_results_json(hits) -> { "results":[{rank,score,docid,summary}] }; add a cover_search entry to describe_json() (query + top_k + a word* description). (A2 adds exclude_docids/window + the enrichment fields.)
-7. apps/cottontail-jsonl-server.cc: cover_spec_from(b) + svr.Post("/tools/cover_search", ...) mirroring the search handler (parse -> jsonl_cover_search -> cover_results_json; errors -> fail(res,400,...)).
-8. apps/cottontail-jsonl-query.cc: add a --cover mode (a new mutually-exclusive mode) for CLI/test use; errors exit 2.
-9. Tests (build an inline --stem porter burrow via the existing build(...,stemmer,...) helper; assert docid SET membership, not order):
-   - test/jsonl.cc: AC#1-5,#8,#9,#12-15 (family recall, bare-exact, mixed cover, ox* fallback, phrase-internal star, :tags untouched, shared-helper invariant, response shape, summary windowing/merge/dots/edge-clamp/cover-longer-than-window).
-   - test/jsonl_cli.cc: --cover happy path; mid-token star -> exit 2 (#6); word* on a non-stemmed burrow -> exit 2 (#7).
-   - test/jsonl_server.cc: POST /tools/cover_search round-trip; GET /describe lists cover_search (#16/#17); search_gcl unchanged (#10).
-10. Docs: docs/stemming.md (word* marker, honored in phrases, distinct from whole-query --stem); cli-spec + server-spec describe cover_search.
-
-Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
-Test: bazel test //test:tests //test:hazel_test //test:jsonl_test (plus server test).
-Determinism: stemmed and exact share addresses -- assert docid SET membership, not order.
-<!-- SECTION:PLAN:END -->
-
-## Implementation Notes
-
-<!-- SECTION:NOTES:BEGIN -->
-RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. cover_search returns each hit cp (= container_p()), NOT a docno: the response per document is {rank, score, cp, summary}; cp is on the wire. There is NO sidecar and NO docno in the engine (the cp->docno rewrite is C2 persistence). The word*/family stemming and cover-biased summary behavior is unchanged. Builds on TASK-5.12 (A3) open-warren path. Authoritative: doc-6 + docs/indexing.md.
-<!-- SECTION:NOTES:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
@@ -211,3 +170,43 @@ RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. 
 - [ ] #17 cover_search is included in describe_json so GET /describe lists it (the server advertises all its tools; there is no per-agent/profile filtering).
 - [ ] #18 The summary is built in a PHASE 2 over only the top_k returned documents: because ssr_ranking returns only the container span per result (not the covers), the builder recovers each returned document's covers by walking the query hopper within that container [cp,cq] (mirroring ranking.cc:327-345); it does NOT re-rank the corpus and does NOT read covers off RankingResult.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Grounded in the current code (verified): hopper_from_gcl = from_string -> expand_phrases(tokenizer,'"') -> to_hopper; ssr_ranking takes a GCL STRING and re-parses it; stem_gcl is already a string-level rewriter; ssr_ranking returns only the container span (covers discarded). On branch claude/trec-rag-2026-design (do NOT branch). Adapt as needed.
+
+DESIGN DECISIONS (made during the read; flagged to the user):
+- D1 Rewrite word* at the STRING level (a new cover_rewrite, mirroring stem_gcl), producing an ordinary GCL string fed to BOTH ssr_ranking (phase 1) and hopper_from_gcl (phase 2). Avoids touching the GCL core and reuses existing parsing.
+- D2 Phrase-internal word* must be desugared BEFORE the standard expand_phrases (which would tokenize porter:<stem> wrongly): in cover_rewrite, a star-containing quoted phrase is split on WHITESPACE (to preserve each word's trailing *), each word* translated, emitted as the explicit (>> (# n) (... a b ...)); n = whitespace-token count. Star-free phrases stay quoted for the normal pass. (Known simplification: whitespace split, not tokenizer->split; fine for the corpus; note in docs.)
+- D3 The summary window W is an INTERNAL parameter (default 75) in A1; A1 does NOT parse a request-side window (that is A2's boundary).
+
+1. resolve_family_atom(stemmer, word) -> stem_atom(stemmer, word): the SINGLE shared word*->feature helper (A2's atom_counts reuses it). bear -> porter:bear; ox -> ox (symmetric fallback).
+2. cover_rewrite(query, stemmer, &error) in apps/jsonl_core.cc (anon ns): scan like stem_gcl. Operators/:tags verbatim; a token ending in * -> strip the star, error on any remaining * (mid-token) or empty word, else resolve_family_atom; bare token exact; inside quotes desugar star-containing phrases per D2, leave star-free phrases quoted. Returns the rewritten GCL string (false/error on a mid-token star).
+3. Structs in jsonl_core.h: CoverSpec { string query; size_t top_k = 10; } and CoverHit { int rank; double score; addr cp; string summary; }. (A2 extends CoverSpec with exclude/window.)
+4. jsonl_cover_search(warren, CoverSpec, vector<CoverHit>*, &error) in jsonl_core.cc:
+   a. If the query uses word* and burrow_stemmer(warren)==nullptr -> error (no stemmed stream; CLI exit 2 / server 400).
+   b. rewritten = cover_rewrite(...); validate via hopper_from_gcl (bad GCL / mid-token star -> error).
+   c. PHASE 1: ssr_ranking(warren, rewritten, ":item", top_k) -> container spans + scores; each hit carries its cp (= container_p()).
+   d. PHASE 2 (per RETURNED container only): build the query hopper from rewritten; tau(cp); iterate while q<=cq collecting that doc's (p,q) covers (mirroring ranking.cc:327-345). Do NOT re-rank the corpus and do NOT read covers off RankingResult.
+   e. cover_summary(warren, covers, body_start=dq+1, body_end=cq, W=75) -> summary.
+5. cover_summary(warren, covers, body_start, body_end, W): per cover width T=max(W,cover_len), center on the cover, shift inward at body edges (clamp to body if shorter than T); union in document order; merge overlapping/touching extents; render each via txt()->translate; join non-contiguous extents with " . . . "; single extent no separator.
+6. apps/jsonl_json.{h,cc}: cover_results_json(hits) -> { "results":[{rank,score,cp,summary}] }; add a cover_search entry to describe_json() (query + top_k + a word* description). (A2 adds exclude/window + the enrichment fields.)
+7. apps/cottontail-jsonl-server.cc: cover_spec_from(b) + svr.Post("/tools/cover_search", ...) mirroring the search handler (parse -> jsonl_cover_search -> cover_results_json; errors -> fail(res,400,...)).
+8. apps/cottontail-jsonl-query.cc: add a --cover mode (a new mutually-exclusive mode) for CLI/test use; errors exit 2.
+9. Tests (build an inline --stem porter burrow via the existing build(...,stemmer,...) helper; assert cp SET membership, not order):
+   - test/jsonl.cc: AC#1-5,#8,#9,#12-15 (family recall, bare-exact, mixed cover, ox* fallback, phrase-internal star, :tags untouched, shared-helper invariant, response shape, summary windowing/merge/dots/edge-clamp/cover-longer-than-window).
+   - test/jsonl_cli.cc: --cover happy path; mid-token star -> exit 2 (#6); word* on a non-stemmed burrow -> exit 2 (#7).
+   - test/jsonl_server.cc: POST /tools/cover_search round-trip; GET /describe lists cover_search (#16/#17); search_gcl unchanged (#10).
+10. Docs: docs/stemming.md (word* marker, honored in phrases, distinct from whole-query --stem); cli-spec + server-spec describe cover_search.
+
+Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
+Test: bazel test //test:tests //test:hazel_test //test:jsonl_test (plus server test).
+Determinism: stemmed and exact share addresses -- assert cp SET membership, not order.
+<!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. cover_search returns each hit cp (= container_p()), NOT a docno: the response per document is {rank, score, cp, summary}; cp is on the wire. There is NO sidecar and NO docno in the engine (the cp->docno rewrite is C2 persistence). The word*/family stemming and cover-biased summary behavior is unchanged. Builds on TASK-5.12 (A3) open-warren path. Authoritative: doc-6 + docs/indexing.md.
+<!-- SECTION:NOTES:END -->

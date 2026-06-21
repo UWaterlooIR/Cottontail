@@ -3,8 +3,10 @@ id: doc-4
 title: Decision — TREC-like indexing and internal-document-id model
 type: specification
 created_date: '2026-06-19 03:39'
-updated_date: '2026-06-19 03:39'
+updated_date: '2026-06-21 19:36'
 ---
+> **Refined by doc-6 (2026-06-21):** the `cp <-> docno` **sidecar** in this decision is now a **SQLite map**, built off the hot path from a flat (docid,cp) dump; and `cp` is the working identity on the wire (not engine-internal). The core here (contents + one :item, cp = the :item start) stands. See doc-6.
+
 **Status:** accepted (2026-06-19).
 
 Authoritative detail: **docs/indexing.md** (this is a short pointer/record).

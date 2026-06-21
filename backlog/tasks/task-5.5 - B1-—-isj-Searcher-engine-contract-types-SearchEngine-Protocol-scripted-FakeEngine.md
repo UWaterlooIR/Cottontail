@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 02:17'
-updated_date: '2026-06-21 19:00'
+updated_date: '2026-06-21 19:52'
 labels:
   - python
   - isj
@@ -49,13 +49,13 @@ Python agent track from the C++ engine track. The real HTTP-backed engine
 
 The cover_search contract this mirrors (A1 = TASK-5.1, A2 = TASK-5.2):
 - request: query (a GCL cover string that MAY use the word* family marker), top_k,
-  exclude_docids (the judged set to skip), window (summary window size in tokens,
+  exclude (the judged set to skip), window (summary window size in tokens,
   default 75).
 - response: total_matches and unjudged_matches (DOCUMENT counts; unjudged = matches minus
-  exclude_docids), atom_counts (per query leaf {term, count}, count = total OCCURRENCES),
-  results (ranked {rank, score, docid, summary}, summary = the cover-biased extractive
+  exclude), atom_counts (per query leaf {term, count}, count = total OCCURRENCES),
+  results (ranked {rank, score, cp, summary}, summary = the cover-biased extractive
   summary).
-The agent holds the judged set and passes it as exclude_docids each call (the engine is
+The agent holds the judged set and passes it as exclude each call (the engine is
 stateless). Judgement grade scale is 0-4 (UMBRELA-aligned).
 
 NOTE ON DEPENDENCIES (why B1 has none yet mirrors A2's shape): B1 carries NO task
@@ -121,18 +121,18 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
    class Hit(BaseModel):
        rank: int                        # 1-based within this response
        score: float                     # ssr cover-density score
-       docid: str
+       cp: str
        summary: str                     # cover-biased extractive summary (A1)
 
    class SearchResponse(BaseModel):
        model_config = ConfigDict(extra="forbid")   # see strictness decision above
-       total_matches: int               # documents matching the query (ignores exclude_docids)
-       unjudged_matches: int            # matches minus exclude_docids
+       total_matches: int               # documents matching the query (ignores exclude)
+       unjudged_matches: int            # matches minus exclude
        atom_counts: list[AtomCount]
        results: list[Hit]
 
    class Judgement(BaseModel):
-       docid: str
+       cp: str
        grade: int = Field(ge=0, le=4)   # 0-4 UMBRELA-aligned; out-of-range -> ValidationError
        reason: str
 
@@ -141,8 +141,8 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 2. SearchEngine Protocol (isj_agent/engine/base.py) — a typing.Protocol, runtime_checkable,
    so both FakeEngine (B1) and the future HttpSearchEngine (C1) satisfy it STRUCTURALLY:
    - search(self, query: str, *, top_k: int = 10,
-            exclude_docids: Sequence[str] = (), window: int = 75) -> SearchResponse
-   - read(self, docid: str) -> str | None    (full document body; None if docid unknown)
+            exclude: Sequence[str] = (), window: int = 75) -> SearchResponse
+   - read(self, cp: str) -> str | None    (full document body; None if cp unknown)
    These mirror the server tools cover_search and get_document. There is NO judge
    method on the engine — judging is controller-side state in B2; B1 only defines the
    Judgement type.
@@ -157,20 +157,20 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 3. FakeEngine (isj_agent/engine/fake.py) implementing SearchEngine deterministically from
    a SCRIPT:
    - Constructed with an ordered list of script ENTRIES — each entry is either a scripted
-     SearchResponse batch OR an EngineError to raise — and an optional docid->text map for
+     SearchResponse batch OR an EngineError to raise — and an optional cp->text map for
      read().
    - Each search() consumes the next script entry: a SearchResponse is returned (after the
      exclude/re-rank step below); an EngineError entry is RAISED (so B2 can test the
      engine-error bounce). Either way the call is recorded (see below). Once the script is
      exhausted, search() returns a DRY response (total_matches=0, unjudged_matches=0, empty
      results) so the loop terminates.
-   - Honors exclude_docids on SearchResponse entries: removes any Hit whose docid is in
-     exclude_docids from the returned batch, decrements unjudged_matches by the number
+   - Honors exclude on SearchResponse entries: removes any Hit whose cp is in
+     exclude from the returned batch, decrements unjudged_matches by the number
      removed, leaves total_matches unchanged (exclusions do not change corpus-wide breadth),
      and re-ranks the surviving Hits 1..N.
-   - Records every call's arguments (query, top_k, exclude_docids, window) on a public
+   - Records every call's arguments (query, top_k, exclude, window) on a public
      attribute so tests can assert what the controller sent — including for calls that raise.
-   - read(docid) returns the mapped text or None (and may raise EngineError if a test
+   - read(cp) returns the mapped text or None (and may raise EngineError if a test
      scripts it to). No network, no LLM, fully deterministic.
 
 ## Non-goals
@@ -186,11 +186,11 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 isj_agent/protocol/search.py defines pydantic v2 AtomCount{term,count}, Hit{rank,score,docid,summary}, and SearchResponse{total_matches,unjudged_matches,atom_counts,results}, matching the cover_search response shape (A2).
-- [ ] #2 isj_agent/protocol/search.py defines Judgement{docid,grade,reason} with grade constrained to 0..4 (grade 5 or -1 raises a pydantic ValidationError); the per-intent RankedList type is NOT defined in B1 (deferred to B2).
+- [ ] #1 isj_agent/protocol/search.py defines pydantic v2 AtomCount{term,count}, Hit{rank,score,cp,summary}, and SearchResponse{total_matches,unjudged_matches,atom_counts,results}, matching the cover_search response shape (A2).
+- [ ] #2 isj_agent/protocol/search.py defines Judgement{cp,grade,reason} with grade constrained to 0..4 (grade 5 or -1 raises a pydantic ValidationError); the per-intent RankedList type is NOT defined in B1 (deferred to B2).
 - [ ] #3 isj_agent/engine/fake.py FakeEngine implements SearchEngine from an ordered list of scripted SearchResponse batches: successive search() calls return successive batches, and once exhausted it returns a dry response (total_matches=0, unjudged_matches=0, empty results).
-- [ ] #4 FakeEngine honors exclude_docids: Hits whose docid is in exclude_docids are removed from the returned batch, unjudged_matches is decremented by the number removed, total_matches is unchanged, and the surviving Hits are re-ranked 1..N.
-- [ ] #5 FakeEngine records each search() call's (query, top_k, exclude_docids, window) on a public attribute for test assertions; read(docid) returns the mapped text or None.
+- [ ] #4 FakeEngine honors exclude: Hits whose cp is in exclude are removed from the returned batch, unjudged_matches is decremented by the number removed, total_matches is unchanged, and the surviving Hits are re-ranked 1..N.
+- [ ] #5 FakeEngine records each search() call's (query, top_k, exclude, window) on a public attribute for test assertions; read(cp) returns the mapped text or None.
 - [ ] #6 A conformance test confirms FakeEngine satisfies the SearchEngine Protocol (runtime_checkable isinstance); the same Protocol is what HttpSearchEngine will satisfy in C1.
 - [ ] #7 isj/tests cover type validation (incl. grade 0..4 bounds), FakeEngine ordering and dry-out, exclude handling with unjudged decrement and re-rank, call recording, read, and Protocol conformance; no test contacts a network or an LLM.
 - [ ] #8 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0.
@@ -199,7 +199,7 @@ unexpected field fails LOUDLY (catch contract drift) instead of silently droppin
 - [ ] #11 isj_agent/engine/base.py defines class EngineError(Exception) with a human-readable message; the SearchEngine Protocol documents that search() and read() MAY raise EngineError to signal any engine-side failure (an invalid query is one case), and there is no Python-side query validation.
 - [ ] #12 FakeEngine supports scripted errors: a script entry may be an EngineError, and the corresponding search() call raises it (with the call still recorded), so B2 can test the engine-error bounce.
 - [ ] #13 read() on the SearchEngine Protocol (and FakeEngine.read) carries a docstring/comment stating it is intentionally part of the engine contract for FUTURE use (a possible agent read-tool, and the downstream RAG grounding/Writer step) even though the B2 MVP does not call it; it must NOT be removed as unused. isj/README notes the same.
-- [ ] #14 isj_agent/engine/base.py defines a runtime_checkable SearchEngine typing.Protocol with search(query, *, top_k=10, exclude_docids=(), window=75) -> SearchResponse and read(docid) -> str | None, mirroring the server's cover_search and get_document tools; the engine has no judge method.
+- [ ] #14 isj_agent/engine/base.py defines a runtime_checkable SearchEngine typing.Protocol with search(query, *, top_k=10, exclude=(), window=75) -> SearchResponse and read(cp) -> str | None, mirroring the server's cover_search and get_document tools; the engine has no judge method.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -214,21 +214,21 @@ description and the exemplar isj_agent/protocol/intents.py + isj_agent/agents/an
    ConfigDict(extra="forbid")). Export the names the way intents.py is exported.
 3. isj_agent/engine/base.py: from typing import Protocol, runtime_checkable, Sequence.
    Define class EngineError(Exception). @runtime_checkable class SearchEngine(Protocol)
-   with search(...) -> SearchResponse and read(docid) -> str | None; document that both
+   with search(...) -> SearchResponse and read(cp) -> str | None; document that both
    MAY raise EngineError.
 4. isj_agent/engine/fake.py: class FakeEngine. __init__(self,
    script: list[SearchResponse | EngineError], docs: dict[str, str] | None = None). Hold an
    index and a public `calls` list. search() records the call, then consumes the next entry:
-   raise it if it is an EngineError, else apply exclude_docids (drop + decrement unjudged +
+   raise it if it is an EngineError, else apply exclude (drop + decrement unjudged +
    re-rank) and return it; a dry response once exhausted. read() looks up docs.
 5. isj/tests/test_engine.py:
    - type validation: Judgement(grade=4) ok; grade=5 and grade=-1 raise ValidationError;
      SearchResponse round-trips (assert SearchResponse.model_validate(x.model_dump()) == x);
      with extra="forbid", model_validate of a dict with an unexpected key raises.
    - FakeEngine: batches in order; dry after exhaustion; an EngineError script entry causes
-     search() to raise EngineError (and the call is still recorded); exclude_docids removes
+     search() to raise EngineError (and the call is still recorded); exclude removes
      matching Hits, decrements unjudged_matches, leaves total_matches, re-ranks 1..N;
-     `calls` records (query, top_k, exclude_docids, window); read() returns text/None.
+     `calls` records (query, top_k, exclude, window); read() returns text/None.
    - conformance: isinstance(FakeEngine([...]), SearchEngine) is True (runtime_checkable).
    - no test contacts a network or an LLM.
 6. uv run --directory isj pytest tests/ -v (green). Update isj/README.md: the engine/
@@ -240,5 +240,5 @@ description and the exemplar isj_agent/protocol/intents.py + isj_agent/agents/an
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno note. The contract is cp-keyed: the request `exclude` is a list of cp integers (was exclude_docids); each Hit carries `cp` (was docid); the judged set is cp. SearchResponse keeps total_matches/unjudged_matches/atom_counts/results. Apply this substitution throughout the spec/ACs (docid->cp, exclude_docids->exclude). docno never enters the agent; it appears only in C2 persistence. Authoritative: doc-6 + TASK-5 umbrella.
+RE-SPEC cp-native (doc-6, 2026-06-21). The contract is cp-keyed: the request `exclude` is a list of cp integers; each Hit carries `cp`; Judgement and the judged set are keyed on cp. SearchResponse keeps total_matches/unjudged_matches/atom_counts/results. docno never enters the agent; it appears only in C2 persistence. Authoritative: doc-6 + TASK-5 umbrella.
 <!-- SECTION:NOTES:END -->

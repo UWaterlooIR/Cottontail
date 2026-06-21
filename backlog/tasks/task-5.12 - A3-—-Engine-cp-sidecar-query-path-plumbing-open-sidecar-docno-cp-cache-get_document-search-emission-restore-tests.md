@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-21 04:42'
-updated_date: '2026-06-21 19:08'
+updated_date: '2026-06-21 19:36'
 labels:
   - cpp
   - searcher
@@ -15,9 +15,9 @@ dependencies:
   - TASK-6.2
 references:
   - docs/indexing.md
-  - backlog/docs/doc-5
+  - backlog/docs/doc-6
   - apps/jsonl_core.cc
-  - src/docno_contents_index.h
+  - apps/cottontail-jsonl-server.cc
 parent_task_id: TASK-5
 ordinal: 5900
 ---

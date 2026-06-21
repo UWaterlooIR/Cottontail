@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:52'
-updated_date: '2026-06-21 19:00'
+updated_date: '2026-06-21 19:41'
 labels:
   - python
   - isj
@@ -60,9 +60,9 @@ Server contract (verified in apps/cottontail-jsonl-server.cc):
 - Auth: bearer token — header `Authorization: Bearer <token>`; env `COTTONTAIL_API_TOKEN`
   (or `--token`); OPTIONAL on a loopback (127.0.0.1) bind, required off-loopback.
 - `cover_search` (A1/A2): `POST /tools/cover_search` with body
-  { query, top_k, exclude_docids, window } -> { total_matches, unjudged_matches,
-  atom_counts:[{term,count}], results:[{rank,score,docid,summary}] }.
-- `get_document`: `POST /tools/get_document` with { docid } -> { docid, found, text }.
+  { query, top_k, exclude, window } -> { total_matches, unjudged_matches,
+  atom_counts:[{term,count}], results:[{rank,score,cp,summary}] }.
+- `get_document`: `POST /tools/get_document` with { cp } -> { cp, found, text }.
 - A bad request returns HTTP 400 with an error JSON (the server's fail() helper).
 
 B1's error channel: search()/read() may raise EngineError on ANY engine failure; the B2
@@ -85,9 +85,9 @@ message so the model can self-correct.
            self._client = client or httpx.Client(base_url=base_url.rstrip("/"),
                                                  headers=headers, timeout=timeout)
 
-       def search(self, query, *, top_k=10, exclude_docids=(), window=75) -> SearchResponse:
+       def search(self, query, *, top_k=10, exclude=(), window=75) -> SearchResponse:
            body = {"query": query, "top_k": top_k,
-                   "exclude_docids": list(exclude_docids), "window": window}
+                   "exclude": list(exclude), "window": window}
            try:
                r = self._client.post("/tools/cover_search", json=body)
            except httpx.HTTPError as e:
@@ -96,9 +96,9 @@ message so the model can self-correct.
                raise EngineError(_server_error(r))   # carries the server message (e.g. 400 invalid GCL)
            return SearchResponse.model_validate(r.json())
 
-       def read(self, docid) -> str | None:
+       def read(self, cp) -> str | None:
            try:
-               r = self._client.post("/tools/get_document", json={"docid": docid})
+               r = self._client.post("/tools/get_document", json={"cp": cp})
            except httpx.HTTPError as e:
                raise EngineError(f"get_document transport error: {e}") from e
            if r.status_code != 200:
@@ -152,22 +152,6 @@ message so the model can self-correct.
   connectivity check is a manual, go-ahead-gated run (and is skipped by default in pytest).
 <!-- SECTION:DESCRIPTION:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 isj_agent/engine/http.py defines HttpSearchEngine using httpx and implementing the B1 SearchEngine Protocol (search + read); isinstance(HttpSearchEngine(...), SearchEngine) is True; the constructor accepts an injectable client for tests.
-- [ ] #2 search() POSTs to base_url + /tools/cover_search with JSON {query, top_k, exclude_docids, window}, sends an Authorization: Bearer header iff a token is configured, and parses a 200 response via SearchResponse.model_validate.
-- [ ] #3 read() POSTs to /tools/get_document with {docid} and returns the body text when found is true, or None when found is false.
-- [ ] #4 Every failure raises EngineError: a non-2xx response raises EngineError carrying the server's error message (a 400 invalid-GCL response yields a message the B2 controller can bounce on); an httpx transport error (connect refused / timeout) raises EngineError.
-- [ ] #5 config.toml and config.example.toml gain a [cottontail_http_json_server] section (base_url; optional api_key_env); config.py gains build_search_engine(cfg) -> HttpSearchEngine reading the bearer token from the env var named by api_key_env (raising if set-but-missing) and never logging it.
-- [ ] #6 C1 adds NO CLI entry (the single CLI is C3). It provides a minimal live connectivity check — a live-gated test skipped by default, or a short documented invocation — that against a running server issues a cover_search with a word* query and gets a parsed SearchResponse, and a bad query yields an EngineError. The full real-LLM Searcher-loop live e2e is C3.
-- [ ] #7 httpx is added as a direct dependency in isj/pyproject.toml and uv sync --project isj succeeds.
-- [ ] #8 Automated tests use httpx.MockTransport (no network) and cover: request path/body and the Authorization header for search; SearchResponse parsing; read found vs None; non-2xx -> EngineError(message); transport error -> EngineError; Protocol conformance.
-- [ ] #9 uv run --directory isj pytest tests/ exits 0 (the live connectivity test is skipped by default) and no automated test contacts a network or a real model.
-- [ ] #10 The HttpSearchEngine<->server contract is validated by the MockTransport tests (against the contract) plus the go-ahead-gated live connectivity check (a real cover_search round-trip with a word* query + an EngineError on a bad query); the full real-LLM pipeline live run is C3.
-- [ ] #11 isj/README.md documents HttpSearchEngine, the [cottontail_http_json_server] config, and the live connectivity check (external services require explicit go-ahead).
-- [ ] #12 The JSON server is being MODIFIED by A1/A2 (they add the cover_search endpoint); B1's SearchResponse is the Python mirror of the cover_search JSON the server actually emits (advertised by GET /describe); on divergence, reconcile B1/C1 to the server rather than inventing a shape.
-- [ ] #13 The live connectivity check can only run once A1/A2 are built and the server is running; deeper mismatches between the Python mirror and the server's real cover_search request/response surface in C3's full live run.
-<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -186,8 +170,8 @@ Python in isj/. Depends on B1 and A1/A2. Adapt as needed.
    env var, never logged).
 4. isj/tests/test_http_engine.py (NO network): build httpx.Client(transport=httpx.MockTransport(handler))
    and inject it. Assert: search posts to /tools/cover_search with body {query,top_k,
-   exclude_docids,window} and an Authorization: Bearer header iff a token is set; a canned
-   cover_search JSON parses into SearchResponse; read posts {docid} and returns text when
+   exclude,window} and an Authorization: Bearer header iff a token is set; a canned
+   cover_search JSON parses into SearchResponse; read posts {cp} and returns text when
    found else None; a 400 response -> EngineError carrying the server message; a transport
    error (handler raises httpx.ConnectError) -> EngineError; isinstance(engine, SearchEngine).
    Also add a LIVE-GATED connectivity test (skipped unless an env var / marker is set) that
@@ -206,3 +190,20 @@ Python in isj/. Depends on B1 and A1/A2. Adapt as needed.
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. HttpSearchEngine mirrors the cp-keyed cover_search contract: request `exclude` = cp integers; results carry cp; get_document by cp. The server is sidecar-free. Authoritative: doc-6.
 <!-- SECTION:NOTES:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 isj_agent/engine/http.py defines HttpSearchEngine using httpx and implementing the B1 SearchEngine Protocol (search + read); isinstance(HttpSearchEngine(...), SearchEngine) is True; the constructor accepts an injectable client for tests.
+- [ ] #2 search() POSTs to base_url + /tools/cover_search with JSON {query, top_k, exclude, window}, sends an Authorization: Bearer header iff a token is configured, and parses a 200 response via SearchResponse.model_validate.
+- [ ] #3 read() POSTs to /tools/get_document with {cp} and returns the body text when found is true, or None when found is false.
+- [ ] #4 Every failure raises EngineError: a non-2xx response raises EngineError carrying the server's error message (a 400 invalid-GCL response yields a message the B2 controller can bounce on); an httpx transport error (connect refused / timeout) raises EngineError.
+- [ ] #5 config.toml and config.example.toml gain a [cottontail_http_json_server] section (base_url; optional api_key_env); config.py gains build_search_engine(cfg) -> HttpSearchEngine reading the bearer token from the env var named by api_key_env (raising if set-but-missing) and never logging it.
+- [ ] #6 C1 adds NO CLI entry (the single CLI is C3). It provides a minimal live connectivity check — a live-gated test skipped by default, or a short documented invocation — that against a running server issues a cover_search with a word* query and gets a parsed SearchResponse, and a bad query yields an EngineError. The full real-LLM Searcher-loop live e2e is C3.
+- [ ] #7 httpx is added as a direct dependency in isj/pyproject.toml and uv sync --project isj succeeds.
+- [ ] #8 Automated tests use httpx.MockTransport (no network) and cover: request path/body and the Authorization header for search; SearchResponse parsing; read found vs None; non-2xx -> EngineError(message); transport error -> EngineError; Protocol conformance.
+- [ ] #9 uv run --directory isj pytest tests/ exits 0 (the live connectivity test is skipped by default) and no automated test contacts a network or a real model.
+- [ ] #10 The HttpSearchEngine<->server contract is validated by the MockTransport tests (against the contract) plus the go-ahead-gated live connectivity check (a real cover_search round-trip with a word* query + an EngineError on a bad query); the full real-LLM pipeline live run is C3.
+- [ ] #11 isj/README.md documents HttpSearchEngine, the [cottontail_http_json_server] config, and the live connectivity check (external services require explicit go-ahead).
+- [ ] #12 The JSON server is being MODIFIED by A1/A2 (they add the cover_search endpoint); B1's SearchResponse is the Python mirror of the cover_search JSON the server actually emits (advertised by GET /describe); on divergence, reconcile B1/C1 to the server rather than inventing a shape.
+- [ ] #13 The live connectivity check can only run once A1/A2 are built and the server is running; deeper mismatches between the Python mirror and the server's real cover_search request/response surface in C3's full live run.
+<!-- AC:END -->
