@@ -6,9 +6,15 @@ a **unique string identifier (the `docno`)** — and, crucially, how we manage t
 identity of documents internally so that ranking, filtering, and fetching are
 cheap on a **static burrow**.
 
-It is the authoritative design for the JSONL indexing model. Where it disagrees
-with the current code (`apps/jsonl_core.{h,cc}`), this note is the target and the
-code should move toward it.
+It is the authoritative design for the JSONL indexing model. The **indexing**
+side is now implemented: the generic indexer (`DocnoContentsIndexer`,
+`src/docno_contents_index.{h,cc}`, TASK-6.1) builds the contents + `:item` +
+sidecar layout below, and `jsonl_index` (`apps/jsonl_core.cc`, TASK-6.2) uses it,
+so `cottontail-jsonl-index` produces the new-style burrow. The **retrieval-side
+cutover** this implies (§4, §5: `cover_search`/`get_document`/exclusion reframed
+on `cp` + the sidecar) is **not done yet** — it is the deliberately deferred work
+in decision doc-4; the existing `:docno`-based query path still exists in source
+but does not work against new-style burrows.
 
 ## 1. The document model
 
@@ -75,33 +81,54 @@ range**, and its **start address is a unique integer id**. We call it `cp` (the
 - `cp` is exact and collision-free **by construction** — no string compare, no
   containment ambiguity.
 
-**Internally, `cp` is the document id.** Agents, the controller, our ranking and
-filtering code all key on `cp`. The `docno` string is materialized only for output
-and for human inspection (§5).
+**Internally — inside the engine — `cp` is the document id.** Our ranking and
+filtering code key on `cp`; the `docno` string is materialized only at the engine
+boundary, for emitted results and human inspection (§4, §5). **The agent and the
+controller never see `cp`: they key on `docno`** (decision doc-5). `cp` is an
+engine-internal optimization, not part of the agent-facing contract.
 
 > **Caveat — `cp` is burrow-instance-local.** Addresses are assigned at build time;
 > they are stable for the life of a given static burrow but **change if the burrow
-> is rebuilt**. So `cp` is a fine handle *within a run against one burrow* (the ISJ
-> loop, exclusion), but anything persisted for later analysis must store the
-> **`docno`** (portable), mapped via the sidecar — never the raw `cp`.
+> is rebuilt**. This is exactly why `cp` stays inside the engine: it is a fine
+> handle *within the engine, within a run against one burrow* (ranking, the exclude
+> post-filter), but anything that crosses the wire or is persisted for later
+> analysis uses the **`docno`** (portable), mapped via the sidecar — never the raw
+> `cp`.
 
 ## 4. Filtering retrieval results by internal id
 
 The judged/seen set is **client-side** (the burrow is static and stateless — a
 read-opened `SimpleWarren` has a null annotator, so we cannot mark documents in
-the index, and we keep no server session). Exclusion is therefore a **post-rank
-filter on `cp`**, which is the original ISJ behaviour ("walk down the ranked list,
-skip what you've already judged"):
+the index, and we keep no server session). The client (agent) holds that set as
+**docnos** and sends them as `exclude` (docno strings); exclusion is the original
+ISJ behaviour ("walk down the ranked list, skip what you've already judged"),
+realized internally as a **post-rank filter on `cp`** once the docnos are resolved
+at the boundary:
 
+0. Resolve the supplied `exclude` docnos to a set of `cp` integers via the sidecar
+   reverse map (§6) — one lookup per judged doc, bounded by the ISJ budget, and
+   **cached** (`docno → cp` is immutable for a static burrow), so a growing judged
+   set re-sent every turn costs at most one resolution per docno per session.
 1. Rank within the plain `:item` container (no docno carve, no docid tokens
    touched), over-fetching `depth = top_k + |exclude|` so a full page survives.
-2. Drop any result whose `cp` is in the caller-supplied exclude set (an integer
-   hash-set membership test — no `translate`, no string compare).
-3. Build the expensive cover summaries only for the survivors; return `top_k`.
+2. Drop any result whose `cp` is in the exclude-`cp` set (an integer hash-set
+   membership test — no `translate`, no string compare).
+3. Build the expensive cover summaries only for the survivors, and map their
+   `cp → docno` (§6) **only now, for the returned page**; return `top_k`.
 
 This is exact, cheap, needs no in-burrow state, and avoids the `shard`-token
-posting lists entirely. The request carries `exclude` as a list of `cp` integers;
-results carry each hit's `cp` (so the caller can add judged ones to its set).
+posting lists entirely.
+
+> **The identity split — do not blur it (decision doc-5).** *Internal* results and
+> work — ranking, the over-fetched candidates, the exclude post-filter, and the
+> match counts (below) — are keyed on **`cp` only**; no docno is materialized for
+> them. docno appears solely at the engine **boundary**: inbound, resolving the
+> caller's `exclude` docnos (and a `get_document` docid) to `cp`; outbound, mapping
+> the emitted `top_k` survivors `cp → docno` at serialization time. The forward
+> `cp → docno` lookup therefore runs **O(`top_k`)** times per query, never
+> O(candidates) or O(matches). On the wire, `exclude` is a list of **docno
+> strings** and each returned hit carries its **docno** — but neither the request
+> nor the internal pipeline ever handles a bare `cp`.
 
 The over-fetch is cheap at any scale: the judged set is bounded by the ISJ budget
 (tens to a few hundred per intent), so `depth = top_k + |exclude|` stays small even
@@ -135,15 +162,16 @@ against 500M documents.
 ## 5. Fetching document contents
 
 Given any document's span `(cp, cq)`, the text is `txt()->translate(cp, cq)`
-(`O(L)` in the document length). Two access paths:
+(`O(L)` in the document length). Two access paths, split by the §4 identity rule:
 
-- **Internal (by `cp`).** Agents and our code already hold `cp` from a search
-  result, so reading a document is `translate(cp, cq)` directly. (For a standalone
-  read-by-`cp`, the sidecar supplies `cq`; see §6.) There is no docno round-trip.
-- **External (by `docno`).** The *one* place we need `docno → contents` is a human
-  at the CLI fetching a document for inspection. That is `docno → cp` via the
-  sidecar reverse map, then `translate(cp, cq)`. It is a rare, latency-tolerant
-  operation.
+- **Internal (by `cp`).** Only *engine* code holds `cp` (it comes from a ranking
+  result), so reading a document there is `translate(cp, cq)` directly. (For a
+  standalone read-by-`cp`, the sidecar supplies `cq`; see §6.) No docno round-trip.
+- **External (by `docno`).** Everything *outside* the engine — the agent, the CLI,
+  a human — fetches by **docno** (this is `get_document`): `docno → cp` via the
+  sidecar reverse map (cached, §6), then `translate(cp, cq)`, returned under the
+  caller's docno. `cp` never leaves the engine. The agent fetch is part of the ISJ
+  loop; a human CLI fetch is the rare, latency-tolerant case.
 
 ## 6. The sidecar — a `cp ↔ docno` map we build ourselves
 
@@ -223,10 +251,12 @@ What we need to build:
 ## 9. Summary
 
 The burrow stores **contents + one `:item` annotation per document, and nothing
-else**. The unique internal id is the `:item` start address `cp`, handed to us by
-ranking. Filtering judged documents is an integer `cp` post-filter on the ranked
-list. Document text is `translate(cp, cq)`. The `docno` lives only in a small
-`cp ↔ docno` sidecar we build from the JSON docids — used to print docnos for
-results and to let a human fetch a document by docno from the CLI. This removes the
-docno-token index bloat, eliminates the docno GCL carve, and fits the static,
+else**. The unique **engine-internal** id is the `:item` start address `cp`, handed
+to us by ranking; filtering judged documents is an integer `cp` post-filter on the
+ranked list, and document text is `translate(cp, cq)`. The **agent-facing identity
+is the `docno`** (decision doc-5): `cp` never crosses the wire or reaches persisted
+output. The `docno` lives only in a small `cp ↔ docno` sidecar we build from the
+JSON docids — the translator at the boundary: it resolves an incoming `docno → cp`
+(exclusion, `get_document`) and maps the emitted page's `cp → docno`. This removes
+the docno-token index bloat, eliminates the docno GCL carve, and fits the static,
 stateless burrow exactly.
