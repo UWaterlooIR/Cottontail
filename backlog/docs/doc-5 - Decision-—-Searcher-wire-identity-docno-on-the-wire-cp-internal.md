@@ -3,8 +3,10 @@ id: doc-5
 title: 'Decision — Searcher wire identity: docno on the wire, cp internal'
 type: specification
 created_date: '2026-06-21 00:52'
-updated_date: '2026-06-21 00:53'
+updated_date: '2026-06-21 18:24'
 ---
+> **SUPERSEDED by doc-6 (2026-06-21).** This decision — docno on the wire, cp internal — was reversed in favor of **cp-native identity** (cp on the wire, docno only at the persistence boundary). Kept as the record of the prior decision; see doc-6.
+
 **Status:** accepted (2026-06-21).
 
 Related: docs/indexing.md §3-§5 (cp / sidecar / filtering / fetch), decision doc-4

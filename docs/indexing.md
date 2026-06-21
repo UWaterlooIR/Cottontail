@@ -6,15 +6,16 @@ a **unique string identifier (the `docno`)** — and, crucially, how we manage t
 identity of documents internally so that ranking, filtering, and fetching are
 cheap on a **static burrow**.
 
-It is the authoritative design for the JSONL indexing model. The **indexing**
-side is now implemented: the generic indexer (`DocnoContentsIndexer`,
-`src/docno_contents_index.{h,cc}`, TASK-6.1) builds the contents + `:item` +
-sidecar layout below, and `jsonl_index` (`apps/jsonl_core.cc`, TASK-6.2) uses it,
-so `cottontail-jsonl-index` produces the new-style burrow. The **retrieval-side
-cutover** this implies (§4, §5: `cover_search`/`get_document`/exclusion reframed
-on `cp` + the sidecar) is **not done yet** — it is the deliberately deferred work
-in decision doc-4; the existing `:docno`-based query path still exists in source
-but does not work against new-style burrows.
+It is the authoritative design for the JSONL indexing model. The identity model is
+**cp-native** (decision **doc-6**, which supersedes doc-5): `cp` — the address
+Cottontail assigns each document at insert — is the working identity on the wire,
+in the engine, and in the live agent loop; the `docno` is **optional** and appears
+only at a boundary (persistence and human/external lookup), via a `cp ↔ docno`
+**SQLite map** (§6). The indexing layout (contents + `:item`, no `:docno`) is built
+by `cottontail-jsonl-index` (TASK-6.2); the cp-native retrieval cutover
+(`cover_search` / `get_document` / exclusion on `cp`) is TASK-5's engine track.
+(`docno` is optional in general — a corpus with no docnos yields a cp-only burrow
+and no map; the JSONL / TREC path always has docids.)
 
 ## 1. The document model
 
@@ -37,8 +38,8 @@ sub-units are out of scope here; the unit of identity is the whole document.)
 
 **Scale.** The target collection (ClimbMix) is **~500 million documents** over
 ~400 billion tokens, so addresses are 64-bit and any per-document structure (the
-sidecar, §6) and any per-query full scan (the match counts, §4) must be sized with
-500M in mind. The committed `Scrapheap/climbmix-1000-*.burrow` is a ~1000-shard
+SQLite map, §6) and any per-query full scan (the match counts, §4) must be sized
+with 500M in mind. The committed `Scrapheap/climbmix-1000-*.burrow` is a ~1000-shard
 subset (~85M docs — which is why `shard` shows ~85M postings there); the full
 collection is ~6× larger.
 
@@ -51,7 +52,7 @@ annotation that marks the document's extent:
 addr p_body, q_body;
 builder->add_text(contents, &p_body, &q_body);          // body tokens -> token/text store + inverted index
 builder->add_annotation(":item", p_body, q_body, 0.0);  // the document's span [p_body, q_body]
-// record (p_body, q_body, docno) for the sidecar (see §6)
+// add_document returns cp (= p_body); the driver emits (docno, cp) to the flat map dump (see §6)
 ```
 
 We do **not** `add_text(docid)` and we do **not** create a `:docno` annotation.
@@ -63,7 +64,7 @@ tokenizes (the `_` splits) into `shard`, `00037`, `72680`; measured on a ClimbMi
 burrow, the token `shard` has **84,594,007** postings (it is in every docno) and
 `0` has ~20 million. Indexing docnos bloats the index and pollutes content queries
 for those tokens, all to support an id we only ever need to *print* or *look up by
-hand*. So the docno lives outside the inverted index, in a sidecar (§6).
+hand*. So the docno lives outside the inverted index, in a SQLite map (§6).
 
 `:item` stays: it is the document boundary **and** the ranking container, and it
 costs one annotation per document.
@@ -81,54 +82,47 @@ range**, and its **start address is a unique integer id**. We call it `cp` (the
 - `cp` is exact and collision-free **by construction** — no string compare, no
   containment ambiguity.
 
-**Internally — inside the engine — `cp` is the document id.** Our ranking and
-filtering code key on `cp`; the `docno` string is materialized only at the engine
-boundary, for emitted results and human inspection (§4, §5). **The agent and the
-controller never see `cp`: they key on `docno`** (decision doc-5). `cp` is an
-engine-internal optimization, not part of the agent-facing contract.
+**`cp` is the working identity** (decision doc-6). Ranking and filtering, the
+engine, the wire, and the live agent loop all key on `cp`: results carry `cp`, the
+agent's judged / exclude set is a set of `cp`, and a candidate is read by the `cp`
+it already holds. The `docno` is **not** on this path at all; it is materialized
+only at the boundary — when persisting results to disk, and for a human/external
+`docno → cp` lookup (§4, §5, §6).
 
 > **Caveat — `cp` is burrow-instance-local.** Addresses are assigned at build time;
 > they are stable for the life of a given static burrow but **change if the burrow
-> is rebuilt**. This is exactly why `cp` stays inside the engine: it is a fine
-> handle *within the engine, within a run against one burrow* (ranking, the exclude
-> post-filter), but anything that crosses the wire or is persisted for later
-> analysis uses the **`docno`** (portable), mapped via the sidecar — never the raw
-> `cp`.
+> is rebuilt**. So `cp` is the **working** id (valid within one burrow instance —
+> the run, the wire, the agent loop) and `docno` is the **persisted** id: the
+> rewrite `cp → docno` at the disk boundary (§6) is the discipline that keeps a raw
+> `cp` out of any saved artifact. A corpus with no docno has only `cp`, valid for
+> that burrow instance — inherent, not a footgun.
 
 ## 4. Filtering retrieval results by internal id
 
 The judged/seen set is **client-side** (the burrow is static and stateless — a
 read-opened `SimpleWarren` has a null annotator, so we cannot mark documents in
-the index, and we keep no server session). The client (agent) holds that set as
-**docnos** and sends them as `exclude` (docno strings); exclusion is the original
-ISJ behaviour ("walk down the ranked list, skip what you've already judged"),
-realized internally as a **post-rank filter on `cp`** once the docnos are resolved
-at the boundary:
+the index, and we keep no server session). The agent holds that set as **`cp`
+integers** (the `cp`s it saw in prior results) and sends them as `exclude`;
+exclusion is the original ISJ behaviour ("walk down the ranked list, skip what
+you've already judged"), realized as a direct **post-rank filter on `cp`**:
 
-0. Resolve the supplied `exclude` docnos to a set of `cp` integers via the sidecar
-   reverse map (§6) — one lookup per judged doc, bounded by the ISJ budget, and
-   **cached** (`docno → cp` is immutable for a static burrow), so a growing judged
-   set re-sent every turn costs at most one resolution per docno per session.
 1. Rank within the plain `:item` container (no docno carve, no docid tokens
    touched), over-fetching `depth = top_k + |exclude|` so a full page survives.
 2. Drop any result whose `cp` is in the exclude-`cp` set (an integer hash-set
-   membership test — no `translate`, no string compare).
-3. Build the expensive cover summaries only for the survivors, and map their
-   `cp → docno` (§6) **only now, for the returned page**; return `top_k`.
+   membership test — no `translate`, no string compare, no `docno → cp` lookup).
+3. Build the expensive cover summaries only for the survivors and return `top_k`,
+   **each hit carrying its `cp`** (no docno — the `cp → docno` rewrite happens
+   later, at persistence; §6).
 
-This is exact, cheap, needs no in-burrow state, and avoids the `shard`-token
-posting lists entirely.
+This is exact, cheap, needs no in-burrow state, opens no `docno ↔ cp` map on the
+hot path, and avoids the `shard`-token posting lists entirely.
 
-> **The identity split — do not blur it (decision doc-5).** *Internal* results and
-> work — ranking, the over-fetched candidates, the exclude post-filter, and the
-> match counts (below) — are keyed on **`cp` only**; no docno is materialized for
-> them. docno appears solely at the engine **boundary**: inbound, resolving the
-> caller's `exclude` docnos (and a `get_document` docid) to `cp`; outbound, mapping
-> the emitted `top_k` survivors `cp → docno` at serialization time. The forward
-> `cp → docno` lookup therefore runs **O(`top_k`)** times per query, never
-> O(candidates) or O(matches). On the wire, `exclude` is a list of **docno
-> strings** and each returned hit carries its **docno** — but neither the request
-> nor the internal pipeline ever handles a bare `cp`.
+> **The identity split (decision doc-6).** The hot path is **`cp` end to end** —
+> the request's `exclude` is a list of **`cp` integers**, ranking / filter / counts
+> are `cp`, and each returned hit carries its **`cp`**. No `docno ↔ cp` map is
+> opened on the query path and no docno is materialized in the engine. The
+> `cp → docno` rewrite happens exactly once, off the hot path, when results / traces
+> are written to disk (§6) — the only place a `cp` becomes a portable docno.
 
 The over-fetch is cheap at any scale: the judged set is bounded by the ISJ budget
 (tens to a few hundred per intent), so `depth = top_k + |exclude|` stays small even
@@ -161,67 +155,52 @@ against 500M documents.
 
 ## 5. Fetching document contents
 
-Given any document's span `(cp, cq)`, the text is `txt()->translate(cp, cq)`
-(`O(L)` in the document length). Two access paths, split by the §4 identity rule:
+Given a document's span `(cp, cq)`, the text is `txt()->translate(cp, cq)` (`O(L)`
+in the document length). Two access paths, by identity:
 
-- **Internal (by `cp`).** Only *engine* code holds `cp` (it comes from a ranking
-  result), so reading a document there is `translate(cp, cq)` directly. (For a
-  standalone read-by-`cp`, the sidecar supplies `cq`; see §6.) No docno round-trip.
-- **External (by `docno`).** Everything *outside* the engine — the agent, the CLI,
-  a human — fetches by **docno** (this is `get_document`): `docno → cp` via the
-  sidecar reverse map (cached, §6), then `translate(cp, cq)`, returned under the
-  caller's docno. `cp` never leaves the engine. The agent fetch is part of the ISJ
-  loop; a human CLI fetch is the rare, latency-tolerant case.
+- **By `cp` (the working path).** The engine and the agent both hold `cp` (and `cq`)
+  from a ranking result, so reading a document is `translate(cp, cq)` directly — no
+  docno, no map. This is the ISJ loop's read-a-candidate path.
+- **By `docno` (the boundary path).** A human at the CLI, or another agent/task,
+  that holds only a **docno** fetches via the SQLite map: `docno → cp` (§6), then
+  `translate(cp, cq)` (with `cq` taken from the `:item` container at `cp`).
+  Occasional and latency-tolerant; the multi-threaded query path never does this.
 
-## 6. The sidecar — a `cp ↔ docno` map we build ourselves
+## 6. The `cp ↔ docno` map — a SQLite store, off the hot path
 
-To serve docno output and the human fetch without indexing docnos, we build a
-small **sidecar** at index time, populated directly from the JSON `docid` strings
-(never tokenized). Per document it holds `(cp, cq, docno)`.
+The map is **not** on the query path (§4). It exists only for the two boundary
+operations — the `cp → docno` rewrite when results/traces are persisted, and the
+`docno → cp` lookup for a human/external fetch (§5). So it is a plain **SQLite**
+store, built once at index time and read occasionally (decision doc-6):
 
-- **`cp → docno`** (and `cp → cq`): for emitting a docno per ranked result and for
-  read-by-`cp`. Because `cp` values are monotonically increasing, store them as a
-  sorted array → **binary search, `O(log m)`** (m = number of documents).
-- **`docno → cp`**: for the human external fetch. A hash map (or a docno-sorted
-  index) over the same `m` entries.
+- **Schema.** One table `(cp INTEGER PRIMARY KEY, docno TEXT UNIQUE)`. The primary
+  key gives `cp → docno`; the `UNIQUE` index gives `docno → cp` **and** is the
+  docno-uniqueness check — a duplicate docno fails the build, naming the offender.
+  Sized for ~500M rows (tens of GB on disk); **never loaded into the query
+  process**.
 
-**Footprint at ~500M documents (size this deliberately).** Documents are stored
-contiguously with no inter-document gaps, so we **do not store `cq`**: `cq_i =
-cp_{i+1} − 1` (the last document's end is recorded once). That leaves, per
-document, an 8-byte `cp` plus the docno text and an offset. Rough costs at m=500M:
-the `cp[]` array ≈ 4 GB, offsets ≈ 4 GB, and docno text ≈ 9 GB (`shard_…` ids are
-~18 bytes) — ~17 GB if fully resident, which is how `FastidTxt` loads. That is
-viable on the target 512 GB host but is not free, so the sidecar should:
-- keep the **`cp[]` array resident** (the hot path — `cp → index` by binary
-  search, on every result), and
-- read **docno text lazily from the on-disk blob** at `offset[index]` (a tiny read
-  per emitted result; `top_k` reads per query, not 500M), rather than holding all
-  9 GB of docno strings in RAM.
-The reverse `docno → cp` (rare human fetch) can stay disk-resident too (a
-docno-sorted file, binary-searched / mmap'd) — it need not be in RAM at all.
+- **Build (two steps, one front door).** A Python index CLI orchestrates:
+  1. the C++ `cottontail-jsonl-index` indexes the JSONL into a plain cp-native
+     burrow — `add_document(contents) -> cp` — and **dumps a flat `docno<TAB>cp`
+     file** alongside it (no map structure in C++, no in-RAM accumulation);
+  2. the CLI loads the flat file into the SQLite store and **deletes the flat
+     file** (on success; on failure it leaves both in place and exits non-zero).
+  For a corpus with no docnos, step 1 writes no flat file and step 2 builds no
+  store — a cp-only burrow.
 
-This is deliberately the same idea as Cottontail's core **`FastidTxt`**
-(`src/fastid_txt.{h,cc}`, auto-wrapped by `SimpleWarren` when the `fastid`
-parameter is set) — a packed `(p, q, text)` table giving `O(log m)` position→id —
-**except** `FastidTxt` is built by translating a `:docno` annotation, which
-presupposes the docno is in the store. Ours is built straight from the JSON docids
-so we can skip indexing them altogether, and it adds the reverse `docno → cp`
-direction that `FastidTxt` does not provide.
+- **Read.** Python (`sqlite3`, stdlib) does the run-output `cp → docno` rewrite (a
+  bounded batch per intent) and the `docno → cp` lookup; the C++
+  `get_document`-by-docno tool reads the same file (`docno → cp`, then `translate`
+  over the `:item` span at that `cp`). The document *text* always comes from the
+  warren; the store holds only the identity mapping (`cq` is derived from the
+  `:item` container at `cp`, not stored).
 
-What we need to build:
-
-1. **Build:** during `jsonl_index`, accumulate `(cp, cq, docno)` per row; after the
-   pass, write a sidecar file into the burrow working directory (alongside the
-   index). Fold this into `jsonl_index` so every burrow has it (rather than a
-   separate `fast-id`-style step).
-2. **Validate:** docnos must be unique — detect and reject (or report) duplicate
-   docnos while building, since the whole scheme assumes uniqueness.
-3. **Load:** open the sidecar when the burrow opens; expose `docno_of(cp)`,
-   `span_of(cp) -> (cp,cq)`, and `cp_of(docno)`.
-4. **Consume:** `cover_search` returns `cp` per hit and maps `cp → docno` for the
-   result; exclusion post-filters on `cp`; `get_document` (CLI/human) does
-   `docno → cp → translate`; the run output (C2) writes `docno` (portable), not
-   `cp`.
+This replaces the earlier custom binary sidecar (a packed, compressed, lazily-read
+`cp ↔ docno` file with a docno-sorted permutation). That design was justified only
+while the map sat on the multi-threaded query path; cp-native takes it off that
+path (§4), so an off-the-shelf embedded store is simpler and sufficient — and it
+streams to disk at build time instead of accumulating every `(cp, docno)` pair in
+RAM to sort.
 
 ## 7. Deliberate divergences and assumptions
 
@@ -229,11 +208,12 @@ What we need to build:
   convention** that the other apps (`rank`, `mt`, `splade`, …) share (they set an
   `id` warren parameter naming a docno annotation and translate it). Those tools
   will not recognize our burrows' ids. This is an accepted trade for not indexing
-  docnos; the JSONL stack carries its own sidecar instead.
+  docnos; the JSONL stack carries its own SQLite `cp ↔ docno` map instead.
 - **`docno` is stored verbatim** from the JSON `docid`. We do not apply
   `trec_docno()` SGML stripping (that is for `<DOCNO>…</DOCNO>` text); a JSON docid
   is already the bare identifier.
-- **Uniqueness of `docno` is required** and validated at build time (§6.2).
+- **Uniqueness of `docno` is required** and validated at build time by the SQLite
+  `UNIQUE` index (§6).
 - **One document per row; document-level identity.** Passage/sub-document
   annotations are a separate concern not covered here.
 
@@ -251,12 +231,12 @@ What we need to build:
 ## 9. Summary
 
 The burrow stores **contents + one `:item` annotation per document, and nothing
-else**. The unique **engine-internal** id is the `:item` start address `cp`, handed
-to us by ranking; filtering judged documents is an integer `cp` post-filter on the
-ranked list, and document text is `translate(cp, cq)`. The **agent-facing identity
-is the `docno`** (decision doc-5): `cp` never crosses the wire or reaches persisted
-output. The `docno` lives only in a small `cp ↔ docno` sidecar we build from the
-JSON docids — the translator at the boundary: it resolves an incoming `docno → cp`
-(exclusion, `get_document`) and maps the emitted page's `cp → docno`. This removes
-the docno-token index bloat, eliminates the docno GCL carve, and fits the static,
-stateless burrow exactly.
+else**. The working identity is the `:item` start address **`cp`** (decision
+doc-6): results, exclusion, ranking, the agent's judged set, and document reads are
+all `cp`; filtering judged documents is a direct integer `cp` post-filter, and text
+is `translate(cp, cq)`. The **`docno` is optional and lives only at the boundary** —
+in a `cp ↔ docno` **SQLite** map (built at index time from a flat `(docno, cp)`
+dump) consulted off the hot path: `cp → docno` when results / traces are written to
+disk, and `docno → cp` for a human/external fetch. This removes the docno-token
+index bloat and the docno GCL carve, keeps the multi-threaded query path map-free,
+and fits the static, stateless burrow exactly.
