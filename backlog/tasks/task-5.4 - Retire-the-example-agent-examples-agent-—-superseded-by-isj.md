@@ -4,7 +4,7 @@ title: Retire the example agent (examples/agent/) — superseded by isj/
 status: To Do
 assignee: []
 created_date: '2026-06-17 15:51'
-updated_date: '2026-06-18 15:15'
+updated_date: '2026-06-21 01:13'
 labels:
   - cleanup
   - docs
@@ -73,3 +73,9 @@ This task and TASK-5.10 both touch the same docs (`running-the-search-stack.md`,
 - [ ] #3 The search-stack index/query/server run guidance is preserved; only the example-agent-specific pointers are removed or marked archived.
 - [ ] #4 bazel test //test:tests //test:hazel_test //test:jsonl_test stays green and no doc cross-links are broken.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE (2026-06-21): unaffected by the new-style index. Archiving examples/agent/ stands as specced; the example agent is :docno-era and superseded by isj/ regardless.
+<!-- SECTION:NOTES:END -->

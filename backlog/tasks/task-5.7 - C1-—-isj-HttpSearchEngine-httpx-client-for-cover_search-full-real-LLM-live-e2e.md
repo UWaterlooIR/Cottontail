@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:52'
-updated_date: '2026-06-18 13:46'
+updated_date: '2026-06-21 01:36'
 labels:
   - python
   - isj
@@ -24,7 +24,7 @@ references:
   - isj/isj_agent/config.py
   - isj/config.example.toml
   - isj/README.md
-  - Scrapheap/climbmix-1000-utf8-porter.burrow
+  - Scrapheap/climbmix-100k-porter.burrow
 parent_task_id: TASK-5
 ordinal: 12000
 ---
@@ -200,3 +200,11 @@ Python in isj/. Depends on B1 and A1/A2. Adapt as needed.
    --stem burrow): run the live-gated test / invocation against the server; confirm the
    cover_search round-trip + EngineError mapping. (The full pipeline live run is C3.)
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT: transport unchanged -- HttpSearchEngine mirrors the docno-keyed cover_search contract (exclude_docids docnos in, docid in results); get_document by docid. The redone engine (A1/A2) keeps the same JSON shape, so C1 conforms unchanged. Authoritative: doc-5.
+
+Burrow for the live connectivity check is the new-style Scrapheap/climbmix-100k-porter.burrow (doc-5 / dev-burrow memory); the old climbmix-1000 burrow is :docno/old-style and incompatible.
+<!-- SECTION:NOTES:END -->

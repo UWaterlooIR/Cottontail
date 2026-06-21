@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 14:19'
-updated_date: '2026-06-18 15:15'
+updated_date: '2026-06-21 01:13'
 labels:
   - searcher
 dependencies:
@@ -86,3 +86,9 @@ documenting the new flow.
 - [ ] #4 A repo grep for 'examples/agent' finds no stale pointer presenting it as a runnable/current path (top-level README and other docs repointed to isj/).
 - [ ] #5 Run instructions are not duplicated: running-the-search-stack.md remains the single source and other files link to it.
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE for the new-style index (doc-5, 2026-06-21). The run/usage docs now describe the NEW-STYLE stack: index = contents + :item + sidecar (no :docno); the query path is docno-facing with cp internal (doc-5). Coordinate with the docs/cottontail-jsonl-cli-spec.md changes from TASK-6.2 (the query-side pending-redo banner) -- once the engine cutover lands, drop those banners. Authoritative: doc-5 + docs/indexing.md.
+<!-- SECTION:NOTES:END -->

@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 02:17'
-updated_date: '2026-06-18 14:49'
+updated_date: '2026-06-21 01:13'
 labels:
   - python
   - isj
@@ -236,3 +236,9 @@ description and the exemplar isj_agent/protocol/intents.py + isj_agent/agents/an
    the pydantic round-trip/validation pattern, and that B2 tests against FakeEngine while C1
    supplies the real HTTP-backed engine.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT: the contract stays docno-keyed and the B1 types are UNCHANGED -- exclude_docids is a list of docno strings, each Hit carries docid, SearchResponse keeps total_matches/unjudged_matches/atom_counts/results. Under doc-5, exclusion and docid emission are sidecar-backed INSIDE the engine (docno<->cp); the agent never sees cp, so B1 needs no id-model change. Mirror the live cover_search response shape from the redone A1/A2. Authoritative: doc-5 + TASK-5 umbrella.
+<!-- SECTION:NOTES:END -->

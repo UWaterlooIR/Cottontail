@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 04:40'
-updated_date: '2026-06-18 14:01'
+updated_date: '2026-06-21 01:13'
 labels:
   - python
   - isj
@@ -139,3 +139,9 @@ Pure Python in isj/. Depends on B2's RankedList/TraceEvent/SearcherResult. Adapt
    that intent-NN.trace.jsonl is a JSON-Lines event log, and that the ABSENCE of errors.log
    means the whole run succeeded.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT/CONFIRM: C2 persists docno (portable) and never cp -- which is exactly correct under doc-5. RankedEntry.docid + intents are docno-based; no change. Authoritative: doc-5 (cp is burrow-instance-local and must never be persisted).
+<!-- SECTION:NOTES:END -->

@@ -4,7 +4,7 @@ title: 'B2 — isj: Searcher agent + guardrailed loop controller (vs FakeEngine)
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:20'
-updated_date: '2026-06-18 14:56'
+updated_date: '2026-06-21 01:13'
 labels:
   - python
   - isj
@@ -332,8 +332,6 @@ engine may raise + FakeEngine scripted-error support (already specced in B1).
 - [ ] #14 Judge-arg validation and multiple-tool-call handling are explicit: the controller validates each judge argument through B1's Judgement model before recording, and an invalid judge call (e.g., an out-of-range grade or a missing field) is bounced via a bounce event (kind judge_invalid) with the pydantic error fed back as the tool result, counts as a turn and as no progress, records nothing that turn, and the model recovers by re-judging; and when the model emits more than one tool call in a turn the controller processes only the first and ignores the rest, recording the emitted count on the llm_turn event (tool_calls). Tests cover an out-of-range-grade bounce+recovery and a multi-tool-call turn.
 <!-- AC:END -->
 
-
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -372,3 +370,9 @@ Python in isj/. Depends on B1 (incl. EngineError + FakeEngine scripted errors). 
    engine Protocol as future-proofing (not exposed as an LLM tool yet). A real-LLM run is a
    manual step (the live integration gate is C3).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT: the judged set stays keyed on docno (the agent holds docnos, passes them as exclude_docids); RankedEntry/RankedList stay docno-keyed. No cp anywhere in the agent -- cp is engine-internal (doc-5). Loop/controller/prompt/trace unchanged. Authoritative: doc-5 + TASK-5 umbrella.
+<!-- SECTION:NOTES:END -->
