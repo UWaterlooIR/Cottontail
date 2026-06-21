@@ -1,12 +1,12 @@
 ---
 id: TASK-5.12
 title: >-
-  A3 — Engine: cp/sidecar query-path plumbing (open sidecar + docno-cp cache,
-  get_document, search emission, restore tests)
+  A3 — Engine: cp-native query-path cutover (open warren, get_document/search by
+  cp, restore tests)
 status: To Do
 assignee: []
 created_date: '2026-06-21 04:42'
-updated_date: '2026-06-21 18:55'
+updated_date: '2026-06-21 19:08'
 labels:
   - cpp
   - searcher

@@ -2,11 +2,11 @@
 id: TASK-5.2
 title: >-
   A2 — Engine: cover_search enrichment (total/unjudged matches, atom_counts,
-  exclude_docids, windowed passages)
+  exclude=cp, window)
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-21 18:59'
+updated_date: '2026-06-21 19:08'
 labels:
   - engine
   - cpp
