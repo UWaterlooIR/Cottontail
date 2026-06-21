@@ -39,9 +39,9 @@ sub-units are out of scope here; the unit of identity is the whole document.)
 **Scale.** The target collection (ClimbMix) is **~500 million documents** over
 ~400 billion tokens, so addresses are 64-bit and any per-document structure (the
 SQLite map, §6) and any per-query full scan (the match counts, §4) must be sized
-with 500M in mind. The committed `Scrapheap/climbmix-1000-*.burrow` is a ~1000-shard
-subset (~85M docs — which is why `shard` shows ~85M postings there); the full
-collection is ~6× larger.
+with 500M in mind. The cp-native dev/POC burrow is
+`Scrapheap/climbmix-100k-porter.burrow` (~100k docs); a ~1000-shard ClimbMix subset
+is ~85M docs, and the full collection is ~6× that.
 
 ## 2. What we store in the burrow — contents only
 
@@ -60,11 +60,13 @@ We do **not** `add_text(docid)` and we do **not** create a `:docno` annotation.
 **Why not index the docno.** `add_text` both stores tokens (so `translate` works)
 *and* featurizes them into the inverted index. We never *search* for a docno, so
 indexing it is pure waste — and our docnos are pathological for it. `shard_00037_72680`
-tokenizes (the `_` splits) into `shard`, `00037`, `72680`; measured on a ClimbMix
-burrow, the token `shard` has **84,594,007** postings (it is in every docno) and
-`0` has ~20 million. Indexing docnos bloats the index and pollutes content queries
-for those tokens, all to support an id we only ever need to *print* or *look up by
-hand*. So the docno lives outside the inverted index, in a SQLite map (§6).
+tokenizes (the `_` splits) into `shard`, `00037`, `72680`; measured on an
+**old-style** ClimbMix burrow (one that *did* index the docno), the token `shard`
+had **84,594,007** postings (it is in every docno) and `0` ~20 million — the bloat
+cp-native avoids by keeping docnos out of the index entirely. Indexing docnos
+bloats the index and pollutes content queries for those tokens, all to support an
+id we only ever need to *print* or *look up by hand*. So the docno lives outside
+the inverted index, in a SQLite map (§6).
 
 `:item` stays: it is the document boundary **and** the ranking container, and it
 costs one annotation per document.
@@ -135,9 +137,8 @@ against 500M documents.
 > ranking we already do**, and should be computed as a **byproduct of that single
 > pass**: count each matching container as the ssr loop closes it (`q > cq`), and
 > for `unjudged_matches` check whether the container's `cp` is in the exclude set.
-> The A2 plan (TASK-5.2) currently computes them with **separate** `(>> :item Q)`
-> enumerations on top of ranking (~3 passes where 1 suffices) — that redundancy is
-> the only inefficiency to fix; the counts themselves are not a separate scaling
+> A2 (TASK-5.2) computes them this way — a byproduct of the one ranking pass, **not**
+> separate `(>> :item Q)` enumerations — so the counts are not a separate scaling
 > problem under ssr.
 >
 > The cost of *any* of this is governed by query **selectivity** (the combined
