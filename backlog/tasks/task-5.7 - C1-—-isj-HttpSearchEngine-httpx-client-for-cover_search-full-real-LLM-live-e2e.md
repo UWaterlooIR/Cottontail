@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:52'
-updated_date: '2026-06-21 01:36'
+updated_date: '2026-06-21 19:00'
 labels:
   - python
   - isj
@@ -204,7 +204,5 @@ Python in isj/. Depends on B1 and A1/A2. Adapt as needed.
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT: transport unchanged -- HttpSearchEngine mirrors the docno-keyed cover_search contract (exclude_docids docnos in, docid in results); get_document by docid. The redone engine (A1/A2) keeps the same JSON shape, so C1 conforms unchanged. Authoritative: doc-5.
-
-Burrow for the live connectivity check is the new-style Scrapheap/climbmix-100k-porter.burrow (doc-5 / dev-burrow memory); the old climbmix-1000 burrow is :docno/old-style and incompatible.
+RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. HttpSearchEngine mirrors the cp-keyed cover_search contract: request `exclude` = cp integers; results carry cp; get_document by cp. The server is sidecar-free. Authoritative: doc-6.
 <!-- SECTION:NOTES:END -->

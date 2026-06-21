@@ -4,7 +4,7 @@ title: Retire the example agent (examples/agent/) — superseded by isj/
 status: To Do
 assignee: []
 created_date: '2026-06-17 15:51'
-updated_date: '2026-06-21 01:13'
+updated_date: '2026-06-21 19:00'
 labels:
   - cleanup
   - docs
@@ -77,5 +77,5 @@ This task and TASK-5.10 both touch the same docs (`running-the-search-stack.md`,
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-BASELINE (2026-06-21): unaffected by the new-style index. Archiving examples/agent/ stands as specced; the example agent is :docno-era and superseded by isj/ regardless.
+RE-BASELINE cp-native (2026-06-21): unaffected. Archiving examples/agent/ stands; it is docno/:docno-era and superseded by isj/ regardless.
 <!-- SECTION:NOTES:END -->

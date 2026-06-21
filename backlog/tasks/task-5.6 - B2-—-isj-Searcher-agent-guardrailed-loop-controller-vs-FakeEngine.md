@@ -4,7 +4,7 @@ title: 'B2 — isj: Searcher agent + guardrailed loop controller (vs FakeEngine)
 status: To Do
 assignee: []
 created_date: '2026-06-18 03:20'
-updated_date: '2026-06-21 01:13'
+updated_date: '2026-06-21 19:00'
 labels:
   - python
   - isj
@@ -374,5 +374,5 @@ Python in isj/. Depends on B1 (incl. EngineError + FakeEngine scripted errors). 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT: the judged set stays keyed on docno (the agent holds docnos, passes them as exclude_docids); RankedEntry/RankedList stay docno-keyed. No cp anywhere in the agent -- cp is engine-internal (doc-5). Loop/controller/prompt/trace unchanged. Authoritative: doc-5 + TASK-5 umbrella.
+RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. The judged set is keyed on cp (the agent holds cps and sends `exclude` as cp integers); RankedEntry carries cp (was docid). No docno in the agent; the cp->docno rewrite is C2 at persistence. Loop/controller/prompt/trace otherwise unchanged. Authoritative: doc-6.
 <!-- SECTION:NOTES:END -->

@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 04:40'
-updated_date: '2026-06-21 01:13'
+updated_date: '2026-06-21 19:00'
 labels:
   - python
   - isj
@@ -143,5 +143,5 @@ Pure Python in isj/. Depends on B2's RankedList/TraceEvent/SearcherResult. Adapt
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-BASELINE for the new-style index (doc-5, 2026-06-21). LIGHT/CONFIRM: C2 persists docno (portable) and never cp -- which is exactly correct under doc-5. RankedEntry.docid + intents are docno-based; no change. Authoritative: doc-5 (cp is burrow-instance-local and must never be persisted).
+RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. CHANGE: C2 now performs the cp->docno REWRITE at write time -- it maps each persisted result/trace cp to its docno via the TASK-6.3 SQLite reader, so the saved files carry docno (portable), never a raw cp. Results are cp in memory; docno on disk. (A docno-less corpus persists cp.) The intents + per-intent RankedList + trace.jsonl + errors.log layout is unchanged. Authoritative: doc-6 + TASK-6.3.
 <!-- SECTION:NOTES:END -->

@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-21 01:43'
+updated_date: '2026-06-21 18:59'
 labels:
   - engine
   - cpp
@@ -69,7 +69,7 @@ advertise it in describe_json.
 
 // AFTER A2 (two new optional inputs)
 { "query": "(^ black bear* attack*)", "top_k": 10,
-  "exclude_docids": ["shard_00012_0003", "shard_00018_0044"],   // NEW: judged set to skip
+  "exclude": ["shard_00012_0003", "shard_00018_0044"],   // NEW: judged set to skip
   "window": 75 }                                                // NEW: MINIMUM total passage size in tokens, centered on the cover
 ```
 
@@ -82,8 +82,8 @@ advertise it in describe_json.
 
 // AFTER A2
 {
-  "total_matches": 50,        // NEW: DOCUMENTS matching the query in the whole corpus (ignores exclude_docids)
-  "unjudged_matches": 4,      // NEW: matching DOCUMENTS not in exclude_docids; the results below are these
+  "total_matches": 50,        // NEW: DOCUMENTS matching the query in the whole corpus (ignores exclude)
+  "unjudged_matches": 4,      // NEW: matching DOCUMENTS not in exclude; the results below are these
   "atom_counts": [            // NEW: per query leaf -> total OCCURRENCES of that atom in the corpus
     { "term": "black",   "count": 1840 },
     { "term": "bear*",   "count": 9004 },
@@ -106,7 +106,7 @@ The agent makes ONE tool call per turn (no parallel calls), so each signal rides
 one cover_search response:
 - total_matches  -> "How broad is this query?" (independent of judging)
 - unjudged_matches -> "How much NEW vs. already-judged?" The agent passes judged docids
-  as exclude_docids; the engine skips them (MultiText 'Next' button).
+  as exclude; the engine skips them (MultiText 'Next' button).
 - atom_counts    -> "Did an atom match NOTHING?" count 0 flags a typo/dead expansion.
 - window         -> how much context each cover gets in the summary the agent reads.
 The searcher has NO concept of index streams; atom_counts is {term, count} only (no
@@ -114,18 +114,17 @@ stream), and term is the atom AS WRITTEN (bear*), never the internal porter: for
 
 ## How each is computed
 
-EXCLUSION IS AN INTERNAL cp POST-FILTER (doc-5). cover_search ranks a query Q within plain
-:item (no docno carve). exclude_docids are docno strings; the engine resolves them to a set
-of cp integers via the sidecar (cached), over-fetches depth = top_k + |exclude|, and drops
-any ranked result whose cp is in the exclude-cp set (an integer membership test). No
-exclusions -> no resolution, plain ranking. Per-request; server stateless (the docno->cp
-cache is a pure performance memo). Internal results are keyed on cp; docno is emitted only
-for the returned top_k (cp->docno).
+EXCLUSION IS A DIRECT cp POST-FILTER (doc-6). cover_search ranks a query Q within plain
+:item; exclude is a list of cp integers (the cps the agent saw in prior results); the
+engine over-fetches depth = top_k + |exclude| and drops any ranked result whose cp is in
+the exclude set (an integer membership test). No exclusions -> plain ranking. Per-request;
+server stateless; NO sidecar, NO docno. Each returned hit carries its cp (the cp->docno
+rewrite is C2 persistence).
 - total_matches and unjudged_matches are a BYPRODUCT of that single ssr ranking pass (which
   visits every matching container), not separate enumerations:
     total_matches    = matching containers counted as the ssr loop closes each (ignores exclude)
-    unjudged_matches = those whose cp is NOT in the exclude-cp set
-  Both DOCUMENT counts; integer-only (no docno). Empty exclude -> equal.
+    unjudged_matches = those whose cp is NOT in the exclude set
+  Both DOCUMENT counts; integer-only. Empty exclude -> equal.
 - atom_counts: per leaf {term, count}; term as written; count = total OCCURRENCES of the
   feature it resolves to (idx()->count) via A1's shared word*->feature helper (bear* ->
   family occurrences; ox* -> exact feature); 0 if nothing; no stream. (Fix the misnamed `df`.)
@@ -145,29 +144,11 @@ call, no gaps; NOT an absolute position and NOT the TREC submission rank.
 - Do NOT re-implement A1's word* translation or A1's summary algorithm — reuse them.
 - Do NOT add new ranking models or change ssr scoring (window only affects the summary
   text, not rank/score).
-- Do NOT add server-side session/judged-set state (exclude_docids is per-request), any
+- Do NOT add server-side session/judged-set state (exclude is per-request), any
   stream/exact-stemmed field, or any per-agent/profile filtering; never expose porter:.
 - Do NOT touch the Python isj agent.
 <!-- SECTION:DESCRIPTION:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude_docids), equal to a plain :item count for that query, independent of top_k.
-- [ ] #2 cover_search response includes unjudged_matches: matching DOCUMENTS not in exclude_docids, computed as a byproduct of the single ssr ranking pass (a matching container counts toward unjudged unless its cp is in the resolved exclude-cp set); results are drawn from these; equals total_matches when exclude_docids is empty.
-- [ ] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
-- [ ] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
-- [ ] #5 cover_search request accepts exclude_docids (docno strings); the engine resolves them to cp via the sidecar (cached) and excludes by a cp POST-FILTER on the ranked results, over-fetching depth = top_k + size of exclude, so with top_k=K and some excluded the response still returns up to K non-excluded hits.
-- [ ] #6 Excluding a docid that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
-- [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
-- [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
-- [ ] #9 The server cover_search is stateless: two requests with different exclude_docids do not interfere.
-- [ ] #10 Determinism: tests assert on docid SET membership, not tied order.
-- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
-- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude_docids, window, and the rank/score semantics.
-- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
-- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, docid, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
-- [ ] #15 GET /describe lists cover_search and its request fields (including exclude_docids and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
-<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -184,7 +165,7 @@ CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
   applies (and there is nothing to document about it).
 - Q2 unjudged_matches = matching containers whose cp is NOT in the exclude-cp set =
   total_matches - (the excluded docids that ACTUALLY match Q). It is NOT total -
-  len(exclude_docids): excluding a docid that does not match Q (or is absent) leaves the
+  len(exclude): excluding a docid that does not match Q (or is absent) leaves the
   count unchanged. STATE this explicitly in code comments and docs.
 - Q3 total_matches/unjudged_matches are EXACT, computed as a byproduct of the single ssr
   ranking pass (ssr already visits every matching cover) -- no separate enumeration passes
@@ -201,16 +182,16 @@ CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
 1. Read A1's cover_search function (its summary builder + CoverSpec + handler), A1b's
    CoverResponse/AtomCount, the ssr_ranking container arg, the docid phrase in jsonl_get
    (single token, or (... t1 t2 ...)), and apps/jsonl_json.{h,cc} + the server's handler.
-2. CoverSpec (request) gains exclude_docids (vector<string>) and window (size_t, default 75).
+2. CoverSpec (request) gains exclude (vector<string>) and window (size_t, default 75).
    CoverResponse already carries total_matches/unjudged_matches/atom_counts (A1b) -- A2 fills.
-3. Exclusion: resolve exclude_docids -> cp via the sidecar (cached). Rank Q within plain
+3. Exclusion: resolve exclude -> cp via the sidecar (cached). Rank Q within plain
    ":item", over-fetching depth = top_k + |exclude|; drop ranked results whose cp is in the
    exclude-cp set (integer membership). No exclusions -> rank plain ":item", no post-filter.
 4. Counts as a byproduct of the SAME ranking pass (no separate (>> container Q) enumerations):
-   - total_matches = matching containers counted as the ssr loop closes each (ignores exclude_docids; independent of top_k).
+   - total_matches = matching containers counted as the ssr loop closes each (ignores exclude; independent of top_k).
    - unjudged_matches = those whose cp is not in the exclude-cp set = total - (excluded docids
      that actually match Q). Equal to total when exclude is empty. NOT total -
-     len(exclude_docids) (Q2) -- comment this in code. Both are DOCUMENT counts, EXACT (Q3).
+     len(exclude) (Q2) -- comment this in code. Both are DOCUMENT counts, EXACT (Q3).
 5. atom_counts -- ENUMERATE THE QUERY'S LEAVES, one {term, count} per content term:
    - A "leaf" is a content term (bare word or word* marker). Operators
      (^ + ... <> << >> !> !< # @), parens, and :tags are NOT leaves. EXTEND is_gcl_operator
@@ -230,9 +211,9 @@ CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
    constant; do NOT duplicate the algorithm. Larger window -> longer summary; rank/score
    unchanged.
 7. Serialize total_matches/unjudged_matches/atom_counts in cover_results_json -- and ONLY
-   those four keys (B1 extra="forbid"). Parse exclude_docids/window in cover_spec_from (server)
+   those four keys (B1 extra="forbid"). Parse exclude/window in cover_spec_from (server)
    and the CLI --cover mode (add --exclude repeatable + --window, Q6). Advertise
-   exclude_docids/window in describe_json. Server stays stateless.
+   exclude/window in describe_json. Server stays stateless.
 8. Tests (assert docid SET membership, Q10):
    - test/jsonl.cc: total_matches vs a plain :item count and top_k-independence; unjudged after
      exclusion (= total - excluded-that-match); excluding the would-be #1 promotes next-best; a
@@ -241,13 +222,13 @@ CONFIRMED DESIGN DECISIONS (Q1-Q6, agreed with the user 2026-06-18):
      leaves, dedup; window larger -> longer summary, rank/score unchanged; excluding a
      non-matching/absent docid leaves unjudged == total.
    - test/jsonl_cli.cc: --cover --window N (longer summary) and --cover --exclude <docid>.
-   - test/jsonl_server.cc: exclude_docids over HTTP (excluded docid gone, unjudged decremented,
+   - test/jsonl_server.cc: exclude over HTTP (excluded docid gone, unjudged decremented,
      total present); statelessness across two different excludes; NO legacy fields
-     (result_count/truncated/stemmed) in the JSON; /describe lists exclude_docids + window.
+     (result_count/truncated/stemmed) in the JSON; /describe lists exclude + window.
 9. Docs: cli-spec §4.8 + server-spec §3 document the additions: total_matches/unjudged_matches
    as DOCUMENT counts (unjudged = total - excluded-that-match, Q2), atom_counts.count =
    OCCURRENCES/no stream, leaves = the query's content terms, window = MINIMUM total tokens
-   centered (cover never truncated), exclude_docids (with the Q1 containment-match caveat),
+   centered (cover never truncated), exclude (with the Q1 containment-match caveat),
    and the rank/score semantics. (A1 already wrote the "A2 adds ..." stubs.)
 
 Build (per CLAUDE.md): bazel build -c dbg --cxxopt="-Og" -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example
@@ -257,5 +238,24 @@ Test: bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_s
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-SPEC for the new-style index (doc-5, 2026-06-21). Enrichment is redone on the cp/sidecar model. SUPERSEDED: AC 5 (exclusion via container-carve DURING ranking) and AC 2 method (exclude-carved container) are REPLACED by an internal cp POST-FILTER -- resolve the supplied exclude docnos to cp via the sidecar (cached), over-fetch depth = top_k + size of exclude, drop results whose cp is in the exclude-cp set, then emit cp->docno for the returned page (doc-5). total_matches/unjudged_matches (ACs 1-2) keep their VALUES but are computed as a BYPRODUCT of the single ssr ranking pass (count containers as they close; check cp against the exclude set), not separate enumerations. atom_counts (ACs 3-4), window (13-14), rank/score (6-7), describe (15) are UNCHANGED. docs (AC 12) update to the doc-5 model. ACs unchecked on reopen; re-verify on Scrapheap/climbmix-100k-porter.burrow with the quarantined A2 tests restored. Authoritative: doc-5 + docs/indexing.md section 4.
+RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. Exclusion is a DIRECT cp post-filter: the request `exclude` is a list of cp integers (no docno, no resolution, no sidecar/cache); over-fetch top_k + |exclude|; drop hits whose cp is in the exclude set. Each returned hit carries its cp (response {rank, score, cp, summary}). total/unjudged_matches are a byproduct of the single ssr pass (unjudged = matching cps not in exclude). atom_counts/window/rank/score unchanged. Authoritative: doc-6 + docs/indexing.md section 4.
 <!-- SECTION:NOTES:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 cover_search response includes total_matches: DOCUMENTS matching the query within the plain :item container (ignoring exclude), equal to a plain :item count for that query, independent of top_k.
+- [ ] #2 cover_search response includes unjudged_matches: matching DOCUMENTS whose cp is NOT in the exclude set, computed as a byproduct of the single ssr ranking pass; results are drawn from these; equals total_matches when exclude is empty.
+- [ ] #3 cover_search response includes atom_counts: per query leaf a {term, count} entry, term as written (e.g. bear*, never the porter: form), count = total OCCURRENCES of the feature it resolves to; count 0 if it matches nothing; NO stream field.
+- [ ] #4 A word* atom in atom_counts reports its resolved family's occurrences via A1's shared helper; an unstemmable word* such as ox* resolves to the exact feature.
+- [ ] #5 cover_search request accepts exclude (a list of cp integers); it excludes by a direct cp POST-FILTER on the ranked results, over-fetching depth = top_k + size of exclude, so with top_k=K and some excluded the response still returns up to K non-excluded hits.
+- [ ] #6 Excluding a cp that would otherwise rank first yields a result whose rank 1 is the next-best non-excluded document; each surviving document's score is identical with and without the exclusion (cover density is per-document).
+- [ ] #7 rank is the 1-based position within the returned post-exclusion results, restarting at 1 each call with no gaps; it is NOT an absolute corpus position and NOT the TREC submission rank.
+- [ ] #8 search_gcl is untouched (regression check); cover_search carries NO legacy fields (no result_count, truncated, or stemmed).
+- [ ] #9 The server cover_search is stateless: two requests with different exclude do not interfere.
+- [ ] #10 Determinism: tests assert on cp SET membership, not tied order.
+- [ ] #11 bazel test //test:tests //test:hazel_test //test:jsonl_test is green, with new cases in test/jsonl.cc, test/jsonl_cli.cc, and test/jsonl_server.cc.
+- [ ] #12 docs/cottontail-jsonl-cli-spec.md and docs/cottontail-search-server-spec.md document the cover_search additions: total_matches/unjudged_matches as DOCUMENT counts, atom_counts.count as total OCCURRENCES (no stream), exclude, window, and the rank/score semantics.
+- [ ] #13 cover_search request accepts window: the summary window size in tokens (default 75 when absent), plumbed into A1's summary builder as the per-cover context width; A2 does not re-implement the summary.
+- [ ] #14 Increasing window yields a longer summary (more context per cover) while rank and score are unchanged; the response per result is {rank, score, cp, summary} plus the new top-level total_matches/unjudged_matches/atom_counts.
+- [ ] #15 GET /describe lists cover_search and its request fields (including exclude and window) and its response shape; the server advertises all its tools with no per-agent/profile filtering.
+<!-- AC:END -->
