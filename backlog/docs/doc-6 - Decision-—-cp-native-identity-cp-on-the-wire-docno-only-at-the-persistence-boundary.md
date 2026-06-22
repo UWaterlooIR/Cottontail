@@ -5,7 +5,7 @@ title: >-
   boundary
 type: specification
 created_date: '2026-06-21 18:23'
-updated_date: '2026-06-21 23:26'
+updated_date: '2026-06-22 00:43'
 ---
 **Status:** accepted (2026-06-21). **Supersedes doc-5.**
 
@@ -61,8 +61,8 @@ TASK-6.1):
   never opens the map. Python (C2) does the run-output cp->docno rewrite (results +
   trace); the C++ CLI `cottontail-jsonl-query --get <docno>` does docno->cp then
   translate. C++ takes a read-only SQLite dependency used solely by this boundary
-  `--get` (and, optionally later, a server get_document-by-docno tool); the hot
-  cover_search / exclusion path stays map-free.
+  CLI `--get`. The **server stays docno-free and map-free** (cp-only — cover_search,
+  exclusion, and get_document-by-cp); fetch-by-docno is the CLI's job only.
 
 ## Consequences / scope
 

@@ -166,10 +166,9 @@ map-free**. The co-located map (issue #1) gives the CLI filesystem access.
 - **doc-6 / indexing.md refine (not reverse):** "C++ stays SQLite-free" becomes "the
   **hot path** stays map-free; the boundary `get_document`-by-docno reads the SQLite
   map." The invariant (hot path off the map) holds.
-- **Open sub-question (deferred):** whether `cottontail-jsonl-server` also exposes a
-  `get_document`-by-docno *boundary* tool for external docno-only clients (occasional,
-  concurrent-read-safe). The agent itself uses get-by-`cp`, so it is a nice-to-have,
-  not required — left for later.
+- **Sub-question resolved (2026-06-22): no server tool.** The server does not need to
+  know about docno — it stays cp-only / map-free (`cover_search`, exclusion,
+  `get_document`-by-`cp`). Fetch-by-docno is the **CLI's** job only.
 
 ## ✅ 9. Confirm: the LLM now juggles bare `cp` integers as the doc handle — CONFIRMED (2026-06-21)
 
@@ -203,5 +202,6 @@ record of what was applied:
   - #8 — **A3 (5.12)** gains the read-only SQLite read so `--get <docno>` works;
     **doc-6 / indexing.md** refine "C++ SQLite-free" → "hot-path map-free; the
     boundary get_document-by-docno reads the map."
-- **Only open item (deferred):** whether the *server* also exposes a
-  `get_document`-by-docno boundary tool (issue #8) — nice-to-have, not required.
+- **Nothing open.** The server-side `get_document`-by-docno is explicitly **not**
+  built (2026-06-22): the server stays docno-free / map-free; fetch-by-docno is the
+  CLI's job only.
