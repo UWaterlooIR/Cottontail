@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-18 04:41'
-updated_date: '2026-06-21 19:41'
+updated_date: '2026-06-22 00:32'
 labels:
   - python
   - isj
@@ -16,6 +16,7 @@ dependencies:
   - TASK-5.6
   - TASK-5.7
   - TASK-5.8
+  - TASK-6.3
 references:
   - isj/isj_agent/orchestrator.py
   - isj/isj_agent/cli.py
@@ -151,7 +152,7 @@ RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. The pipeline i
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 orchestrator.run_question(question) -> (Intents, list[IntentResult | RunError]): Analyst.analyze -> Intents, then for each interpretation in order TRY sr = Searcher.run(interpretation) and collect IntentResult{ranked_list: sr.ranked_list, events: sr.events}, else CATCH the exception escaping the Searcher and collect a RunError(message) for that intent; outcomes has one entry per interpretation, in order; it does not write files and does not fuse.
-- [ ] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), runs run_question, writes the output directory via C2 write_run, and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
+- [ ] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), opens the cp->docno SQLite map (read-only) at the configured path (the burrow docno-cp.sqlite, co-located per issue #1), runs run_question, writes the output directory via C2 write_run (passing the map), and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
 - [ ] #3 The per-intent structured event trace is B2's SearcherResult.events (a list of TraceEvent); it is always captured per intent and saved as intent-NN.trace.jsonl via C2 (one event per line); --verbose additionally renders the events to the console live. C3 builds no tracer of its own.
 - [ ] #4 One question per run; one output directory per run; no fusion/RRF.
 - [ ] #5 Automated tests drive run_question with a stub Analyst + a stub/Fake Searcher (no network), assert one outcome per interpretation (an IntentResult on success carrying ranked_list + events), and assert the written output directory contents (intents.json + per-intent json + trace.jsonl).

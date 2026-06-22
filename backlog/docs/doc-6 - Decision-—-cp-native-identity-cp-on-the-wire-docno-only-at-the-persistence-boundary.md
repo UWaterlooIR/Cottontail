@@ -5,7 +5,7 @@ title: >-
   boundary
 type: specification
 created_date: '2026-06-21 18:23'
-updated_date: '2026-06-21 19:59'
+updated_date: '2026-06-21 23:26'
 ---
 **Status:** accepted (2026-06-21). **Supersedes doc-5.**
 
@@ -57,10 +57,12 @@ TASK-6.1):
   (2) the CLI loads the flat file into SQLite `(cp INTEGER PRIMARY KEY,
   docno TEXT UNIQUE)` and deletes the flat file. The `UNIQUE` index **is** the
   docno-uniqueness check.
-- **Read.** Python owns the map (`sqlite3`, stdlib): the run-output cp->docno
-  rewrite and the docno->cp lookup. C++ stays SQLite-free -- the engine offers
-  get_document BY cp; a human/external docno fetch is a Python step (docno->cp via
-  this map) then the C++ get-by-cp. The multi-threaded query path never opens it.
+- **Read (boundary only).** Two read-only readers; the multi-threaded query path
+  never opens the map. Python (C2) does the run-output cp->docno rewrite (results +
+  trace); the C++ CLI `cottontail-jsonl-query --get <docno>` does docno->cp then
+  translate. C++ takes a read-only SQLite dependency used solely by this boundary
+  `--get` (and, optionally later, a server get_document-by-docno tool); the hot
+  cover_search / exclusion path stays map-free.
 
 ## Consequences / scope
 
