@@ -102,14 +102,14 @@ are already specified — each `TraceEvent` carries `ts` (epoch seconds) **and**
 
 ---
 
-## 🟠 3. C2's `write_run` signature cannot do its job
+## ✅ 3. C2's `write_run` signature cannot do its job — DONE (2026-06-22, commit e4493f5)
 
 C2 (5.8) AC #1/#8 give `write_run` `(Intents, outcomes)`; AC #10 requires it to
 rewrite `cp → docno` via the TASK-6.3 SQLite reader — but **nothing passes it the
 reader or the map path**. Fix: `write_run` must accept the `cp → docno` map (or an
 injected reader). (Ties to #1 — the map path has to come from somewhere.)
 
-## 🟠 4. C2 AC #5 contradicts AC #10
+## ✅ 4. C2 AC #5 contradicts AC #10 — DONE (2026-06-22, commit e4493f5)
 
 - #5: "C2 is pure (filesystem only)… it persists **whatever** RankedList + events it
   is given." (passthrough)
@@ -119,7 +119,7 @@ injected reader). (Ties to #1 — the map path has to come from somewhere.)
 Reword #5: C2 reads the SQLite map and rewrites `cp → docno`; it is otherwise pure
 (no network, no LLM, no Searcher logic, no trace generation).
 
-## 🟠 5. Missing dependencies
+## ✅ 5. Missing dependencies — DONE (2026-06-22, commit e4493f5)
 
 - **C2 (5.8) → TASK-6.3** (C2 uses the 6.3 SQLite reader).
 - **C3 (5.9) → TASK-6.3** (C3's live gate needs a burrow + map built by 6.3, and it
@@ -129,12 +129,12 @@ The current dependency graph stops at B2 (5.6) for both.
 
 ---
 
-## 🟡 6. Flat-file path convention (6.2 ↔ 6.3) is unpinned
+## ✅ 6. Flat-file path convention (6.2 ↔ 6.3) is unpinned — DONE (2026-06-22, commit e4493f5)
 
 TASK-6.2 dumps the flat `(docid, cp)` file "alongside the burrow"; TASK-6.3 reads
 "the flat file." They must agree on a concrete name/location. Pin it in both.
 
-## 🟡 7. TASK-6.3's location is vague
+## ✅ 7. TASK-6.3's location is vague — DONE (2026-06-22, commit e4493f5)
 
 "the isj uv project **or** a tooling module" — and that choice decides whether C2 can
 simply `import` the SQLite reader. Pin where the reader module lives so C2's import
@@ -188,8 +188,9 @@ No change.
 
 ## Suggested handling
 
-**All decisions are made (1, 2, 8 resolved; 9 confirmed).** What remains is mechanical
-spec work:
+**All resolved and applied (commit e4493f5, 2026-06-22).** Decisions 1, 2, 8 and the
+mechanical fixes 3-7 (+ all decision follow-throughs) are in the specs. Below is the
+record of what was applied:
 
 - **Fix the defects:** 3 (C2 `write_run` takes the map/reader), 4 (C2 #5 vs #10),
   5 (deps C2→6.3, C3→6.3), 6 (pin the flat-file path 6.2↔6.3), 7 (pin 6.3's reader
@@ -202,5 +203,5 @@ spec work:
   - #8 — **A3 (5.12)** gains the read-only SQLite read so `--get <docno>` works;
     **doc-6 / indexing.md** refine "C++ SQLite-free" → "hot-path map-free; the
     boundary get_document-by-docno reads the map."
-- **Deferred sub-question:** whether the *server* also exposes `get_document`-by-docno
-  (issue #8) — nice-to-have, not required.
+- **Only open item (deferred):** whether the *server* also exposes a
+  `get_document`-by-docno boundary tool (issue #8) — nice-to-have, not required.
