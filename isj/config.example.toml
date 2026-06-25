@@ -37,3 +37,16 @@ model = "gpt.oss.120b"
 [agents.analyst]
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
+
+# ---------------------------------------------------------------------------
+# [index]
+# Settings for the cp-native index front door (cottontail-index / the
+# isj_agent.index CLI), which builds a burrow from JSONL and its cp<->docno map.
+# ---------------------------------------------------------------------------
+[index]
+
+# Path to the C++ cottontail-jsonl-index binary the front door subprocesses.
+# A relative path is resolved against the repository root; an absolute path is
+# used as-is. Override per-invocation with --index-bin. The default points at the
+# Bazel build output.
+binary = "bazel-bin/apps/cottontail-jsonl-index"
