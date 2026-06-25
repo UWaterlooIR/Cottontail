@@ -554,14 +554,14 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
     return false;
   builder->verbose(opts.verbose);
   // The cp-native content indexer (docs/indexing.md, doc-6) stores each document
-  // as contents + one ":item" annotation and hands back its cp. It does NOT
-  // tokenize the docid and creates no ":docno"; instead the docid is paired with
-  // cp in a flat (docid<TAB>cp) dump written alongside the burrow, from which the
-  // index CLI (TASK-6.3) builds the cp<->docno SQLite map.
+  // as text + one ":item" annotation and hands back its cp. It does NOT tokenize
+  // the docno and creates no ":docno"; instead the docno is paired with cp in a
+  // flat (docno<TAB>cp) dump written alongside the burrow, from which the index
+  // CLI (TASK-6.3) builds the cp<->docno SQLite map.
   auto indexer = ContentIndexer::make(builder, error);
   if (indexer == nullptr)
     return false;
-  std::string flat_name = working->make_name("docid-cp.tsv");
+  std::string flat_name = working->make_name("docno-cp.tsv");
   std::ofstream flat_out(flat_name, std::ios::out | std::ios::trunc);
   if (flat_out.fail()) {
     safe_error(error) = "jsonl_index: cannot create " + flat_name;
@@ -591,22 +591,22 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
       sp = nl + 1;
       if (trim(line).empty())
         continue;
-      std::string docid, contents;
+      std::string docno, text;
       try {
         json j = json::parse(line);
-        if (!j.contains(opts.docid_field) || !j.contains(opts.contents_field) ||
-            !j[opts.docid_field].is_string() ||
-            !j[opts.contents_field].is_string()) {
+        if (!j.contains(opts.docno_field) || !j.contains(opts.text_field) ||
+            !j[opts.docno_field].is_string() ||
+            !j[opts.text_field].is_string()) {
           skipped++;
           if (opts.strict) {
-            safe_error(error) = "row missing/!string " + opts.docid_field +
-                                "/" + opts.contents_field + " in " + file;
+            safe_error(error) = "row missing/!string " + opts.docno_field +
+                                "/" + opts.text_field + " in " + file;
             return false;
           }
           continue;
         }
-        docid = j[opts.docid_field].get<std::string>();
-        contents = j[opts.contents_field].get<std::string>();
+        docno = j[opts.docno_field].get<std::string>();
+        text = j[opts.text_field].get<std::string>();
       } catch (...) {
         skipped++;
         if (opts.strict) {
@@ -617,11 +617,11 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
       }
       std::string row_error;
       addr cp;
-      if (!indexer->add_document(contents, &cp, &row_error)) {
-        // A contentless row -- empty contents, or contents with no indexable
-        // tokens -- is handled like a malformed row: skipped, fatal only under
-        // --strict. A duplicate docid is NOT detected here; docno uniqueness is
-        // enforced when the index CLI builds the SQLite map (TASK-6.3).
+      if (!indexer->add_document(text, &cp, &row_error)) {
+        // A contentless row -- empty text, or text with no indexable tokens --
+        // is handled like a malformed row: skipped, fatal only under --strict.
+        // A duplicate docno is NOT detected here; docno uniqueness is enforced
+        // when the index CLI builds the SQLite map (TASK-6.3).
         skipped++;
         if (opts.strict) {
           safe_error(error) = row_error + " in " + file;
@@ -629,7 +629,7 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
         }
         continue;
       }
-      flat_out << docid << '\t' << cp << '\n';
+      flat_out << docno << '\t' << cp << '\n';
       rows++;
     }
   }

@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-06-19 03:44'
-updated_date: '2026-06-25 20:20'
+updated_date: '2026-06-25 21:23'
 labels:
   - cpp
 dependencies:
@@ -86,6 +86,16 @@ RE-SPEC cp-native (doc-6, 2026-06-21). jsonl_index uses the TASK-6.1 content ind
 
 Implemented in apps/jsonl_core.cc jsonl_index: ContentIndexer::make(builder); per row addr cp + add_document(contents,&cp); append docid<TAB>cp to <burrow>/docid-cp.tsv (working->make_name; opened before the row loop, closed after finalize). No add_text(docid), no :docno, no dup-docid check. test/jsonl.cc: dropped #include docno_contents_index.h (-> src/cottontail.h), added <map>; rewrote JsonlIndex.DuplicateDocidFails -> DuplicateDocidIndexedNotRejected (dup docid accepted, two distinct-cp flat lines); replaced JsonlSidecar.RoundTrip -> JsonlFlatDump.MapsDocidToItemStart (no :docno/no docno tokens; flat dump maps each docid to a real :item start whose body translates back). Docs/comments: apps/jsonl_core.h, apps/cottontail-jsonl-index.cc headers + docs/cottontail-jsonl-cli-spec.md (3.3/3.4/4 warning) now state cp-native burrow + flat (docid,cp) dump, SQLite map by TASK-6.3; indexing.md already cp-native. VERIFIED: full build (//... minus Boost) green; //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_server_test all PASS; new jsonl tests run (5/5); real cottontail-jsonl-index binary on test/jsonl/plain emits docid-cp.tsv with strictly-increasing cps and no sidecar files. :docno query-path tests remain DISABLED_ for A3/TASK-5.12.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-06-25 21:23
+---
+RENAMED per doc-7: the flat dump is now <burrow>/docno-cp.tsv (was docid-cp.tsv) with docno<TAB>cp lines; index flags are --docno-field/--text-field (IndexOptions docno_field/text_field). This task's ACs naming docid-cp.tsv is superseded by doc-7.
+---
+<!-- COMMENTS:END -->
 
 ## Final Summary
 

@@ -4,12 +4,12 @@ This is the single entry point for building an index (decision doc-6,
 ``docs/indexing.md`` section 6). It:
 
 1. runs the C++ ``cottontail-jsonl-index`` (subprocess) -> a cp-native burrow
-   (contents + one ``:item`` per document) plus a flat ``docid<TAB>cp`` dump at
-   ``<burrow>/docid-cp.tsv``;
+   (text + one ``:item`` per document) plus a flat ``docno<TAB>cp`` dump at
+   ``<burrow>/docno-cp.tsv``;
 2. loads that dump into the SQLite map ``<burrow>/docno-cp.sqlite``
    (``docno_map(cp INTEGER PRIMARY KEY, docno TEXT UNIQUE)``), whose UNIQUE index
    is the docno-uniqueness check;
-3. deletes the flat dump on success. On a duplicate docid it leaves the burrow and
+3. deletes the flat dump on success. On a duplicate docno it leaves the burrow and
    the flat dump in place, removes the partial map, and exits non-zero, naming the
    offender.
 
@@ -32,7 +32,7 @@ from pathlib import Path
 
 # Repo root: isj_agent -> isj -> <repo>. Used to resolve a relative binary path.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_FLAT_NAME = "docid-cp.tsv"
+_FLAT_NAME = "docno-cp.tsv"
 _SQLITE_NAME = "docno-cp.sqlite"
 # Table name shared with the reader (docno_map.py) and the C++ --get reader (A3).
 _TABLE = "docno_map"
@@ -40,18 +40,18 @@ _BATCH = 10_000
 
 
 class DuplicateDocnoError(Exception):
-    """A docid appears more than once in the flat dump (UNIQUE violation)."""
+    """A docno appears more than once in the flat dump (UNIQUE violation)."""
 
     def __init__(self, docno: str):
-        super().__init__(f"duplicate docid '{docno}'")
+        super().__init__(f"duplicate docno '{docno}'")
         self.docno = docno
 
 
 def build_sqlite_map(flat_path: Path, sqlite_path: Path) -> int:
-    """Build the cp<->docno SQLite map from a flat ``docid<TAB>cp`` dump.
+    """Build the cp<->docno SQLite map from a flat ``docno<TAB>cp`` dump.
 
     Returns the number of rows inserted. Raises :class:`DuplicateDocnoError`,
-    naming the offending docno, if the dump contains a duplicate docid (the
+    naming the offending docno, if the dump contains a duplicate docno (the
     UNIQUE index is the uniqueness check).
     """
     conn = sqlite3.connect(sqlite_path)
@@ -139,8 +139,8 @@ def _resolve_index_bin(arg: str | None, config: dict) -> Path:
 def _index_command(index_bin: Path, args: argparse.Namespace) -> list[str]:
     cmd = [str(index_bin), "--input", args.input, "--burrow", str(args.burrow)]
     for flag, value in (
-        ("--docid-field", args.docid_field),
-        ("--contents-field", args.contents_field),
+        ("--docno-field", args.docno_field),
+        ("--text-field", args.text_field),
         ("--tokenizer", args.tokenizer),
         ("--stem", args.stem),
         ("--buffer", args.buffer),
@@ -164,8 +164,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument("--input", required=True, help="directory of *.jsonl[.gz]")
     parser.add_argument("--burrow", required=True, type=Path, help="output burrow path")
-    parser.add_argument("--docid-field")
-    parser.add_argument("--contents-field")
+    parser.add_argument("--docno-field", help="JSON field holding the docno (default docid)")
+    parser.add_argument("--text-field", help="JSON field holding the text (default contents)")
     parser.add_argument("--tokenizer", choices=["ascii", "utf8"])
     parser.add_argument("--stem", help="also build a stemmed stream (e.g. porter)")
     parser.add_argument("--buffer", help="builder buffer size (records)")
@@ -210,7 +210,7 @@ def main(argv: list[str] | None = None) -> None:
         )
         raise SystemExit(1)
     flat.unlink()
-    print(f"built {sqlite_path} ({n} docids); removed {_FLAT_NAME}")
+    print(f"built {sqlite_path} ({n} docnos); removed {_FLAT_NAME}")
 
 
 if __name__ == "__main__":

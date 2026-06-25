@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-21 04:42'
-updated_date: '2026-06-22 00:50'
+updated_date: '2026-06-25 21:23'
 labels:
   - cpp
   - searcher
@@ -77,3 +77,13 @@ is cp-native (TASK-6.2); there is NO sidecar.
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21; refined 2026-06-22 for issue #8). The HOT path and the SERVER are cp-only / map-free: open_burrow returns just the warren; search returns cp; the :docno hopper is dropped; the server get_document is BY cp. Only the CLI cottontail-jsonl-query --get additionally resolves a docno -> cp by reading the SQLite map <burrow>/docno-cp.sqlite READ-ONLY (a read-only SQLite dep used solely there), then get-by-cp. cp is on the wire; the cp->docno rewrite for persisted output is C2. The server never knows about docno. Authoritative: doc-6 + docs/indexing.md.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-06-25 21:23
+---
+NAMING (doc-7): adopt the canonical vocabulary when doing the cp-native query cutover. Internally use docno (identity) and text (body), never docid/contents. The query/response path still emits docid -- Hit.docid and the "docid" keys in apps/jsonl_json.cc (search/get responses + describe) -- which A3 must rename per doc-7: results carry cp on the wire; any persisted id is docno; the SQLite reader table is docno_map at <burrow>/docno-cp.sqlite.
+---
+<!-- COMMENTS:END -->

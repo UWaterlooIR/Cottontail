@@ -21,13 +21,18 @@ and no map; the JSONL / TREC path always has docids.)
 
 A document is just:
 
-- **`docno`** — a unique string identifier (TREC's "document number"); for us it
-  is the JSON `docid` field.
-- **contents** — the document's text.
+- **`docno`** — a unique string identifier (TREC's "document number"). The raw
+  JSON key holding it is configurable; in our JSONL it is the `docid` field.
+- **`text`** — the document body. The raw JSON key holding it is configurable; in
+  our JSONL it is the `contents` field.
 
-We index one **JSON object per line** (`*.jsonl` / `*.jsonl.gz`). The two fields
-we care about (names configurable via `IndexOptions.docid_field` /
-`contents_field`):
+Internally — in code, artifacts, tests, and the specs downstream of the indexer —
+we use the canonical terms **`docno`** and **`text`** (decision **doc-7**). Only
+the indexer knows the raw JSON field names, supplied as configuration so it works
+with any JSON: `IndexOptions.docno_field` (`--docno-field`, default `"docid"`) and
+`text_field` (`--text-field`, default `"contents"`).
+
+We index one **JSON object per line** (`*.jsonl` / `*.jsonl.gz`):
 
 ```jsonc
 { "docid": "shard_00037_72680", "contents": "Black bear attacks on hikers ..." }
@@ -43,19 +48,19 @@ with 500M in mind. The cp-native dev/POC burrow is
 `Scrapheap/climbmix-100k-porter.burrow` (~100k docs); a ~1000-shard ClimbMix subset
 is ~85M docs, and the full collection is ~6× that.
 
-## 2. What we store in the burrow — contents only
+## 2. What we store in the burrow — text only
 
-For each row we store **only the contents**, bracketed by one structural
+For each row we store **only the text**, bracketed by one structural
 annotation that marks the document's extent:
 
 ```cpp
 addr p_body, q_body;
-builder->add_text(contents, &p_body, &q_body);          // body tokens -> token/text store + inverted index
+builder->add_text(text, &p_body, &q_body);              // body tokens -> token/text store + inverted index
 builder->add_annotation(":item", p_body, q_body, 0.0);  // the document's span [p_body, q_body]
 // add_document returns cp (= p_body); the driver emits (docno, cp) to the flat map dump (see §6)
 ```
 
-We do **not** `add_text(docid)` and we do **not** create a `:docno` annotation.
+We do **not** `add_text(docno)` and we do **not** create a `:docno` annotation.
 
 **Why not index the docno.** `add_text` both stores tokens (so `translate` works)
 *and* featurizes them into the inverted index. We never *search* for a docno, so
@@ -108,7 +113,7 @@ integers** (the `cp`s it saw in prior results) and sends them as `exclude`;
 exclusion is the original ISJ behaviour ("walk down the ranked list, skip what
 you've already judged"), realized as a direct **post-rank filter on `cp`**:
 
-1. Rank within the plain `:item` container (no docno carve, no docid tokens
+1. Rank within the plain `:item` container (no docno carve, no docno tokens
    touched), over-fetching `depth = top_k + |exclude|` so a full page survives.
 2. Drop any result whose `cp` is in the exclude-`cp` set (an integer hash-set
    membership test — no `translate`, no string compare, no `docno → cp` lookup).
@@ -154,7 +159,7 @@ against 500M documents.
 > (`idx()->count(feature)` — an `O(log F)` lookup, cached, no posting-list load or
 > document scan), independent of the document match counts above.
 
-## 5. Fetching document contents
+## 5. Fetching document text
 
 Given a document's span `(cp, cq)`, the text is `txt()->translate(cp, cq)` (`O(L)`
 in the document length). Two access paths, by identity:
@@ -185,8 +190,9 @@ store, built once at index time and read occasionally (decision doc-6):
 
 - **Build (two steps, one front door).** A Python index CLI orchestrates:
   1. the C++ `cottontail-jsonl-index` indexes the JSONL into a plain cp-native
-     burrow — `add_document(contents) -> cp` — and **dumps a flat `docno<TAB>cp`
-     file** alongside it (no map structure in C++, no in-RAM accumulation);
+     burrow — `add_document(text) -> cp` — and **dumps a flat `docno<TAB>cp` file
+     at `<burrow>/docno-cp.tsv`** alongside it (no map structure in C++, no in-RAM
+     accumulation);
   2. the CLI loads the flat file into the SQLite store and **deletes the flat
      file** (on success; on failure it leaves both in place and exits non-zero).
   For a corpus with no docnos, step 1 writes no flat file and step 2 builds no
@@ -236,7 +242,7 @@ RAM to sort.
 
 ## 9. Summary
 
-The burrow stores **contents + one `:item` annotation per document, and nothing
+The burrow stores **text + one `:item` annotation per document, and nothing
 else**. The working identity is the `:item` start address **`cp`** (decision
 doc-6): results, exclusion, ranking, the agent's judged set, and document reads are
 all `cp`; filtering judged documents is a direct integer `cp` post-filter, and text

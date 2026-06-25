@@ -4,7 +4,7 @@ title: Searcher — per-intent ISJ search agent over Cottontail
 status: To Do
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-21 18:54'
+updated_date: '2026-06-25 21:23'
 labels:
   - searcher
 dependencies: []
@@ -95,3 +95,13 @@ Docs track:
 Out of scope: fusion (RRF, dropped); Task-R TSV / RAG-JSONL; the dev-data eval
 harness; real-model policy tuning.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-06-25 21:23
+---
+NAMING convention recorded in doc-7: docno (identity) and text (body) are the canonical internal terms; the indexer maps the raw JSON keys via docno_field/text_field (defaults docid/contents). Applies across all Searcher subtasks; cp stays the on-the-wire working id (doc-6).
+---
+<!-- COMMENTS:END -->

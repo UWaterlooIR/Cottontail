@@ -143,24 +143,24 @@ TEST(JsonlIndex, StrictIsFatal) {
   EXPECT_FALSE(build("test/jsonl/bad", tmp_burrow("bad2"), &s, &error, true));
 }
 
-// cp-native (TASK-6.2): a duplicate docid is NOT detected at index time -- both
-// rows are indexed and both appear in the flat (docid<TAB>cp) dump with distinct
+// cp-native (TASK-6.2): a duplicate docno is NOT detected at index time -- both
+// rows are indexed and both appear in the flat (docno<TAB>cp) dump with distinct
 // cps. docno uniqueness is enforced later, when the index CLI builds the SQLite
-// map (TASK-6.3 UNIQUE index).
-TEST(JsonlIndex, DuplicateDocidIndexedNotRejected) {
+// map (TASK-6.3 UNIQUE index). (The JSON field holding the docno is "docid".)
+TEST(JsonlIndex, DuplicateDocnoIndexedNotRejected) {
   std::string error, burrow;
   const std::vector<std::string> rows = {
       R"({"docid":"dup","contents":"first body about cats"})",
       R"({"docid":"dup","contents":"second body about dogs"})",
   };
   ASSERT_TRUE(build_rows("dup_index", rows, "", &burrow, &error)) << error;
-  std::ifstream flat(burrow + "/docid-cp.tsv");
+  std::ifstream flat(burrow + "/docno-cp.tsv");
   ASSERT_TRUE(flat.good());
   std::vector<std::pair<std::string, cottontail::addr>> entries;
-  std::string docid;
+  std::string docno;
   cottontail::addr cp;
-  while (flat >> docid >> cp)
-    entries.emplace_back(docid, cp);
+  while (flat >> docno >> cp)
+    entries.emplace_back(docno, cp);
   ASSERT_EQ(entries.size(), 2u);
   EXPECT_EQ(entries[0].first, "dup");
   EXPECT_EQ(entries[1].first, "dup");
@@ -983,12 +983,12 @@ TEST(JsonlCount, DISABLED_GclAndStem) {
   ws->end();
 }
 
-// cp-native (TASK-6.2): the burrow carries NO :docno and no docid tokens; the
-// docid is paired with its cp only in the flat <burrow>/docid-cp.tsv dump (from
+// cp-native (TASK-6.2): the burrow carries NO :docno and no docno tokens; the
+// docno is paired with its cp only in the flat <burrow>/docno-cp.tsv dump (from
 // which the index CLI, TASK-6.3, builds the cp<->docno SQLite map). Assert the
-// dump lists (docid, cp) for each row, with each cp a real ":item" start whose
-// body translates back to that row's contents.
-TEST(JsonlFlatDump, MapsDocidToItemStart) {
+// dump lists (docno, cp) for each row, with each cp a real ":item" start whose
+// body translates back to that row's text.
+TEST(JsonlFlatDump, MapsDocnoToItemStart) {
   std::string error;
   IndexSummary s;
   std::string burrow = tmp_burrow("flat1");
@@ -997,7 +997,7 @@ TEST(JsonlFlatDump, MapsDocidToItemStart) {
 
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  // No :docno annotation and no docid tokens were indexed.
+  // No :docno annotation and no docno tokens were indexed.
   auto fz = w->featurizer();
   EXPECT_EQ(w->idx()->count(fz->featurize(":docno")), 0);
   EXPECT_EQ(w->idx()->count(fz->featurize("doc")), 0); // from "doc-00N"
@@ -1015,24 +1015,24 @@ TEST(JsonlFlatDump, MapsDocidToItemStart) {
   }
   EXPECT_EQ(item_span.size(), 4u);
 
-  // The flat dump maps each docid to a cp that is a real ":item" start, and the
-  // body at that span is the row's contents.
+  // The flat dump maps each docno to a cp that is a real ":item" start, and the
+  // body at that span is the row's text.
   const std::map<std::string, std::string> expected = {
       {"doc-001", "the quick brown fox jumps over the lazy dog"},
       {"doc-002", "a quick red fox runs very fast"},
       {"doc-003", "the lazy dog sleeps all day long"},
       {"doc-004", "elephants disappeared from the middle east long ago"},
   };
-  std::ifstream flat(burrow + "/docid-cp.tsv");
+  std::ifstream flat(burrow + "/docno-cp.tsv");
   ASSERT_TRUE(flat.good());
   size_t seen = 0;
-  std::string docid;
+  std::string docno;
   cottontail::addr cp;
-  while (flat >> docid >> cp) {
+  while (flat >> docno >> cp) {
     seen++;
-    ASSERT_EQ(item_span.count(cp), 1u) << docid << " cp=" << cp;
-    auto it = expected.find(docid);
-    ASSERT_NE(it, expected.end()) << docid;
+    ASSERT_EQ(item_span.count(cp), 1u) << docno << " cp=" << cp;
+    auto it = expected.find(docno);
+    ASSERT_NE(it, expected.end()) << docno;
     std::string body = w->txt()->translate(cp, item_span[cp]);
     EXPECT_EQ(body.compare(0, it->second.size(), it->second), 0)
         << "got: [" << body << "]";

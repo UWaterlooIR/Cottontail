@@ -12,4 +12,5 @@
 - [Dev burrow (climbmix-100k-porter)](dev-burrow-climbmix-100k.md) — new-style porter dev index for Searcher cp/sidecar work
 - [Backlog AC editing](backlog-acceptance-criteria-editing.md) — CLI gotchas (--acceptance-criteria dups!) + the safe AC-replace recipe
 - [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design takes ALL open backlog work (no new branches); gh-https push now wired
+- [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3

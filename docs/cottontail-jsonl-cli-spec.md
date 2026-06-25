@@ -34,8 +34,11 @@ These decisions were made deliberately after measuring the engine at scale (see 
    ever wanted, it would be a clearly separate, opt-in offline tool — out of scope here.)
 3. **Index type:** a static, disk-based **`SimpleWarren`** burrow. The indexer writes it;
    the query tool opens it **read-only**.
-4. **Indexed content:** only the `contents` field (body text) plus **`docid`** (the
-   document identifier). **All other JSON fields are ignored** — including `id` (its
+4. **Indexed content:** only the **text** (the `contents` field by default) is
+   tokenized; the **docno** (the `docid` field by default) is recorded out-of-index
+   in the cp↔docno map (§3.4), never tokenized. Field names are configurable
+   (`--docno-field` / `--text-field`); internal terms are `docno`/`text` (doc-7).
+   **All other JSON fields are ignored** — including `id` (its
    semantics are unknown and it must not be used), `source_file`, `row_number`, `mode`,
    and any future fields. They are not indexed, stored, or returned.
 5. **Retrieval unit:** one **row = one document**. Ranking and dedup happen at row
@@ -116,8 +119,8 @@ read-only by `SimpleWarren`.
 |---|---|---|
 | `--input <dir>` | (required) | Root directory; recurse for `*.jsonl`/`*.jsonl.gz`. |
 | `--burrow <path>` | (required) | Output burrow path. |
-| `--docid-field <name>` | `docid` | JSON field used as the document identifier. |
-| `--contents-field <name>` | `contents` | JSON field holding the body text. |
+| `--docno-field <name>` | `docid` | JSON field holding the docno (document id). |
+| `--text-field <name>` | `contents` | JSON field holding the text (body). |
 | `--buffer <records>` | 256Mi | Builder token/annotation buffer size (records). Raise on big-RAM hosts to spill less; see §3.5. |
 | `--overwrite` | off | If the burrow exists, replace it; otherwise fail rather than silently append. |
 | `--limit <n>` | none | Index at most `n` rows total (smoke tests). |
@@ -135,37 +138,39 @@ is no matching flag on the query side. Default retrieval is exact surface tokens
 ### 3.3 JSONL parsing rules
 
 - One JSON object per line; blank lines skipped silently.
-- A line that fails to parse, is missing the docid/contents field, or is
-  **contentless** (empty docid/contents, or contents with no indexable tokens) is
+- A line that fails to parse, is missing the docno/text field, or is
+  **contentless** (empty docno/text, or text with no indexable tokens) is
   **skipped, counted, and logged** at `--verbose`. It must **not** abort the run
   unless `--strict`.
-- A **duplicate docid** is **not** detected at index time (cp-native: the indexer
-  stores no docno). Both rows are indexed and both appear in the flat dump; docid
+- A **duplicate docno** is **not** detected at index time (cp-native: the indexer
+  stores no docno). Both rows are indexed and both appear in the flat dump; docno
   uniqueness is enforced later, when the index CLI (TASK-6.3) builds the SQLite
   map (its `UNIQUE` index fails the build, naming the offender).
-- Only `docid` and `contents` are read; every other field (including `id`) is ignored.
+- Only the docno field (default `docid`) and text field (default `contents`) are
+  read; every other field (including `id`) is ignored.
 
 ### 3.4 Indexing model (one row = one document)
 
 For each row, the **content indexer** (`ContentIndexer`, `src/content_index.h`)
-stores **only the contents**, bracketed by one structural annotation, and hands
-back the document's `cp`:
+stores **only the text**, bracketed by one structural annotation, and hands back
+the document's `cp`:
 
 ```
-cp = add_document(contents):
-  add_text(contents) -> (p_body, q_body) ; add_annotation(":item", p_body, q_body)
+cp = add_document(text):
+  add_text(text) -> (p_body, q_body) ; add_annotation(":item", p_body, q_body)
   return cp = p_body
 ```
 
 - `:item` spans the **body** and is the document/container extent.
-- The docid is **not** tokenized and there is **no `:docno`** annotation. Indexing
-  the docid would bloat the inverted index with tokens we never search (e.g.
+- The docno is **not** tokenized and there is **no `:docno`** annotation. Indexing
+  the docno would bloat the inverted index with tokens we never search (e.g.
   `shard_*`) — see `docs/indexing.md` §2.
 - The unique internal id is the `:item` start address `cp`. `jsonl_index` pairs
-  each docid with its `cp` in a flat `<burrow>/docid-cp.tsv` dump (one
-  `docid<TAB>cp` line per indexed row), from which the index CLI (TASK-6.3) builds
+  each docno with its `cp` in a flat `<burrow>/docno-cp.tsv` dump (one
+  `docno<TAB>cp` line per indexed row), from which the index CLI (TASK-6.3) builds
   the `cp ↔ docno` **SQLite** map (`docno-cp.sqlite`), whose `UNIQUE` index
-  enforces docid uniqueness. See `docs/indexing.md` (decision doc-6, cp-native).
+  enforces docno uniqueness. See `docs/indexing.md` (decision doc-6 cp-native,
+  doc-7 naming).
 - Body text is indexed **verbatim**.
 
 Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
@@ -218,7 +223,7 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 
 > ⚠️ **Pending the cp-native query cutover.** As of TASK-6.2 the indexer produces
 > the cp-native burrow (contents + `:item`, **no `:docno`**, see §3.4) plus a flat
-> `docid-cp.tsv` dump. The query side described below
+> `docno-cp.tsv` dump. The query side described below
 > (`--text`/`--gcl`/`--get`/`--count`/`--cover`,
 > `jsonl_query`/`jsonl_get`/`jsonl_count`/`jsonl_explain`/`jsonl_cover_search`,
 > and the server's `/tools/*`) still reads `:docno`, so it does **not** work

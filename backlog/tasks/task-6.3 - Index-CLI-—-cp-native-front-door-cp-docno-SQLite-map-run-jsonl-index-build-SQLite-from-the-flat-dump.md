@@ -7,7 +7,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-06-21 18:44'
-updated_date: '2026-06-25 20:46'
+updated_date: '2026-06-25 21:23'
 labels:
   - python
   - indexing
@@ -84,6 +84,16 @@ Validate: uv sync --project isj; uv run --project isj pytest. Forward-compat: sc
 <!-- SECTION:NOTES:BEGIN -->
 Implemented in isj/: isj_agent/docno_map.py (DocnoMap; sqlite3 immutable=1 read-only; docno(cp)/docnos(cps batch, chunked 900)/cp(docno); table docno_map) and isj_agent/index.py (build_sqlite_map with batched insert + row-by-row narrowing to name a duplicate; front-door main(): subprocess cottontail-jsonl-index, build SQLite, delete flat on success; on DuplicateDocnoError remove partial sqlite, leave burrow+flat, exit 1; no-flat -> cp-only). Binary path from config.toml [index].binary (repo-root-relative) + --index-bin override; console script cottontail-index in pyproject. config.example.toml [index] added. Tests: tests/test_docno_map.py (4) + tests/test_index_cli.py (5, incl. an auto-skipped-if-unbuilt e2e against the real binary). VERIFIED: uv sync + uv run pytest = 16 passed (e2e RAN against bazel-built binary, not skipped); cottontail-index --help OK; manual front-door run on test/jsonl/plain built docno-cp.sqlite (4 docids), removed docid-cp.tsv, DocnoMap round-tripped cp<->docno. Table name docno_map is the contract A3/TASK-5.12 must read.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-06-25 21:23
+---
+RENAMED per doc-7: the front door reads <burrow>/docno-cp.tsv (was docid-cp.tsv). ACs referencing docid-cp.tsv are superseded by doc-7; code/tests/docs use docno-cp.tsv.
+---
+<!-- COMMENTS:END -->
 
 ## Final Summary
 

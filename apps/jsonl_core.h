@@ -5,11 +5,12 @@
 // The CLIs are thin argv/JSON wrappers over these functions so the behavior is
 // unit-testable without spawning processes (see docs/cottontail-jsonl-cli-spec.md
 // §11). The index is a static, disk-based SimpleWarren with one document per JSON
-// row: it stores the contents plus one ":item" annotation over the body, and
-// nothing else (no docno tokenization, no ":docno"). The unique internal id is
-// the ":item" start address (cp); jsonl_index pairs each docid with its cp in a
-// flat <burrow>/docid-cp.tsv dump, from which the index CLI (TASK-6.3) builds the
-// cp<->docno SQLite map. See docs/indexing.md (decision doc-6, cp-native).
+// row: it stores the text plus one ":item" annotation over the body, and nothing
+// else (no docno tokenization, no ":docno"). The unique internal id is the
+// ":item" start address (cp); jsonl_index pairs each docno with its cp in a flat
+// <burrow>/docno-cp.tsv dump, from which the index CLI (TASK-6.3) builds the
+// cp<->docno SQLite map. See docs/indexing.md (decision doc-6, cp-native, and the
+// docno/text naming, doc-7).
 //
 // NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
 // jsonl_explain / jsonl_cover_search) still reads ":docno" and is therefore
@@ -29,8 +30,8 @@ namespace jsonl {
 struct IndexOptions {
   std::string input;                  // root directory to recurse
   std::string burrow;                 // output burrow path
-  std::string docid_field = "docid";
-  std::string contents_field = "contents";
+  std::string docno_field = "docid";    // JSON field name holding the docno
+  std::string text_field = "contents";  // JSON field name holding the text
   size_t buffer = 256UL * 1024 * 1024; // builder token/annotation buffer (records)
   bool overwrite = false;
   long limit = -1;                    // -1 = unlimited

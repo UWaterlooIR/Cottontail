@@ -13,7 +13,7 @@ def _fake_run_writing(burrow, contents):
 
     def fake_run(cmd, *args, **kwargs):
         if contents is not None:
-            (burrow / "docid-cp.tsv").write_text(contents, encoding="utf-8")
+            (burrow / "docno-cp.tsv").write_text(contents, encoding="utf-8")
         return subprocess.CompletedProcess(cmd, 0)
 
     return fake_run
@@ -41,7 +41,7 @@ def test_front_door_builds_map_and_deletes_flat(tmp_path, monkeypatch):
 
     sqlite_path = burrow / "docno-cp.sqlite"
     assert sqlite_path.exists()
-    assert not (burrow / "docid-cp.tsv").exists()  # deleted on success
+    assert not (burrow / "docno-cp.tsv").exists()  # deleted on success
     with DocnoMap(sqlite_path) as m:
         assert m.docno(0) == "doc-001"
         assert m.cp("doc-002") == 9
@@ -58,7 +58,7 @@ def test_front_door_duplicate_leaves_flat_removes_partial(tmp_path, monkeypatch)
     with pytest.raises(SystemExit) as exc:
         index.main(_main_args(tmp_path, burrow))
     assert exc.value.code == 1
-    assert (burrow / "docid-cp.tsv").exists()        # flat left in place
+    assert (burrow / "docno-cp.tsv").exists()        # flat left in place
     assert not (burrow / "docno-cp.sqlite").exists()  # partial map removed
 
 
@@ -110,7 +110,7 @@ def test_end_to_end_against_real_binary(tmp_path):
 
     sqlite_path = burrow / "docno-cp.sqlite"
     assert sqlite_path.exists()
-    assert not (burrow / "docid-cp.tsv").exists()  # deleted on success
+    assert not (burrow / "docno-cp.tsv").exists()  # deleted on success
     with DocnoMap(sqlite_path) as m:
         cp = m.cp("shard_00037_72680")
         assert cp is not None

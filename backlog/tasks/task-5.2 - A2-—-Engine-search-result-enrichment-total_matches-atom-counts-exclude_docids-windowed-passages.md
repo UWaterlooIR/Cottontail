@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-17 13:36'
-updated_date: '2026-06-21 19:35'
+updated_date: '2026-06-25 21:23'
 labels:
   - engine
   - cpp
@@ -258,3 +258,13 @@ Test: bazel test //test:tests //test:hazel_test //test:jsonl_test //test:jsonl_s
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior docno/sidecar note. Exclusion is a DIRECT cp post-filter: the request `exclude` is a list of cp integers (no docno, no resolution, no sidecar/cache); over-fetch top_k + |exclude|; drop hits whose cp is in the exclude set. Each returned hit carries its cp (response {rank, score, cp, summary}). total/unjudged_matches are a byproduct of the single ssr pass (unjudged = matching cps not in exclude). atom_counts/window/rank/score unchanged. Authoritative: doc-6 + docs/indexing.md section 4.
 <!-- SECTION:NOTES:END -->
+
+## Comments
+
+<!-- COMMENTS:BEGIN -->
+author: @claude
+created: 2026-06-25 21:23
+---
+NAMING (doc-7) + cp-native (doc-6): the response examples in this task showing {"docid": ...} predate cp-native -- results now carry cp (doc-6), and the canonical persisted id is docno (doc-7), never docid. exclude is cp integers. Use docno/text internally when implementing.
+---
+<!-- COMMENTS:END -->
