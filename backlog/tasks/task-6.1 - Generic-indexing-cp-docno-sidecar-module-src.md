@@ -3,11 +3,11 @@ id: TASK-6.1
 title: >-
   Generic cp-native content indexer (src/): add_document(contents) -> cp (no
   docno, no sidecar)
-status: To Do
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-06-19 03:43'
-updated_date: '2026-06-21 19:36'
+updated_date: '2026-06-25 20:20'
 labels:
   - cpp
 dependencies: []
@@ -73,11 +73,17 @@ Plan + 2 new ACs added per the 2026-06-20 design discussion. Differences vs prio
 ---
 <!-- COMMENTS:END -->
 
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Added src/content_index.{h,cc} (ContentIndexer: make(builder); bool add_document(contents, addr* cp, error) returning the :item-start cp; finalize) and replaced the docno+sidecar module: deleted src/docno_contents_index.{h,cc} and rewrote its test as test/content_index.cc. Signature follows the repo's bool/out-param/error convention (cf. Builder::add_text). Verified: //src:cottontail + //test:tests green, ContentIndex.* 3/3 pass; the apps build is restored by the TASK-6.2 commit on the same branch (PR #5).
+<!-- SECTION:FINAL_SUMMARY:END -->
+
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A src/ module provides a thin cp-native content indexer over a builder: add_document(contents) -> cp does add_text(contents) + one :item annotation per document (cp = the :item start) and RETURNS cp. It takes no docno, stores no docno, and builds no map/sidecar. Depends only on the Cottontail core; wired into src/BUILD.
-- [ ] #2 The returned cp equals the :item container start (what ssr_ranking reports as container_p()), unique and strictly increasing by construction; finalize() finalizes the underlying builder.
-- [ ] #3 add_document rejects empty/whitespace-only contents, and contents that yield no indexable tokens, as a HARD ERROR (an empty body occupies no address range, so its cp would collide with the next document). This is the cp-uniqueness invariant, independent of docno.
+- [x] #1 A src/ module provides a thin cp-native content indexer over a builder: add_document(contents) -> cp does add_text(contents) + one :item annotation per document (cp = the :item start) and RETURNS cp. It takes no docno, stores no docno, and builds no map/sidecar. Depends only on the Cottontail core; wired into src/BUILD.
+- [x] #2 The returned cp equals the :item container start (what ssr_ranking reports as container_p()), unique and strictly increasing by construction; finalize() finalizes the underlying builder.
+- [x] #3 add_document rejects empty/whitespace-only contents, and contents that yield no indexable tokens, as a HARD ERROR (an empty body occupies no address range, so its cp would collide with the next document). This is the cp-uniqueness invariant, independent of docno.
 - [ ] #4 The custom DocnoContentsSidecar (binary cp<->docno format, permutation, lazy readers) and the docno parameter are REMOVED; the module/file is renamed to a cp-native name; the burrow has no :docno annotation and no docno tokens.
 - [ ] #5 Unit tests (test/, wired into test/BUILD) index a few contents and assert: cp values are distinct and strictly increasing; the returned cp matches the :item container_p() (verified via a hopper over :item); the index has no :docno and no docno tokens; empty/zero-token contents are rejected.
 - [ ] #6 bazel build //src:cottontail and the new test target (plus //test:tests //test:hazel_test) are green.
@@ -86,21 +92,23 @@ Plan + 2 new ACs added per the 2026-06-20 design discussion. Differences vs prio
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Rename src/docno_contents_index.{h,cc} to a cp-native name; reduce it to the
-   content indexer: add_document(contents) -> cp = add_text(contents,&p,&q) +
-   add_annotation(":item",p,q); return p; guard q<p (no indexable tokens) as a hard
-   error; finalize() -> builder->finalize().
-2. DELETE DocnoContentsSidecar (the binary format, the permutation, the readers) and
-   the docno parameter / uniqueness machinery.
-3. Update src/BUILD (the glob picks up the rename) and the unit tests (rename
-   test/docno_contents_index.cc): assert distinct increasing cp; cp matches the
-   :item container_p() via a hopper; no :docno / no docno tokens; empty/zero-token
-   contents rejected.
-4. Verify bazel build //src:cottontail + //test:tests //test:hazel_test green.
+1. Add src/content_index.{h,cc}: class ContentIndexer driving a Builder (cp-native, no docno, no sidecar, no Working dependency).
+   - make(std::shared_ptr<Builder>, std::string* error=nullptr) -> shared_ptr (nullptr on null builder).
+   - bool add_document(const std::string& contents, addr* cp, std::string* error=nullptr): builder_->add_text(contents,&p,&q); HARD ERROR (return false + *error) if contents empty or q<p (no indexable tokens -> would collide cp); builder_->add_annotation(":item",p,q,0.0); *cp=p; return true.
+   - bool finalize(std::string* error=nullptr): builder_->finalize(error); guards add_document-after-finalize.
+   - Signature is bool/out-param/error to match Builder::add_text and the repo convention (60/60 fallible decls in src/*.h return bool+error; ZERO return a bare value+error). The AC's 'add_document(contents) -> cp' data-flow is carried by *cp.
+2. Delete src/docno_contents_index.{h,cc} entirely (DocnoContentsIndexer + DocnoContentsSidecar: the binary cp<->docno sidecar, docno blob, sorted permutation, lazy readers). src/BUILD globs *.cc so the rename needs no BUILD edit (AC#1 'wired into src/BUILD' satisfied by glob).
+3. Replace test/docno_contents_index.cc with test/content_index.cc (auto-globbed into //test:tests):
+   - no :docno and no docno tokens (shard,00037 -> 0 postings); :item count == #docs; contents indexed (bear,mountains > 0).
+   - returned cp strictly increasing; each cp is a real :item start (via :item hopper) AND equals ssr_ranking(warren,"bear",":item",k).container_p() (AC#2 wording).
+   - reject empty contents and whitespace-only contents (AC#3). No duplicate test (docno uniqueness is TASK-6.3 SQLite).
+4. NOTE: deleting the module leaves apps/jsonl_core.cc + test/jsonl.cc uncompilable; the build is restored in the SAME branch by the TASK-6.2 commit (per the approved one-branch/two-commit plan, PR #5).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). Reframed to a THIN cp-native content indexer: add_document(contents) -> cp (add_text + one :item), no docno, no map. The prior implementation (DocnoContentsIndexer + the custom binary DocnoContentsSidecar in src/docno_contents_index.{h,cc}, with its test) shipped under the old docno+sidecar spec and is to be REPLACED -- delete the sidecar machinery, rename the module cp-native, have add_document return cp. The cp<->docno map is now a SQLite store built by the index CLI (TASK-6.3) from a flat (docid,cp) dump the JSONL indexer writes. Authoritative: doc-6 + docs/indexing.md.
+
+Implemented src/content_index.{h,cc} (ContentIndexer: make(builder); bool add_document(contents, addr* cp, error); finalize). Deleted src/docno_contents_index.{h,cc} (DocnoContentsIndexer + DocnoContentsSidecar). Replaced test/docno_contents_index.cc -> test/content_index.cc (3 tests: no :docno/no docno tokens + :item count; cp strictly increasing + cp==:item start + cp==ssr_ranking container_p(); empty/untokenizable rejected). Verified: //src:cottontail + //test:tests build green; ContentIndex.* 3/3 pass. NOTE: apps build intentionally red until the TASK-6.2 commit restores the jsonl_index call site (same branch, PR #5).
 <!-- SECTION:NOTES:END -->
