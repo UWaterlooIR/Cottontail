@@ -139,30 +139,33 @@ is no matching flag on the query side. Default retrieval is exact surface tokens
   **contentless** (empty docid/contents, or contents with no indexable tokens) is
   **skipped, counted, and logged** at `--verbose`. It must **not** abort the run
   unless `--strict`.
-- A **duplicate docid** is a hard build failure (the sidecar requires unique
-  docids); it is reported at `finalize()` regardless of `--strict`.
+- A **duplicate docid** is **not** detected at index time (cp-native: the indexer
+  stores no docno). Both rows are indexed and both appear in the flat dump; docid
+  uniqueness is enforced later, when the index CLI (TASK-6.3) builds the SQLite
+  map (its `UNIQUE` index fails the build, naming the offender).
 - Only `docid` and `contents` are read; every other field (including `id`) is ignored.
 
 ### 3.4 Indexing model (one row = one document)
 
-For each row, the **generic indexer** (`DocnoContentsIndexer`,
-`src/docno_contents_index.h`) stores **only the contents**, bracketed by one
-structural annotation:
+For each row, the **content indexer** (`ContentIndexer`, `src/content_index.h`)
+stores **only the contents**, bracketed by one structural annotation, and hands
+back the document's `cp`:
 
 ```
-add_document(docid, contents):
+cp = add_document(contents):
   add_text(contents) -> (p_body, q_body) ; add_annotation(":item", p_body, q_body)
-  record (cp = p_body, docid) for the sidecar
+  return cp = p_body
 ```
 
 - `:item` spans the **body** and is the document/container extent.
 - The docid is **not** tokenized and there is **no `:docno`** annotation. Indexing
   the docid would bloat the inverted index with tokens we never search (e.g.
   `shard_*`) — see `docs/indexing.md` §2.
-- The unique internal id is the `:item` start address `cp`. The docid lives only
-  in a `cp ↔ docno` **sidecar** the indexer writes by default at `finalize()`
-  (`sidecar.{index,docno,perm}` in the burrow dir); see `docs/indexing.md`
-  (decision doc-4). docids must be **unique** — a duplicate fails the build.
+- The unique internal id is the `:item` start address `cp`. `jsonl_index` pairs
+  each docid with its `cp` in a flat `<burrow>/docid-cp.tsv` dump (one
+  `docid<TAB>cp` line per indexed row), from which the index CLI (TASK-6.3) builds
+  the `cp ↔ docno` **SQLite** map (`docno-cp.sqlite`), whose `UNIQUE` index
+  enforces docid uniqueness. See `docs/indexing.md` (decision doc-6, cp-native).
 - Body text is indexed **verbatim**.
 
 Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
@@ -213,16 +216,18 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 
 ## 4. Program 2 — `cottontail-jsonl-query`
 
-> ⚠️ **Pending the cp/sidecar redo.** As of TASK-6.2 the indexer produces the
-> new-style burrow (contents + `:item` + sidecar, **no `:docno`**, see §3.4). The
-> query side described below (`--text`/`--gcl`/`--get`/`--count`/`--cover`,
+> ⚠️ **Pending the cp-native query cutover.** As of TASK-6.2 the indexer produces
+> the cp-native burrow (contents + `:item`, **no `:docno`**, see §3.4) plus a flat
+> `docid-cp.tsv` dump. The query side described below
+> (`--text`/`--gcl`/`--get`/`--count`/`--cover`,
 > `jsonl_query`/`jsonl_get`/`jsonl_count`/`jsonl_explain`/`jsonl_cover_search`,
 > and the server's `/tools/*`) still reads `:docno`, so it does **not** work
-> against new-style burrows: results carry empty docids and docid filters/fetches
-> miss. This is the deliberately deferred **retrieval-side cutover** (decision
-> doc-4): the query path will be reframed on `cp` + the sidecar (results emit the
-> docid via `cp → docno`; exclusion post-filters on `cp`; `get_document` does
-> `docno → cp → translate`). The sections below describe the *current* (old-model)
+> against cp-native burrows: results carry empty docids and docid filters/fetches
+> miss. This is the deliberately deferred **retrieval-side cutover** (TASK-5.12 /
+> A3, decision doc-6): the query path will be reframed on `cp` (results carry
+> `cp`; exclusion post-filters on `cp`; `get_document` reads by `cp`, and the CLI
+> `--get <docno>` consults the SQLite map). The sections below describe the
+> *current* (old-model)
 > behavior and are retained for that redo.
 
 ### 4.1 Synopsis

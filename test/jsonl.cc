@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -13,7 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "apps/jsonl_core.h"
-#include "src/docno_contents_index.h"
+#include "src/cottontail.h"
 
 namespace {
 using namespace cottontail::jsonl;
@@ -142,16 +143,28 @@ TEST(JsonlIndex, StrictIsFatal) {
   EXPECT_FALSE(build("test/jsonl/bad", tmp_burrow("bad2"), &s, &error, true));
 }
 
-// A duplicate docid is a hard build failure (the sidecar requires unique
-// docnos); it is caught by the indexer's finalize() with a clear message.
-TEST(JsonlIndex, DuplicateDocidFails) {
+// cp-native (TASK-6.2): a duplicate docid is NOT detected at index time -- both
+// rows are indexed and both appear in the flat (docid<TAB>cp) dump with distinct
+// cps. docno uniqueness is enforced later, when the index CLI builds the SQLite
+// map (TASK-6.3 UNIQUE index).
+TEST(JsonlIndex, DuplicateDocidIndexedNotRejected) {
   std::string error, burrow;
   const std::vector<std::string> rows = {
       R"({"docid":"dup","contents":"first body about cats"})",
       R"({"docid":"dup","contents":"second body about dogs"})",
   };
-  EXPECT_FALSE(build_rows("dup_index", rows, "", &burrow, &error));
-  EXPECT_NE(error.find("duplicate"), std::string::npos) << error;
+  ASSERT_TRUE(build_rows("dup_index", rows, "", &burrow, &error)) << error;
+  std::ifstream flat(burrow + "/docid-cp.tsv");
+  ASSERT_TRUE(flat.good());
+  std::vector<std::pair<std::string, cottontail::addr>> entries;
+  std::string docid;
+  cottontail::addr cp;
+  while (flat >> docid >> cp)
+    entries.emplace_back(docid, cp);
+  ASSERT_EQ(entries.size(), 2u);
+  EXPECT_EQ(entries[0].first, "dup");
+  EXPECT_EQ(entries[1].first, "dup");
+  EXPECT_NE(entries[0].second, entries[1].second); // distinct cps
 }
 
 TEST(JsonlQuery, DISABLED_RetrievalAndDocid) {
@@ -970,13 +983,15 @@ TEST(JsonlCount, DISABLED_GclAndStem) {
   ws->end();
 }
 
-// The new-style index (TASK-6.2): the burrow carries NO :docno and no docid
-// tokens; the docid lives only in the cp<->docno sidecar that jsonl_index builds.
-// Round-trip docid<->cp through the sidecar and fetch each body by cp and docid.
-TEST(JsonlSidecar, RoundTrip) {
+// cp-native (TASK-6.2): the burrow carries NO :docno and no docid tokens; the
+// docid is paired with its cp only in the flat <burrow>/docid-cp.tsv dump (from
+// which the index CLI, TASK-6.3, builds the cp<->docno SQLite map). Assert the
+// dump lists (docid, cp) for each row, with each cp a real ":item" start whose
+// body translates back to that row's contents.
+TEST(JsonlFlatDump, MapsDocidToItemStart) {
   std::string error;
   IndexSummary s;
-  std::string burrow = tmp_burrow("sidecar1");
+  std::string burrow = tmp_burrow("flat1");
   ASSERT_TRUE(build("test/jsonl/plain", burrow, &s, &error)) << error;
   EXPECT_EQ(s.rows_indexed, 4u);
 
@@ -988,36 +1003,40 @@ TEST(JsonlSidecar, RoundTrip) {
   EXPECT_EQ(w->idx()->count(fz->featurize("doc")), 0); // from "doc-00N"
   EXPECT_EQ(w->idx()->count(fz->featurize(":item")), 4);
 
-  auto working = cottontail::Working::make(burrow, &error);
-  ASSERT_NE(working, nullptr) << error;
-  auto sidecar = cottontail::DocnoContentsSidecar::open(working, &error);
-  ASSERT_NE(sidecar, nullptr) << error;
+  // Collect the ":item" spans: cp (start) -> cq (end).
+  std::map<cottontail::addr, cottontail::addr> item_span;
+  {
+    auto hopper = w->hopper_from_gcl(":item", &error);
+    ASSERT_NE(hopper, nullptr) << error;
+    cottontail::addr p = cottontail::minfinity, q;
+    for (hopper->tau(p + 1, &p, &q); p < cottontail::maxfinity;
+         hopper->tau(p + 1, &p, &q))
+      item_span[p] = q;
+  }
+  EXPECT_EQ(item_span.size(), 4u);
 
-  const std::vector<std::pair<std::string, std::string>> expected = {
+  // The flat dump maps each docid to a cp that is a real ":item" start, and the
+  // body at that span is the row's contents.
+  const std::map<std::string, std::string> expected = {
       {"doc-001", "the quick brown fox jumps over the lazy dog"},
       {"doc-002", "a quick red fox runs very fast"},
       {"doc-003", "the lazy dog sleeps all day long"},
       {"doc-004", "elephants disappeared from the middle east long ago"},
   };
-  for (const auto &e : expected) {
-    cottontail::addr cp = -1;
-    ASSERT_TRUE(sidecar->cp_of(e.first, &cp)) << e.first;
-    std::string back;
-    ASSERT_TRUE(sidecar->docno_of(cp, &back));
-    EXPECT_EQ(back, e.first);
-    std::string by_cp, by_docno;
-    bool found = false;
-    ASSERT_TRUE(sidecar->text_by_cp(w, cp, &by_cp, &found, &error));
-    EXPECT_TRUE(found);
-    EXPECT_EQ(by_cp.compare(0, e.second.size(), e.second), 0)
-        << "got: [" << by_cp << "]";
-    found = false;
-    ASSERT_TRUE(sidecar->text_by_docno(w, e.first, &by_docno, &found, &error));
-    EXPECT_TRUE(found);
-    EXPECT_EQ(by_docno, by_cp);
+  std::ifstream flat(burrow + "/docid-cp.tsv");
+  ASSERT_TRUE(flat.good());
+  size_t seen = 0;
+  std::string docid;
+  cottontail::addr cp;
+  while (flat >> docid >> cp) {
+    seen++;
+    ASSERT_EQ(item_span.count(cp), 1u) << docid << " cp=" << cp;
+    auto it = expected.find(docid);
+    ASSERT_NE(it, expected.end()) << docid;
+    std::string body = w->txt()->translate(cp, item_span[cp]);
+    EXPECT_EQ(body.compare(0, it->second.size(), it->second), 0)
+        << "got: [" << body << "]";
   }
-  // An unknown docid is not-found (not an error).
-  cottontail::addr miss = -1;
-  EXPECT_FALSE(sidecar->cp_of("no-such-doc", &miss));
+  EXPECT_EQ(seen, 4u);
   w->end();
 }

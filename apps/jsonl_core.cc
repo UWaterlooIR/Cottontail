@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "src/builder.h"
-#include "src/docno_contents_index.h"
+#include "src/content_index.h"
 #include "src/nlohmann.h"
 #include "src/ranking.h"
 #include "src/recipe.h"
@@ -552,12 +553,20 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
   if (builder == nullptr)
     return false;
   builder->verbose(opts.verbose);
-  // The generic indexer (docs/indexing.md, doc-4) stores each document as
-  // contents + one ":item" annotation and, at finalize(), writes the cp<->docno
-  // sidecar. It does NOT tokenize the docid and creates no ":docno".
-  auto indexer = DocnoContentsIndexer::make(builder, working, error);
+  // The cp-native content indexer (docs/indexing.md, doc-6) stores each document
+  // as contents + one ":item" annotation and hands back its cp. It does NOT
+  // tokenize the docid and creates no ":docno"; instead the docid is paired with
+  // cp in a flat (docid<TAB>cp) dump written alongside the burrow, from which the
+  // index CLI (TASK-6.3) builds the cp<->docno SQLite map.
+  auto indexer = ContentIndexer::make(builder, error);
   if (indexer == nullptr)
     return false;
+  std::string flat_name = working->make_name("docid-cp.tsv");
+  std::ofstream flat_out(flat_name, std::ios::out | std::ios::trunc);
+  if (flat_out.fail()) {
+    safe_error(error) = "jsonl_index: cannot create " + flat_name;
+    return false;
+  }
 
   addr t0 = now();
   size_t rows = 0, skipped = 0, files_seen = 0;
@@ -607,11 +616,12 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
         continue;
       }
       std::string row_error;
-      if (!indexer->add_document(docid, contents, &row_error)) {
-        // A contentless row -- empty docid/contents, or contents with no
-        // indexable tokens -- is handled like a malformed row: skipped, fatal
-        // only under --strict. (A duplicate docid is caught later, by the
-        // indexer's finalize().)
+      addr cp;
+      if (!indexer->add_document(contents, &cp, &row_error)) {
+        // A contentless row -- empty contents, or contents with no indexable
+        // tokens -- is handled like a malformed row: skipped, fatal only under
+        // --strict. A duplicate docid is NOT detected here; docno uniqueness is
+        // enforced when the index CLI builds the SQLite map (TASK-6.3).
         skipped++;
         if (opts.strict) {
           safe_error(error) = row_error + " in " + file;
@@ -619,11 +629,17 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
         }
         continue;
       }
+      flat_out << docid << '\t' << cp << '\n';
       rows++;
     }
   }
   if (!indexer->finalize(error))
     return false;
+  flat_out.close();
+  if (flat_out.fail()) {
+    safe_error(error) = "jsonl_index: flat dump write failure: " + flat_name;
+    return false;
+  }
 
   if (summary != nullptr) {
     summary->burrow = opts.burrow;
