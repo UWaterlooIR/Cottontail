@@ -175,11 +175,13 @@ operations — the `cp → docno` rewrite when results/traces are persisted, and
 `docno → cp` lookup for a human/external fetch (§5). So it is a plain **SQLite**
 store, built once at index time and read occasionally (decision doc-6):
 
-- **Schema.** One table `(cp INTEGER PRIMARY KEY, docno TEXT UNIQUE)`. The primary
-  key gives `cp → docno`; the `UNIQUE` index gives `docno → cp` **and** is the
+- **Schema.** The store is `<burrow>/docno-cp.sqlite`, one table
+  `docno_map(cp INTEGER PRIMARY KEY, docno TEXT UNIQUE)`. The primary key gives
+  `cp → docno`; the `UNIQUE` index gives `docno → cp` **and** is the
   docno-uniqueness check — a duplicate docno fails the build, naming the offender.
-  Sized for ~500M rows (tens of GB on disk); **never loaded into the query
-  process**.
+  Both readers — the Python `isj_agent.docno_map` reader and the C++ boundary
+  `--get <docno>` (TASK-5.12 / A3) — key on this table name and schema. Sized for
+  ~500M rows (tens of GB on disk); **never loaded into the query process**.
 
 - **Build (two steps, one front door).** A Python index CLI orchestrates:
   1. the C++ `cottontail-jsonl-index` indexes the JSONL into a plain cp-native
