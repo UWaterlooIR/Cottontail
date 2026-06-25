@@ -11,5 +11,5 @@
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
 - [Dev burrow (climbmix-100k-porter)](dev-burrow-climbmix-100k.md) — new-style porter dev index for Searcher cp/sidecar work
 - [Backlog AC editing](backlog-acceptance-criteria-editing.md) — CLI gotchas (--acceptance-criteria dups!) + the safe AC-replace recipe
-- [PR: JSONL CLI](pr-jsonl-cli.md) — PRs #1, #3, #4 merged into main (JSONL CLI, stemming, agent tooling, HTTP server + thread pool); no active feature branch
+- [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design takes ALL open backlog work (no new branches); gh-https push now wired
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
