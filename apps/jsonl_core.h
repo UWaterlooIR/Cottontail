@@ -70,7 +70,7 @@ struct Passage {
 struct Hit {
   int rank = 0;
   double score = 0.0;
-  std::string docid;
+  addr cp = 0; // the document's working identity (:item container start)
   Passage best_passage;
   bool has_full_text = false;
   std::string full_text;
@@ -136,10 +136,11 @@ struct CoverResponse {
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
                         CoverResponse *out, std::string *error = nullptr);
 
-// Fetch the full body of the row whose :docno equals `docid`. Sets *found=false
-// (not an error) when no such row exists. Returns false only on a hard error.
-bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
-               std::string *text, bool *found, std::string *error = nullptr);
+// Fetch the full body of the document at `cp` (the :item container start, as
+// returned by search). Sets *found=false (not an error) when `cp` is not an :item
+// start. Returns false only on a hard error. cp-native: no docno, no map.
+bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
+               bool *found, std::string *error = nullptr);
 
 // Count the :item rows that match `spec` (AND of the terms for text mode, the
 // expression for gcl mode; honors spec.stem) — no ranking. Returns false only on

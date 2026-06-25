@@ -355,22 +355,21 @@ int main(int argc, char **argv) {
              } catch (...) {
                return fail(res, 400, "bad JSON body", "request");
              }
-             std::string docid;
+             cottontail::addr cp;
              try {
-               docid = b.at("docid").get<std::string>();
+               cp = b.at("cp").get<cottontail::addr>();
              } catch (...) {
-               return fail(res, 400, "missing/invalid 'docid'", "request");
+               return fail(res, 400, "missing/invalid 'cp'", "request");
              }
              std::string body, e;
              bool found = false;
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
-                   return cottontail::jsonl::jsonl_get(w, docid, &body, &found,
-                                                       &e);
+                   return cottontail::jsonl::jsonl_get(w, cp, &body, &found, &e);
                  });
              if (!ok)
                return fail(res, 400, e, "get");
-             res.set_content(cottontail::jsonl::get_json(docid, found, body).dump(),
+             res.set_content(cottontail::jsonl::get_json(cp, found, body).dump(),
                              "application/json");
            });
 

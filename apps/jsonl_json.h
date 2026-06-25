@@ -24,8 +24,8 @@ json results_json(const QuerySpec &spec, const std::vector<Hit> &hits,
 // Dry-run diagnostics: per-leaf df + stream (exact|stemmed).
 json explain_json(const QuerySpec &spec, const ExplainResult &ex);
 
-// A row fetched by docid: {docid, found, text}.
-json get_json(const std::string &docid, bool found, const std::string &text);
+// A row fetched by cp: {cp, found, text}.
+json get_json(addr cp, bool found, const std::string &text);
 
 // Selectivity: {query, query_mode, stemmed, match_count}.
 json count_json(const QuerySpec &spec, long count);

@@ -719,25 +719,19 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     }
   }
 
-  auto docno = warren->hopper_from_gcl(":docno", error);
   hits->clear();
   int rank = 1;
   for (const auto &r : ranked) {
     Hit h;
     h.rank = rank++;
     h.score = r.score();
-    addr dp = 0, dq = -1;
-    if (docno != nullptr) {
-      docno->tau(r.container_p(), &dp, &dq);
-      h.docid = trim(warren->txt()->translate(dp, dq));
-    }
+    h.cp = r.container_p(); // cp-native: the document's working identity
     h.best_passage.start = r.p();
     h.best_passage.end = r.q();
     h.best_passage.text =
         truncate(warren->txt()->translate(r.p(), r.q()), spec.snippet_chars);
     if (spec.full_text) {
-      addr body_start = (dq >= 0 ? dq + 1 : r.container_p());
-      h.full_text = warren->txt()->translate(body_start, r.container_q());
+      h.full_text = warren->txt()->translate(r.container_p(), r.container_q());
       h.has_full_text = true;
     }
     hits->push_back(std::move(h));
@@ -833,41 +827,21 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   return true;
 }
 
-bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
-               std::string *text, bool *found, std::string *error) {
+bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
+               bool *found, std::string *error) {
   *found = false;
   text->clear();
-  std::vector<std::string> terms = warren->tokenizer()->split(docid);
-  if (terms.empty())
-    return true; // nothing to match on -> not found
-  // Find an :item whose :docno contains the docid's token sequence, then verify
-  // the recovered docid string matches exactly (guards against a docid whose
-  // tokens are a subset of another's).
-  std::string phrase = terms[0];
-  if (terms.size() > 1) {
-    phrase = "(...";
-    for (const auto &t : terms)
-      phrase += " " + t;
-    phrase += ")";
-  }
-  std::string gcl = "(>> :item (>> :docno " + phrase + "))";
-  auto hopper = warren->hopper_from_gcl(gcl, error);
-  if (hopper == nullptr)
-    return false;
-  auto docno = warren->hopper_from_gcl(":docno", error);
-  if (docno == nullptr)
+  // cp-native: cp is an :item container start (from search). Recover the span end
+  // cq from the :item container at cp, then translate the whole body. No docno.
+  auto item = warren->hopper_from_gcl(":item", error);
+  if (item == nullptr)
     return false;
   addr p, q;
-  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
-       hopper->tau(p + 1, &p, &q)) {
-    addr dp = 0, dq = -1;
-    docno->tau(p, &dp, &dq);
-    if (trim(warren->txt()->translate(dp, dq)) == docid) {
-      *found = true;
-      *text = warren->txt()->translate(dq + 1, q); // body after the :docno span
-      return true;
-    }
-  }
+  item->tau(cp, &p, &q);
+  if (p != cp || p >= maxfinity)
+    return true; // cp is not an :item start -> not found (not an error)
+  *found = true;
+  *text = warren->txt()->translate(cp, q);
   return true;
 }
 

@@ -167,11 +167,13 @@ in the document length). Two access paths, by identity:
 - **By `cp` (the working path).** The engine and the agent both hold `cp` (and `cq`)
   from a ranking result, so reading a document is `translate(cp, cq)` directly — no
   docno, no map. This is the ISJ loop's read-a-candidate path.
-- **By `docno` (the boundary path).** A human at the CLI (or another tool) that
-  holds only a **docno** uses `cottontail-jsonl-query --get <docno>`: it reads the
-  SQLite map for `docno → cp` (read-only) and then `translate`s by `cp` (`cq` from
-  the `:item` container at `cp`). Occasional and latency-tolerant; the multi-threaded
-  `cover_search` / exclusion path never touches the map.
+- **By `docno` (the boundary path).** A human/external caller that holds only a
+  **docno** uses the **Python helper** `cottontail-fetch` (TASK-6.4): it resolves
+  `docno → cp` with `isj_agent.docno_map.DocnoMap` (read-only SQLite) and then calls
+  the C++ get-by-`cp` (`cottontail-jsonl-query --get <cp>`). **The C++ engine itself
+  is cp-only and never opens the map** (decision **doc-8**): `docno ↔ cp` lives only
+  in Python. Occasional and latency-tolerant; the multi-threaded `cover_search` /
+  exclusion path never touches the map either.
 
 ## 6. The `cp ↔ docno` map — a SQLite store, off the hot path
 
@@ -184,9 +186,9 @@ store, built once at index time and read occasionally (decision doc-6):
   `docno_map(cp INTEGER PRIMARY KEY, docno TEXT UNIQUE)`. The primary key gives
   `cp → docno`; the `UNIQUE` index gives `docno → cp` **and** is the
   docno-uniqueness check — a duplicate docno fails the build, naming the offender.
-  Both readers — the Python `isj_agent.docno_map` reader and the C++ boundary
-  `--get <docno>` (TASK-5.12 / A3) — key on this table name and schema. Sized for
-  ~500M rows (tens of GB on disk); **never loaded into the query process**.
+  The reader is **Python-only** — `isj_agent.docno_map` — keyed on this table name
+  and schema; the C++ engine never opens it (decision **doc-8**). Sized for ~500M
+  rows (tens of GB on disk); **never loaded into the query process**.
 
 - **Build (two steps, one front door).** A Python index CLI orchestrates:
   1. the C++ `cottontail-jsonl-index` indexes the JSONL into a plain cp-native
@@ -198,14 +200,14 @@ store, built once at index time and read occasionally (decision doc-6):
   For a corpus with no docnos, step 1 writes no flat file and step 2 builds no
   store — a cp-only burrow.
 
-- **Read (boundary only — the hot path never opens the map).** Two read-only
-  readers: **Python (C2)** does the run-output `cp → docno` rewrite (a bounded batch
-  per intent and trace), and the **C++ CLI** `cottontail-jsonl-query --get <docno>`
-  does `docno → cp` then `translate` over the `:item` span at that `cp`. The C++ side
-  takes a **read-only SQLite dependency used solely by this boundary `--get`**,
-  leaving the multi-threaded `cover_search` / exclusion path map-free. The document
-  *text* always comes from the warren; the store holds only the identity mapping
-  (`cq` is derived from the `:item` container at `cp`, not stored).
+- **Read (boundary only — Python-only; the C++ engine never opens the map, doc-8).**
+  Both readers are Python over `isj_agent.docno_map`: **C2** does the run-output
+  `cp → docno` rewrite (a bounded batch per intent and trace), and the
+  **`cottontail-fetch` helper (TASK-6.4)** does `docno → cp` for a human/external
+  fetch, then calls the C++ get-by-`cp`. The C++ side takes **no SQLite dependency**;
+  it is cp-only. The document *text* always comes from the warren; the store holds
+  only the identity mapping (`cq` is derived from the `:item` container at `cp`, not
+  stored).
 
 This replaces the earlier custom binary sidecar (a packed, compressed, lazily-read
 `cp ↔ docno` file with a docno-sorted permutation). That design was justified only

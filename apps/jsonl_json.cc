@@ -14,7 +14,7 @@ json hit_json(const Hit &h) {
   json r;
   r["rank"] = h.rank;
   r["score"] = h.score;
-  r["docid"] = h.docid;
+  r["cp"] = h.cp;
   json bp;
   bp["start"] = h.best_passage.start;
   bp["end"] = h.best_passage.end;
@@ -71,9 +71,9 @@ json explain_json(const QuerySpec &spec, const ExplainResult &ex) {
   return o;
 }
 
-json get_json(const std::string &docid, bool found, const std::string &text) {
+json get_json(addr cp, bool found, const std::string &text) {
   json o;
-  o["docid"] = docid;
+  o["cp"] = cp;
   o["found"] = found;
   o["text"] = found ? text : std::string("");
   return o;
@@ -163,7 +163,7 @@ json describe_json() {
   tools.push_back(tool(
       "search_text",
       "Ranked full-text search over the corpus (cover-density proximity ranking). "
-      "Use first for broad recall. Returns ranked rows with docid, score and a "
+      "Use first for broad recall. Returns ranked rows with cp, score and a "
       "best-passage snippet; result_count and truncated indicate if there may be "
       "more.",
       st, {"query"}));
@@ -172,8 +172,8 @@ json describe_json() {
   sg["query"] = strp(
       "A GCL S-expression. Operators: (^ a b) smallest span containing BOTH; "
       "(+ a b) EITHER; (... a b) a then b in order/proximity; (>> :item (^ a b)) "
-      "rows CONTAINING both terms; (<< a :item) a contained in a row. Tags: :item "
-      "= a whole row, :docno = its id. Example: (>> :item (^ elephant vaccine)).");
+      "rows CONTAINING both terms; (<< a :item) a contained in a row. Tag :item "
+      "= a whole row. Example: (>> :item (^ elephant vaccine)).");
   sg["top_k"] = intp("Max rows to return (default 10).");
   sg["stem"] = boolp("Stem bare terms for recall.");
   sg["full_text"] = boolp("Return the whole row body instead of a snippet.");
@@ -225,12 +225,12 @@ json describe_json() {
       ex, {"query"}));
 
   json gd;
-  gd["docid"] = strp("A docid from a prior search result.");
+  gd["cp"] = intp("A cp from a prior search result.");
   tools.push_back(tool(
       "get_document",
-      "Read the full body of one row by its docid (e.g. to read a candidate "
-      "before answering). Returns {docid, found, text}.",
-      gd, {"docid"}));
+      "Read the full body of one row by its cp (e.g. to read a candidate "
+      "before answering). Returns {cp, found, text}.",
+      gd, {"cp"}));
 
   json cm;
   cm["query"] = strp("The query to count.");

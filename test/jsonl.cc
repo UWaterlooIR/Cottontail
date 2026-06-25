@@ -35,11 +35,32 @@ bool build(const std::string &input, const std::string &burrow,
   return jsonl_index(opts, summary, error);
 }
 
-std::set<std::string> docids(const std::vector<Hit> &hits) {
+// cp-native: a hit carries its cp (the :item start). Recover the document body by
+// translating the :item span at cp, so tests assert on content rather than docno
+// (the engine no longer carries docno -- doc-6/doc-7).
+std::string body_at(std::shared_ptr<cottontail::Warren> w, cottontail::addr cp) {
+  std::string err;
+  auto item = w->hopper_from_gcl(":item", &err);
+  cottontail::addr p, q;
+  item->tau(cp, &p, &q);
+  return w->txt()->translate(cp, q);
+}
+
+std::set<std::string> hit_bodies(std::shared_ptr<cottontail::Warren> w,
+                                 const std::vector<Hit> &hits) {
   std::set<std::string> s;
   for (const auto &h : hits)
-    s.insert(h.docid);
+    s.insert(body_at(w, h.cp));
   return s;
+}
+
+// True iff some hit's body contains `needle` (a substring unique to one fixture).
+bool any_body_has(std::shared_ptr<cottontail::Warren> w,
+                  const std::vector<Hit> &hits, const std::string &needle) {
+  for (const auto &h : hits)
+    if (body_at(w, h.cp).find(needle) != std::string::npos)
+      return true;
+  return false;
 }
 
 cottontail::addr df_of(const ExplainResult &ex, const std::string &term) {
@@ -167,7 +188,7 @@ TEST(JsonlIndex, DuplicateDocnoIndexedNotRejected) {
   EXPECT_NE(entries[0].second, entries[1].second); // distinct cps
 }
 
-TEST(JsonlQuery, DISABLED_RetrievalAndDocid) {
+TEST(JsonlQuery, RetrievalByCp) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q1"), &s, &error)) << error;
@@ -178,11 +199,12 @@ TEST(JsonlQuery, DISABLED_RetrievalAndDocid) {
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
   ASSERT_FALSE(hits.empty());
-  EXPECT_EQ(hits[0].docid, "doc-004");
+  // The top hit carries its cp (a real :item start); its body is doc-004's.
+  EXPECT_NE(body_at(w, hits[0].cp).find("middle east"), std::string::npos);
   w->end();
 }
 
-TEST(JsonlQuery, DISABLED_FieldProjection) {
+TEST(JsonlQuery, FieldProjection) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q2"), &s, &error)) << error;
@@ -194,17 +216,16 @@ TEST(JsonlQuery, DISABLED_FieldProjection) {
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, only_in_id, &hits, &error)) << error;
   EXPECT_TRUE(hits.empty());
-  // "fox" is in contents of doc-001 and doc-002.
+  // "fox" is in the text of doc-001 ("brown fox") and doc-002 ("red fox").
   QuerySpec fox;
   fox.query = "fox";
   ASSERT_TRUE(jsonl_query(w, fox, &hits, &error)) << error;
-  std::set<std::string> ids = docids(hits);
-  EXPECT_EQ(ids.count("doc-001"), 1u);
-  EXPECT_EQ(ids.count("doc-002"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "brown fox"));
+  EXPECT_TRUE(any_body_has(w, hits, "red fox"));
   w->end();
 }
 
-TEST(JsonlQuery, DISABLED_GclContainment) {
+TEST(JsonlQuery, GclContainment) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q3"), &s, &error)) << error;
@@ -215,14 +236,13 @@ TEST(JsonlQuery, DISABLED_GclContainment) {
   spec.query = "(^ quick fox)"; // both terms -> doc-001, doc-002
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
-  std::set<std::string> ids = docids(hits);
-  EXPECT_EQ(ids.size(), 2u);
-  EXPECT_EQ(ids.count("doc-001"), 1u);
-  EXPECT_EQ(ids.count("doc-002"), 1u);
+  EXPECT_EQ(hits.size(), 2u);
+  EXPECT_TRUE(any_body_has(w, hits, "brown fox"));
+  EXPECT_TRUE(any_body_has(w, hits, "red fox"));
   w->end();
 }
 
-TEST(JsonlQuery, DISABLED_GclParseErrorIsReported) {
+TEST(JsonlQuery, GclParseErrorIsReported) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q4"), &s, &error)) << error;
@@ -237,7 +257,7 @@ TEST(JsonlQuery, DISABLED_GclParseErrorIsReported) {
   w->end();
 }
 
-TEST(JsonlQuery, DISABLED_GzipEqualsPlain) {
+TEST(JsonlQuery, GzipEqualsPlain) {
   std::string error;
   IndexSummary sp, sg;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("gp"), &sp, &error)) << error;
@@ -252,12 +272,12 @@ TEST(JsonlQuery, DISABLED_GzipEqualsPlain) {
   std::vector<Hit> hp, hg;
   ASSERT_TRUE(jsonl_query(wp, spec, &hp, &error)) << error;
   ASSERT_TRUE(jsonl_query(wg, spec, &hg, &error)) << error;
-  EXPECT_EQ(docids(hp), docids(hg));
+  EXPECT_EQ(hit_bodies(wp, hp), hit_bodies(wg, hg));
   wp->end();
   wg->end();
 }
 
-TEST(JsonlQuery, DISABLED_EmptyResultsAreOk) {
+TEST(JsonlQuery, EmptyResultsAreOk) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q5"), &s, &error)) << error;
@@ -271,7 +291,7 @@ TEST(JsonlQuery, DISABLED_EmptyResultsAreOk) {
   w->end();
 }
 
-TEST(JsonlQuery, DISABLED_FullText) {
+TEST(JsonlQuery, FullText) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("q6"), &s, &error)) << error;
@@ -288,7 +308,7 @@ TEST(JsonlQuery, DISABLED_FullText) {
   w->end();
 }
 
-TEST(JsonlExplain, DISABLED_TextDocumentFrequencies) {
+TEST(JsonlExplain, TextDocumentFrequencies) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e1"), &s, &error)) << error;
@@ -303,7 +323,7 @@ TEST(JsonlExplain, DISABLED_TextDocumentFrequencies) {
   w->end();
 }
 
-TEST(JsonlExplain, DISABLED_GclParse) {
+TEST(JsonlExplain, GclParse) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e2"), &s, &error)) << error;
@@ -322,7 +342,7 @@ TEST(JsonlExplain, DISABLED_GclParse) {
 
 // --- Stemming (docs/stemming.md) ------------------------------------------
 
-TEST(JsonlStem, DISABLED_StemmedRecallExactDoesNot) {
+TEST(JsonlStem, StemmedRecallExactDoesNot) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("stem_recall", kStemRows, "porter", &burrow, &error))
       << error;
@@ -341,11 +361,11 @@ TEST(JsonlStem, DISABLED_StemmedRecallExactDoesNot) {
   stem.query = "elephant";
   stem.stem = true;
   ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "jumped")); // s-1
   w->end();
 }
 
-TEST(JsonlStem, DISABLED_ExactStreamPreservedInStemIndex) {
+TEST(JsonlStem, ExactStreamPreservedInStemIndex) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("stem_exact", kStemRows, "porter", &burrow, &error))
       << error;
@@ -356,11 +376,11 @@ TEST(JsonlStem, DISABLED_ExactStreamPreservedInStemIndex) {
   QuerySpec spec;
   spec.query = "elephants";
   ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "jumped")); // s-1
   w->end();
 }
 
-TEST(JsonlStem, DISABLED_NoOpTermFallsBackToExact) {
+TEST(JsonlStem, NoOpTermFallsBackToExact) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("stem_noop", kStemRows, "porter", &burrow, &error))
       << error;
@@ -373,11 +393,11 @@ TEST(JsonlStem, DISABLED_NoOpTermFallsBackToExact) {
   spec.stem = true;
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("s-3"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "cat")); // s-3
   w->end();
 }
 
-TEST(JsonlStem, DISABLED_OverStemConflationPinned) {
+TEST(JsonlStem, OverStemConflationPinned) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("stem_over", kStemRows, "porter", &burrow, &error))
       << error;
@@ -396,11 +416,11 @@ TEST(JsonlStem, DISABLED_OverStemConflationPinned) {
   stem.query = "organ";
   stem.stem = true;
   ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("s-2"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "organization")); // s-2
   w->end();
 }
 
-TEST(JsonlStem, DISABLED_GclStem) {
+TEST(JsonlStem, GclStem) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("stem_gcl", kStemRows, "porter", &burrow, &error))
       << error;
@@ -413,11 +433,11 @@ TEST(JsonlStem, DISABLED_GclStem) {
   spec.stem = true;
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("s-1"), 1u);
+  EXPECT_TRUE(any_body_has(w, hits, "jumped")); // s-1
   w->end();
 }
 
-TEST(JsonlStem, DISABLED_MissingStreamIsAnError) {
+TEST(JsonlStem, MissingStreamIsAnError) {
   std::string error, burrow;
   // Built WITHOUT a stemmer.
   ASSERT_TRUE(build_rows("stem_missing", kStemRows, "", &burrow, &error))
@@ -865,7 +885,7 @@ TEST(JsonlTokenizer, DefaultsToUtf8AndReportsIt) {
   w->end();
 }
 
-TEST(JsonlTokenizer, DISABLED_Utf8WithStem) {
+TEST(JsonlTokenizer, Utf8WithStem) {
   std::string error, b;
   ASSERT_TRUE(build_one("tok_us", "running foxes", "utf8", "porter", &b, &error))
       << error;
@@ -878,7 +898,7 @@ TEST(JsonlTokenizer, DISABLED_Utf8WithStem) {
   stem.stem = true;
   std::vector<Hit> hits;
   ASSERT_TRUE(jsonl_query(w, stem, &hits, &error)) << error;
-  EXPECT_EQ(docids(hits).count("d-1"), 1u); // "running" -> porter:run
+  EXPECT_TRUE(any_body_has(w, hits, "running")); // d-1: "running" -> porter:run
   w->end();
 }
 
@@ -890,49 +910,33 @@ TEST(JsonlTokenizer, UnknownTokenizerIsAnError) {
 
 // --- get_document (spec §3.1) ----------------------------------------------
 
-TEST(JsonlGet, DISABLED_FetchByDocid) {
+TEST(JsonlGet, FetchByCp) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("get1"), &s, &error)) << error;
   auto w = open_burrow(tmp_burrow("get1"), &error);
   ASSERT_NE(w, nullptr) << error;
+  // cp-native: get a real cp from a search, then fetch the full body by cp.
+  QuerySpec spec;
+  spec.query = "elephants";
+  std::vector<Hit> hits;
+  ASSERT_TRUE(jsonl_query(w, spec, &hits, &error)) << error;
+  ASSERT_FALSE(hits.empty());
   std::string text;
   bool found = false;
-  ASSERT_TRUE(jsonl_get(w, "doc-004", &text, &found, &error)) << error;
+  ASSERT_TRUE(jsonl_get(w, hits[0].cp, &text, &found, &error)) << error;
   EXPECT_TRUE(found);
   EXPECT_NE(text.find("elephants"), std::string::npos);
-  // Unknown docid: not found, but not an error.
-  ASSERT_TRUE(jsonl_get(w, "doc-999", &text, &found, &error)) << error;
+  // A cp that is not an :item start: not found, but not an error.
+  ASSERT_TRUE(jsonl_get(w, 999999999, &text, &found, &error)) << error;
   EXPECT_FALSE(found);
   EXPECT_TRUE(text.empty());
   w->end();
 }
 
-TEST(JsonlGet, DISABLED_ExactMatchGuard) {
-  // "alpha"'s docno tokens are a subset of "alpha beta"'s; the exact-string guard
-  // must still return the right row.
-  std::string error, burrow;
-  std::vector<std::string> rows = {
-      R"({"docid":"alpha","contents":"the first document"})",
-      R"({"docid":"alpha beta","contents":"the second document"})"};
-  ASSERT_TRUE(build_rows("get_guard", rows, "", &burrow, &error)) << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  std::string text;
-  bool found = false;
-  ASSERT_TRUE(jsonl_get(w, "alpha", &text, &found, &error)) << error;
-  EXPECT_TRUE(found);
-  EXPECT_NE(text.find("first"), std::string::npos);
-  EXPECT_EQ(text.find("second"), std::string::npos);
-  ASSERT_TRUE(jsonl_get(w, "alpha beta", &text, &found, &error)) << error;
-  EXPECT_TRUE(found);
-  EXPECT_NE(text.find("second"), std::string::npos);
-  w->end();
-}
-
 // --- count_matches (spec §3.3) ---------------------------------------------
 
-TEST(JsonlCount, DISABLED_TextIsConjunctive) {
+TEST(JsonlCount, TextIsConjunctive) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("cnt1"), &s, &error)) << error;
@@ -950,7 +954,7 @@ TEST(JsonlCount, DISABLED_TextIsConjunctive) {
   w->end();
 }
 
-TEST(JsonlCount, DISABLED_GclAndStem) {
+TEST(JsonlCount, GclAndStem) {
   std::string error;
   IndexSummary s;
   ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("cnt2"), &s, &error)) << error;

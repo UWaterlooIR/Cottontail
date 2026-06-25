@@ -33,7 +33,7 @@ void usage(const char *prog) {
             << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--exclude <docid>]...\n"
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
-            << "  " << prog << " --burrow <path> --get <docid>\n"
+            << "  " << prog << " --burrow <path> --get <cp>\n"
             << "  " << prog << " --describe   (print the agent tool schema as JSON)\n"
             << "  ... --batch   (one query object per stdin line -> JSONL)\n"
             << "options: --ranker icover|ssr|tiered  --top-k N  --full-text\n"
@@ -41,7 +41,7 @@ void usage(const char *prog) {
             << "  --stem   match the stemmed stream (index must be built --stem;\n"
             << "           ranks via cover density over stemmed terms)\n"
             << "  --count  report match_count for --text/--gcl instead of ranking\n"
-            << "  --get <docid>  fetch one row's full body by docid\n"
+            << "  --get <cp>  fetch one row's full body by cp (from a search result)\n"
             << "  --describe     emit the LLM tool schema (no burrow needed)\n"
             << "note: structured/precise queries are fast at any scale; a broad\n"
             << "      common-term ranked query can be second-scale on a very\n"
@@ -60,7 +60,7 @@ void usage(const char *prog) {
 
 int main(int argc, char **argv) {
   std::string burrow;
-  std::string text, gcl, get_docid, cover;
+  std::string text, gcl, get_cp, cover;
   bool have_text = false, have_gcl = false, batch = false, explain = false;
   bool have_get = false, count = false, describe = false, have_cover = false;
   std::vector<std::string> cover_exclude; // --cover: docids to carve out
@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
     else if (a == "--window")
       cover_window = std::stoul(next());
     else if (a == "--get")
-      get_docid = next(), have_get = true;
+      get_cp = next(), have_get = true;
     else if (a == "--count")
       count = true;
     else if (a == "--describe")
@@ -146,11 +146,17 @@ int main(int argc, char **argv) {
     die(error, "open");
 
   if (have_get) {
+    cottontail::addr cp;
+    try {
+      cp = static_cast<cottontail::addr>(std::stoll(get_cp));
+    } catch (...) {
+      die("--get takes a cp (an integer from a prior search result)", "get");
+    }
     std::string body;
     bool found = false;
-    if (!cottontail::jsonl::jsonl_get(warren, get_docid, &body, &found, &error))
+    if (!cottontail::jsonl::jsonl_get(warren, cp, &body, &found, &error))
       die(error, "get");
-    std::cout << get_json(get_docid, found, body).dump(format == "jsonl" ? -1 : 2)
+    std::cout << get_json(cp, found, body).dump(format == "jsonl" ? -1 : 2)
               << "\n";
     warren->end();
     return 0;
