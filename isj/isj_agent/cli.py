@@ -30,6 +30,8 @@ def _render_event(ev) -> None:
     t = d.get("type")
     if t == "llm_turn":
         print(f"    turn {d['turn']}: tool={d['tool']} ({d['duration_ms']:.0f} ms)")
+    elif t == "search_request":
+        print(f"    -> request: {d['query']!r} (exclude={len(d.get('exclude', []))})")
     elif t == "search":
         print(
             f"    search {d['query']!r}: total={d['total_matches']} "

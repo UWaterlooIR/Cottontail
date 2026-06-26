@@ -140,7 +140,10 @@ def _ranked_list_dict(ranked_list, resolve: _Resolve, rename: bool) -> dict:
 def _event_dict(event, resolve: _Resolve, rename: bool) -> dict:
     d = event.model_dump()
     t = d.get("type")
-    if t == "search":
+    if t == "search_request":  # the request, logged going out: only an exclude cp-list
+        if "exclude" in d:
+            d["exclude"] = [resolve(cp) for cp in d["exclude"]]
+    elif t == "search":
         if "exclude" in d:
             d["exclude"] = [resolve(cp) for cp in d["exclude"]]
         for hit in d.get("results", []):

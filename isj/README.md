@@ -197,9 +197,12 @@ the `Analyst`).
   C3 can tune.
 - **The trace is a research artifact** (`SearcherResult.events`, a `list[TraceEvent]`):
   detailed, timestamped events — `llm_turn` (LLM latency, which tool, emitted
-  tool-call count), `search` (the query + the excluded cps + counts + atom_counts +
-  every returned hit with its cp/score/summary + engine latency), `judge` (each
-  recorded `{cp, grade, reason}`), `bounce` (kind + message), `stop` (reason) — so
+  tool-call count), `search_request` (**the query logged going out**, emitted
+  *before* the engine call: query + top_k + window + excluded cps — so a request is
+  on record even if the engine/server dies mid-call), `search` (**the response**:
+  counts + atom_counts + every returned hit with its cp/score/summary + engine
+  latency), `judge` (each recorded `{cp, grade, reason}`), `bounce` (kind + message;
+  an `engine_error` bounce also carries the failing `query`), `stop` (reason) — so
   the agent's behavior can be reconstructed and measured. C2 rewrites the cps to
   docnos when persisting it.
 

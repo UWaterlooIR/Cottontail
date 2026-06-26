@@ -191,14 +191,22 @@ class Searcher:
                     self._tool(msgs, call, {"error": f"Judge these passages first: {cps}"})
                     continue
                 query = args.get("query", "")
+                exclude = sorted(judged)
+                # Log the request GOING OUT, before the engine call, so the query is
+                # on record regardless of outcome -- even if the engine/server dies
+                # mid-request (then only this event, not the response, is emitted).
+                ts = time.time()
+                emit("search_request", ts, 0.0, query=query,
+                     top_k=self.top_k, window=self.window, exclude=exclude)
                 try:
-                    ts = time.time()
                     resp = self.engine.search(
-                        query, top_k=self.top_k, exclude=sorted(judged), window=self.window
+                        query, top_k=self.top_k, exclude=exclude, window=self.window
                     )
                     eng_ms = (time.time() - ts) * 1000.0
-                except EngineError as exc:  # ENGINE-DELEGATED error -> bounce
-                    emit("bounce", time.time(), 0.0, kind="engine_error", message=str(exc))
+                except EngineError as exc:  # ENGINE-DELEGATED error -> bounce (the RESPONSE);
+                    # carry the query so the failure is self-contained.
+                    emit("bounce", time.time(), 0.0, kind="engine_error",
+                         query=query, message=str(exc))
                     self._tool(msgs, call, {"error": str(exc)})
                     continue
                 emit(
@@ -208,7 +216,7 @@ class Searcher:
                     query=query,
                     top_k=self.top_k,
                     window=self.window,
-                    exclude=sorted(judged),
+                    exclude=exclude,
                     total_matches=resp.total_matches,
                     unjudged_matches=resp.unjudged_matches,
                     atom_counts=[a.model_dump() for a in resp.atom_counts],

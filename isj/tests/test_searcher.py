@@ -85,7 +85,12 @@ def test_happy_path_ranked_list_and_events():
     assert entries[0].summary == "bear attack risk is low"
 
     types = [e.type for e in result.events]
-    assert types == ["llm_turn", "search", "llm_turn", "judge", "llm_turn", "stop"]
+    # search_request (the query, logged going out) precedes its search (the response).
+    assert types == [
+        "llm_turn", "search_request", "search", "llm_turn", "judge", "llm_turn", "stop"
+    ]
+    req = next(e for e in result.events if e.type == "search_request")
+    assert req.query == "(^ black bear*)" and req.exclude == []
     assert result.events[-1].reason == "no_tool_call"
     assert all(hasattr(e, "duration_ms") for e in result.events)
     # the search event is the heavy, reconstructable kind (AC#8)
@@ -129,9 +134,14 @@ def test_engine_error_bounce_and_recovery():
     script = [EngineError("invalid GCL: unbalanced"), _resp([(10, 5.0, "s")])]
     s = _searcher(turns, script)
     result = s.run("intent")
+    err = next(
+        e for e in result.events if e.type == "bounce" and e.kind == "engine_error"
+    )
+    assert "invalid GCL" in err.message
+    assert err.query == "(^ bad"  # the failing request's query is on the bounce
+    # the request was logged going out even though the engine then errored
     assert any(
-        e.type == "bounce" and e.kind == "engine_error" and "invalid GCL" in e.message
-        for e in result.events
+        e.type == "search_request" and e.query == "(^ bad" for e in result.events
     )
     assert len(s.engine.calls) == 2  # both searches reached the engine
     assert [e.cp for e in result.ranked_list.entries] == [10]

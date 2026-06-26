@@ -24,6 +24,8 @@ def _result(intent):
     ])
     events = [
         TraceEvent(type="llm_turn", ts=1.0, duration_ms=10.0, turn=1, tool="search", tool_calls=1, stopped=False),
+        TraceEvent(type="search_request", ts=1.05, duration_ms=0.0, query="(^ a*)", top_k=10,
+                   window=75, exclude=[100, 200]),
         TraceEvent(type="search", ts=1.1, duration_ms=5.0, query="(^ a*)", top_k=10, window=75,
                    exclude=[], total_matches=2, unjudged_matches=2,
                    atom_counts=[{"term": "a*", "count": 9}],
@@ -57,7 +59,11 @@ def test_all_success_writes_layout_with_docnos(tmp_path):
         assert [e["docno"] for e in rl["entries"]] == ["doc-A", "doc-B"]  # docno on disk
         assert all("cp" not in e for e in rl["entries"])  # never a raw cp
         evs = _events(out, nn)
-        assert [e["type"] for e in evs] == ["llm_turn", "search", "bounce", "judge", "stop"]
+        assert [e["type"] for e in evs] == [
+            "llm_turn", "search_request", "search", "bounce", "judge", "stop"
+        ]
+        req = next(e for e in evs if e["type"] == "search_request")
+        assert req["exclude"] == ["doc-A", "doc-B"]  # the request's exclude cps -> docnos
         search = next(e for e in evs if e["type"] == "search")
         assert [r["docno"] for r in search["results"]] == ["doc-A", "doc-B"]
         assert all("cp" not in r for r in search["results"])
@@ -129,3 +135,5 @@ def test_docnoless_corpus_persists_cps(tmp_path):
     assert all("docno" not in e for e in rl["entries"])
     search = next(e for e in _events(out, "00") if e["type"] == "search")
     assert [r["cp"] for r in search["results"]] == [100, 200]
+    req = next(e for e in _events(out, "00") if e["type"] == "search_request")
+    assert req["exclude"] == [100, 200]  # request's exclude cps kept, no map
