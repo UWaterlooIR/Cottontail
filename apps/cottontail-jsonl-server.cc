@@ -117,6 +117,15 @@ void fail(httplib::Response &res, int code, const std::string &msg,
   res.set_content(e.dump(), "application/json");
 }
 
+// Access log. Writers may run concurrently (one per worker thread), so serialize
+// whole lines through one mutex to keep them from interleaving. To stderr, like
+// the startup/exception logging. The Authorization header is never logged.
+std::mutex log_mu;
+void log_line(const std::string &line) {
+  std::lock_guard<std::mutex> lock(log_mu);
+  std::cerr << line << "\n";
+}
+
 void usage(const char *prog) {
   std::cerr << "usage: " << prog << " --burrow <path> [options]\n"
             << "  --host <addr>   default 127.0.0.1 (loopback)\n"
@@ -241,7 +250,20 @@ int main(int argc, char **argv) {
         fail(res, 500, "internal error", "server");
       });
 
-  // Auth: runs before every route except the public health check.
+  // Response summary, logged after each request is handled.
+  svr.set_logger([](const httplib::Request &req, const httplib::Response &res) {
+    log_line("[res] " + req.method + " " + req.path + " -> " +
+             std::to_string(res.status) + " (" +
+             std::to_string(res.body.size()) + " bytes)");
+  });
+  // The request body (the query/params) is only readable once a route handler
+  // runs -- the pre-routing handler fires before httplib reads the body -- so each
+  // request is logged AT HANDLER ENTRY (via log_req below), before the work that
+  // could crash the process. The pre-routing handler does auth only.
+  auto log_req = [](const httplib::Request &req) {
+    log_line("[req] " + req.method + " " + req.path +
+             (req.body.empty() ? "" : " body=" + req.body));
+  };
   svr.set_pre_routing_handler(
       [&](const httplib::Request &req, httplib::Response &res) {
         if (req.path == "/healthz" || !auth_required)
@@ -255,20 +277,23 @@ int main(int argc, char **argv) {
         return httplib::Server::HandlerResponse::Handled;
       });
 
-  svr.Get("/healthz", [&](const httplib::Request &, httplib::Response &res) {
+  svr.Get("/healthz", [&](const httplib::Request &req, httplib::Response &res) {
+    log_req(req);
     json o;
     o["status"] = "ok";
     o["burrow"] = burrow;
     res.set_content(o.dump(), "application/json");
   });
 
-  svr.Get("/describe", [&](const httplib::Request &, httplib::Response &res) {
+  svr.Get("/describe", [&](const httplib::Request &req, httplib::Response &res) {
+    log_req(req);
     res.set_content(cottontail::jsonl::describe_json().dump(),
                     "application/json");
   });
 
   auto search = [&](bool is_gcl) {
     return [&, is_gcl](const httplib::Request &req, httplib::Response &res) {
+      log_req(req);
       json b;
       try {
         b = json::parse(req.body);
@@ -300,6 +325,7 @@ int main(int argc, char **argv) {
 
   svr.Post("/tools/cover_search",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);
@@ -327,6 +353,7 @@ int main(int argc, char **argv) {
 
   svr.Post("/tools/explain",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);
@@ -349,6 +376,7 @@ int main(int argc, char **argv) {
 
   svr.Post("/tools/get_document",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);
@@ -375,6 +403,7 @@ int main(int argc, char **argv) {
 
   svr.Post("/tools/count_matches",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);

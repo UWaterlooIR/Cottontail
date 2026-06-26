@@ -90,6 +90,14 @@ bazel-bin/apps/cottontail-jsonl-server --burrow corpus.burrow
 token (`COTTONTAIL_API_TOKEN` env var — preferred — or `--token`) or pass
 `--no-auth`.
 
+**Access log (stderr):** every request is logged at intake, **before** it is
+handled — `[req] <method> <path> body=<json>` — so a request that crashes the
+process mid-handling still leaves its query in the log; each completed request
+then logs a summary — `[res] <method> <path> -> <status> (<bytes> bytes)`. The
+request body (the query/params) is logged; the `Authorization` header (bearer
+token) is not. Lines from concurrent workers are serialized so they don't
+interleave.
+
 **Endpoints:** `GET /healthz` (public), `GET /describe`, and `POST /tools/<name>`
 for `search_text` · `search_gcl` · `explain` · `get_document` · `count_matches`.
 
