@@ -273,6 +273,11 @@ SExpression::to_hopper(std::shared_ptr<Featurizer> featurizer,
     std::shared_ptr<SExpression> binary_expr = to_binary();
     return binary_expr->to_hopper(featurizer, idx);
   }
+  // A 1-ary Or/And is identity: (+ X) == (^ X) == X. The grammar already accepts a
+  // single operand for +/^; only this builder rejected it. (Binary relations like
+  // >> still need 2 -- they fall through to the nullptr below.)
+  if (subx_.size() == 1 && (kind_ == ONE_OF || kind_ == ALL_OF))
+    return subx_[0]->to_hopper(featurizer, idx);
   if (subx_.size() < 2)
     return nullptr;
   std::unique_ptr<cottontail::Hopper> left =

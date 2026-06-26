@@ -89,7 +89,8 @@ Notes:
 - `cover_search` (the ISJ agent's tool, distinct from `search_gcl`) calls
   `jsonl_cover_search` and returns `cover_results_json`. Its query may use the
   `word*` family marker (per-term stemming via the burrow's Porter; see
-  `docs/stemming.md §6a`). It requires a `--stem porter` burrow; a `word*` query
+  `docs/stemming.md §6a`). A single-operand `+`/`^` group is identity (`(+ X)` and
+  `(^ X)` reduce to `X`), so a one-term facet is just the bare word. It requires a `--stem porter` burrow; a `word*` query
   against a non-stemmed burrow, a non-trailing `*`, or malformed GCL → `400` with
   an `{error, where}` body. The response is EXACTLY `total_matches`,
   `unjudged_matches`, `atom_counts`, `results` — no `result_count`/`truncated`/

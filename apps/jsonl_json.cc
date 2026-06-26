@@ -189,8 +189,10 @@ json describe_json() {
       "with ^, e.g. (^ black bear* attack*). A bare word matches EXACTLY (use "
       "for proper nouns / defining words). A word followed by * matches that "
       "word AND its whole family (bear* -> bear, bears; write the FULL word "
-      "then *, never a shortened stem). (+ a b) is for SYNONYMS. \"a b\" is an "
-      "exact phrase (a trailing * is honored inside it too).");
+      "then *, never a shortened stem). (+ a b) is for SYNONYMS -- use it only for "
+      "TWO OR MORE alternatives; a single term needs no wrapper, write the bare "
+      "word (so a facet is just bear*, not (+ bear*)). \"a b\" is an exact phrase "
+      "(a trailing * is honored inside it too).");
   cs["top_k"] = intp("Max documents to return (default 10).");
   {
     json items;

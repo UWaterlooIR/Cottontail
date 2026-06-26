@@ -266,7 +266,9 @@ of the process.
 - **`--cover "<cover query>"`** — the ISJ agent's search tool (`cover_search`,
   distinct from `--gcl`/`search_gcl`). A GCL cover query that may use the **`word*`
   family marker** (a full word + trailing `*` → the word *and* its morphological
-  family; bare terms stay exact; honored inside quoted phrases). Ranks `:item` by
+  family; bare terms stay exact; honored inside quoted phrases). A single-operand
+  group is identity — `(+ X)` and `(^ X)` reduce to `X`, so a one-term facet is just
+  the bare word (no wrapper needed). Ranks `:item` by
   `ssr` cover density and returns `{rank, score, cp, summary}` where `summary`
   is a cover-biased extractive summary (see §4.8). Requires a `--stem porter`
   burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`

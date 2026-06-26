@@ -318,12 +318,13 @@ TEST(GCLTest, Merge) {
   }
 }
 
-// Regression (TASK-7): a compound GCL operator whose sub-expression is invalid
-// -- e.g. "(^ x)" is ALL_OF with a single element, which to_hopper cannot build
-// and returns null for -- must make hopper_from_gcl return nullptr, NOT build an
-// operator holding a null child. Before the fix, walking such a hopper
-// dereferenced the null child and SEGV'd the process (the cottontail-jsonl-server
-// cover_search crash on "(>> (^ bear) (^ attack))").
+// Regression (TASK-7): a compound GCL operator whose sub-expression builds to null
+// must make hopper_from_gcl return nullptr, NOT build an operator holding a null
+// child. Before the fix, walking such a hopper dereferenced the null child and
+// SEGV'd the process (the cottontail-jsonl-server cover_search crash). The poison
+// here is a NESTED binary op with too few operands -- "(>> alpha)" parses (sub-
+// expression arity is not enforced at parse) but to_hopper returns null for it.
+// (The original trigger "(^ x)" is now valid identity -- see SingleOperandIsIdentity.)
 TEST(GCLTest, NullSubexpressionDoesNotCrash) {
   std::string burrow = cottontail::DEFAULT_BURROW;
   std::string error;
@@ -342,13 +343,59 @@ TEST(GCLTest, NullSubexpressionDoesNotCrash) {
       cottontail::Warren::make("simple", burrow, &error);
   ASSERT_NE(warren, nullptr) << error;
   warren->start();
-  // Each compound has at least one invalid operand ("(^ x)") -> must be nullptr,
-  // not a crash. ">>" is CONTAINING, "@" is LINK.
-  EXPECT_EQ(warren->hopper_from_gcl("(>> (^ alpha) (^ beta))", &error), nullptr);
-  EXPECT_EQ(warren->hopper_from_gcl("(>> alpha (^ beta))", &error), nullptr);
-  EXPECT_EQ(warren->hopper_from_gcl("(>> (^ alpha) beta)", &error), nullptr);
-  EXPECT_EQ(warren->hopper_from_gcl("(@ (^ alpha))", &error), nullptr);
+  // Each compound has a nested operand that builds to null ("(>> x)") -> must be
+  // nullptr, not a crash. ">>" is CONTAINING (needs 2 operands), "@" is LINK.
+  EXPECT_EQ(warren->hopper_from_gcl("(>> (>> alpha) (>> beta))", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(^ alpha (>> beta))", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(>> (>> alpha) beta)", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(@ (>> alpha))", &error), nullptr);
   // A valid compound over the same terms still builds.
   EXPECT_NE(warren->hopper_from_gcl("(>> alpha beta)", &error), nullptr);
+  warren->end();
+}
+
+// TASK-13: a single-operand Or/And is identity -- (+ X) and (^ X) build and behave
+// exactly like the bare X, and a single-operand group nested in a larger expression
+// no longer poisons it. Binary relations still require two operands.
+TEST(GCLTest, SingleOperandIsIdentity) {
+  std::string burrow = cottontail::DEFAULT_BURROW;
+  std::string error;
+  cottontail::addr p, q;
+  {
+    std::shared_ptr<cottontail::Working> working =
+        cottontail::Working::mkdir(burrow);
+    ASSERT_NE(working, nullptr);
+    std::shared_ptr<cottontail::Builder> builder =
+        cottontail::SimpleBuilder::make(working, "", &error);
+    ASSERT_NE(builder, nullptr) << error;
+    ASSERT_TRUE(builder->add_text("alpha beta gamma delta", &p, &q));
+    ASSERT_TRUE(builder->finalize());
+  }
+  std::shared_ptr<cottontail::Warren> warren =
+      cottontail::Warren::make("simple", burrow, &error);
+  ASSERT_NE(warren, nullptr) << error;
+  warren->start();
+  // tau-walk of a gcl expression as a list of (p,q) extents; asserts it builds.
+  auto walk = [&](const std::string &gcl) {
+    std::vector<std::pair<cottontail::addr, cottontail::addr>> v;
+    std::string e;
+    auto h = warren->hopper_from_gcl(gcl, &e);
+    EXPECT_NE(h, nullptr) << gcl << ": " << e;
+    if (h == nullptr)
+      return v;
+    cottontail::addr pp, qq;
+    for (h->tau(cottontail::minfinity + 1, &pp, &qq); pp < cottontail::maxfinity;
+         h->tau(pp + 1, &pp, &qq))
+      v.emplace_back(pp, qq);
+    return v;
+  };
+  EXPECT_EQ(walk("(+ alpha)"), walk("alpha"));      // 1-ary Or == bare word
+  EXPECT_EQ(walk("(^ alpha)"), walk("alpha"));      // 1-ary And == bare word
+  EXPECT_EQ(walk("(+ (+ alpha))"), walk("alpha"));  // nesting recurses down to X
+  EXPECT_EQ(walk("(^ alpha (+ beta))"),
+            walk("(^ alpha beta)"));  // a 1-ary group no longer poisons the parent
+  // binary relations still require two operands
+  std::string e;
+  EXPECT_EQ(warren->hopper_from_gcl("(>> alpha)", &e), nullptr);
   warren->end();
 }
