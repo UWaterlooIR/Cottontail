@@ -317,3 +317,38 @@ TEST(GCLTest, Merge) {
     --i;
   }
 }
+
+// Regression (TASK-7): a compound GCL operator whose sub-expression is invalid
+// -- e.g. "(^ x)" is ALL_OF with a single element, which to_hopper cannot build
+// and returns null for -- must make hopper_from_gcl return nullptr, NOT build an
+// operator holding a null child. Before the fix, walking such a hopper
+// dereferenced the null child and SEGV'd the process (the cottontail-jsonl-server
+// cover_search crash on "(>> (^ bear) (^ attack))").
+TEST(GCLTest, NullSubexpressionDoesNotCrash) {
+  std::string burrow = cottontail::DEFAULT_BURROW;
+  std::string error;
+  cottontail::addr p, q;
+  {
+    std::shared_ptr<cottontail::Working> working =
+        cottontail::Working::mkdir(burrow);
+    ASSERT_NE(working, nullptr);
+    std::shared_ptr<cottontail::Builder> builder =
+        cottontail::SimpleBuilder::make(working, "", &error);
+    ASSERT_NE(builder, nullptr) << error;
+    ASSERT_TRUE(builder->add_text("alpha beta gamma delta", &p, &q));
+    ASSERT_TRUE(builder->finalize());
+  }
+  std::shared_ptr<cottontail::Warren> warren =
+      cottontail::Warren::make("simple", burrow, &error);
+  ASSERT_NE(warren, nullptr) << error;
+  warren->start();
+  // Each compound has at least one invalid operand ("(^ x)") -> must be nullptr,
+  // not a crash. ">>" is CONTAINING, "@" is LINK.
+  EXPECT_EQ(warren->hopper_from_gcl("(>> (^ alpha) (^ beta))", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(>> alpha (^ beta))", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(>> (^ alpha) beta)", &error), nullptr);
+  EXPECT_EQ(warren->hopper_from_gcl("(@ (^ alpha))", &error), nullptr);
+  // A valid compound over the same terms still builds.
+  EXPECT_NE(warren->hopper_from_gcl("(>> alpha beta)", &error), nullptr);
+  warren->end();
+}
