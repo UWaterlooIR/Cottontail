@@ -345,16 +345,31 @@ bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
 // cover, shifted inward at the body edges to keep the width (clamped to the body
 // when it is shorter). Overlapping or touching windows merge; non-contiguous
 // extents join with " . . . ". Translates the token extents to text.
+// max_words (0 = uncapped) caps the WHOLE summary to that many tokens: a window
+// wider than the cap is anchored at its cover's START (not centered) and the total
+// is bounded across covers; any cut extent ends with " ...". Capping the token
+// extents before translate() avoids materializing a huge cover span.
 std::string cover_summary(std::shared_ptr<Warren> warren,
                           const std::vector<std::pair<addr, addr>> &covers,
-                          addr body_start, addr body_end, addr W) {
+                          addr body_start, addr body_end, addr W, addr max_words) {
   if (covers.empty() || body_end < body_start)
     return "";
   std::vector<std::pair<addr, addr>> wins;
+  std::vector<bool> cut; // this window was truncated -> show a trailing " ..."
   for (const auto &c : covers) {
     addr p = c.first, q = c.second;
     addr cover_len = q - p + 1;
     addr T = std::max<addr>(W, cover_len);
+    if (max_words > 0 && T > max_words) {
+      // Too long for the cap: anchor at the COVER START and show max_words tokens,
+      // marking it truncated (the rest of the cover is cut).
+      addr start = p;
+      addr end = std::min<addr>(p + max_words - 1, body_end);
+      wins.emplace_back(start, end);
+      cut.push_back(true);
+      continue;
+    }
+    // Fits: a T-token window centered on the cover, shifted inward at the edges.
     addr start = p + cover_len / 2 - T / 2;
     addr end = start + T - 1;
     if (end > body_end) {
@@ -368,19 +383,54 @@ std::string cover_summary(std::shared_ptr<Warren> warren,
         end = body_end;
     }
     wins.emplace_back(start, end);
+    cut.push_back(false);
   }
   std::vector<std::pair<addr, addr>> merged;
-  for (const auto &w : wins) {
-    if (!merged.empty() && w.first <= merged.back().second + 1)
-      merged.back().second = std::max(merged.back().second, w.second);
-    else
-      merged.push_back(w);
+  std::vector<bool> merged_cut;
+  for (size_t i = 0; i < wins.size(); i++) {
+    if (!merged.empty() && wins[i].first <= merged.back().second + 1) {
+      merged.back().second = std::max(merged.back().second, wins[i].second);
+      merged_cut.back() = merged_cut.back() || cut[i];
+    } else {
+      merged.push_back(wins[i]);
+      merged_cut.push_back(cut[i]);
+    }
+  }
+  // Cap the WHOLE summary to max_words tokens across the merged extents (applied to
+  // the token extents, before translate(), so a huge cover is never materialized).
+  if (max_words > 0) {
+    addr budget = max_words;
+    size_t keep = 0;
+    bool dropped = false;
+    while (keep < merged.size()) {
+      addr len = merged[keep].second - merged[keep].first + 1;
+      if (len <= budget) {
+        budget -= len;
+        keep++;
+        if (budget == 0 && keep < merged.size()) {
+          dropped = true;
+          break;
+        }
+      } else { // cut this extent to fit the remaining budget
+        merged[keep].second = merged[keep].first + budget - 1;
+        merged_cut[keep] = true;
+        keep++;
+        dropped = (keep < merged.size());
+        break;
+      }
+    }
+    if (dropped)
+      merged_cut[keep - 1] = true;
+    merged.resize(keep);
+    merged_cut.resize(keep);
   }
   std::string out;
   for (size_t i = 0; i < merged.size(); i++) {
     if (i)
       out += " . . . ";
     out += trim(warren->txt()->translate(merged[i].first, merged[i].second));
+    if (merged_cut[i])
+      out += " ...";
   }
   return out;
 }
@@ -841,7 +891,8 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
       covers.resize(k);
       std::sort(covers.begin(), covers.end()); // back to document order
     }
-    h.summary = cover_summary(warren, covers, r.cp, r.cq, (addr)spec.window);
+    h.summary = cover_summary(warren, covers, r.cp, r.cq, (addr)spec.window,
+                              (addr)spec.max_words);
     out->results.push_back(std::move(h));
   }
   return true;

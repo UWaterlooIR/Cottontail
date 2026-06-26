@@ -1080,3 +1080,40 @@ TEST(JsonlFlatDump, MapsDocnoToItemStart) {
   EXPECT_EQ(seen, 4u);
   w->end();
 }
+
+// TASK-14: max_words caps the whole summary (in tokens). A cover wider than the cap
+// is shown from its START and ends with " ..."; max_words=0 is uncapped.
+TEST(JsonlCover, MaxWordsCap) {
+  std::string filler;
+  for (int i = 0; i < 200; i++)
+    filler += "mid ";
+  // alpha ... (200 tokens) ... beta  -> one cover spanning > 150 tokens.
+  std::string content = "alpha " + filler + "beta tail";
+  std::vector<std::string> rows = {
+      std::string(R"({"docid":"w-1","contents":")") + content + R"("})"};
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_maxwords", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  auto summary = [&](size_t max_words) {
+    CoverResponse hits;
+    CoverSpec spec;
+    spec.query = "(^ alpha beta)";
+    spec.max_words = max_words;
+    EXPECT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+    return hits.results.empty() ? std::string() : hits.results[0].summary;
+  };
+  // default cap (150 tokens): starts at the cover (alpha), is cut before beta
+  // (200+ tokens away), and ends with the truncation marker.
+  std::string capped = summary(150);
+  ASSERT_FALSE(capped.empty());
+  EXPECT_EQ(capped.rfind("alpha", 0), 0u);            // starts at the cover start
+  EXPECT_EQ(capped.find("beta"), std::string::npos);  // cut before the far term
+  EXPECT_NE(capped.find(" ..."), std::string::npos);  // truncation marked
+  // uncapped: the whole cover -> reaches beta, no marker, longer.
+  std::string full = summary(0);
+  EXPECT_NE(full.find("beta"), std::string::npos);
+  EXPECT_EQ(full.find(" ..."), std::string::npos);
+  EXPECT_GT(full.size(), capped.size());
+  w->end();
+}

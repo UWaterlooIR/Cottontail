@@ -276,7 +276,9 @@ of the process.
   `--exclude <docid>` (repeatable) carves judged documents out of the search;
   `--window N` sets the summary window in tokens; `--max-covers N` (default `1`)
   selects how many of the best (tightest) covers the summary is built from (`1` =
-  a single focused snippet). The response also carries
+  a single focused snippet); `--max-words N` (default `150`, `0` = uncapped) caps
+  the whole summary to that many tokens (a cover wider than the cap is shown from
+  its start and ends with ` ...`). The response also carries
   `total_matches`/`unjudged_matches`/`atom_counts` (see §4.8).
 
 Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
@@ -291,6 +293,7 @@ Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 | `--top-k <n>` | 10 | Number of ranked rows to return. |
 | `--window <n>` | 75 | `--cover` only: summary window size in tokens, centered on each cover. |
 | `--max-covers <n>` | 1 | `--cover` only: build the summary from the best (tightest) `n` covers (`1` = a single focused snippet). |
+| `--max-words <n>` | 150 | `--cover` only: cap the whole summary to `n` tokens (`0` = uncapped); a cover wider than the cap starts at the cover and ends with ` ...`. |
 | `--exclude <docid>` | — | `--cover` only, repeatable: carve a judged document out of the search. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
 | `--snippet-chars <n>` | 240 | Max chars of the best-passage text when `--full-text` is off. |
@@ -422,6 +425,9 @@ is strict).
 - `max_covers` — how many of the best (tightest, smallest-span) covers the
   `summary` is built from (default `1` → a single focused snippet); affects only
   the `summary` text, never `rank`/`score`.
+- `max_words` — cap the whole `summary` to this many tokens (default `150`, `0` =
+  uncapped). A cover wider than the cap is shown from its **start** (not centered)
+  and the cut extent ends with ` ...`; affects only the `summary` text.
 - `rank` — 1-based position within the returned (post-exclusion) results,
   restarting at 1 each call, no gaps; NOT an absolute corpus position or the TREC
   submission rank. `score` — `ssr` cover density (sum over the document's covers

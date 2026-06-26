@@ -30,7 +30,7 @@ void usage(const char *prog) {
   std::cerr << "usage:\n"
             << "  " << prog << " --burrow <path> --text \"<words>\" [options]\n"
             << "  " << prog << " --burrow <path> --gcl \"<expr>\" [options]\n"
-            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--max-covers N] [--exclude <cp>]...\n"
+            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--max-covers N] [--max-words N] [--exclude <cp>]...\n"
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
             << "  " << prog << " --burrow <path> --get <cp>\n"
@@ -66,6 +66,7 @@ int main(int argc, char **argv) {
   std::vector<cottontail::addr> cover_exclude; // --cover: judged cps to skip
   size_t cover_window = 75;               // --cover: summary window in tokens
   size_t cover_max_covers = 1;            // --cover: best K covers in the summary
+  size_t cover_max_words = 150;           // --cover: cap the summary in tokens
   QuerySpec base;
   std::string format = "json";
 
@@ -93,6 +94,8 @@ int main(int argc, char **argv) {
       cover_window = std::stoul(next());
     else if (a == "--max-covers")
       cover_max_covers = std::stoul(next());
+    else if (a == "--max-words")
+      cover_max_words = std::stoul(next());
     else if (a == "--get")
       get_cp = next(), have_get = true;
     else if (a == "--count")
@@ -173,6 +176,7 @@ int main(int argc, char **argv) {
     spec.exclude = cover_exclude;
     spec.window = cover_window;
     spec.max_covers = cover_max_covers;
+    spec.max_words = cover_max_words;
     CoverResponse resp;
     if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &resp, &error))
       die(error, "cover_search");

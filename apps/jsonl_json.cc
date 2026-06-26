@@ -209,6 +209,9 @@ json describe_json() {
                       "(default 75).");
   cs["max_covers"] = intp("How many of the best (tightest) covers to include in "
                           "the summary (default 1 -> a single focused snippet).");
+  cs["max_words"] = intp("Cap the whole summary to this many tokens (default 150; "
+                         "0 = uncapped). A cover wider than the cap is shown from "
+                         "its start and ends with ' ...'.");
   tools.push_back(tool(
       "cover_search",
       "Ranked cover-density search for the ISJ agent. Ranks documents by "
