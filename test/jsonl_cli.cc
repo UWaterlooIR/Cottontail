@@ -78,7 +78,7 @@ TEST(JsonlCli, IndexSummaryToStdout) {
   EXPECT_EQ(j["rows_skipped"], 0);
 }
 
-TEST(JsonlCli, DISABLED_QueryHappyPath) {
+TEST(JsonlCli, QueryEmitsCp) {
   std::string b = build_burrow("cli_q");
   int code;
   std::string out = run(std::string(kQueryBin) + " --burrow " + b +
@@ -88,7 +88,17 @@ TEST(JsonlCli, DISABLED_QueryHappyPath) {
   json j = json::parse(out);
   ASSERT_TRUE(j.contains("results"));
   ASSERT_FALSE(j["results"].empty());
-  EXPECT_EQ(j["results"][0]["docid"], "doc-004");
+  // cp-native: each hit carries an integer cp; it round-trips through --get to
+  // doc-004's body.
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  json jg = json::parse(g);
+  EXPECT_EQ(jg["found"], true);
+  EXPECT_EQ(jg["cp"].get<long>(), cp);
+  EXPECT_NE(jg["text"].get<std::string>().find("middle east"), std::string::npos);
 }
 
 TEST(JsonlCli, UsageErrorExit1) {
@@ -107,7 +117,7 @@ TEST(JsonlCli, RuntimeErrorExit2WithErrorObject) {
   EXPECT_EQ(j["where"], "open");
 }
 
-TEST(JsonlCli, DISABLED_StemBuildAndQuery) {
+TEST(JsonlCli, StemBuildAndQuery) {
   std::string b = tmpdir() + "/cli_stem.burrow";
   int code;
   std::string idx = run(std::string(kIndexBin) +
@@ -124,11 +134,16 @@ TEST(JsonlCli, DISABLED_StemBuildAndQuery) {
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
   EXPECT_EQ(j["stemmed"], true);
-  bool found = false;
-  for (const auto &r : j["results"])
-    if (r["docid"] == "doc-002")
-      found = true;
-  EXPECT_TRUE(found) << out;
+  ASSERT_FALSE(j["results"].empty()) << out;
+  // The match round-trips via --get to doc-002's body ("runs").
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  EXPECT_NE(json::parse(g)["text"].get<std::string>().find("runs"),
+            std::string::npos)
+      << g;
 }
 
 TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
@@ -220,20 +235,26 @@ TEST(JsonlCli, DISABLED_CoverWindowAndExcludeFlags) {
   EXPECT_TRUE(j["results"].empty()) << out;
 }
 
-TEST(JsonlCli, DISABLED_GetDocument) {
+TEST(JsonlCli, GetByCp) {
   std::string b = build_burrow("cli_get");
   int code;
-  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
-                            " --get doc-004 --format jsonl",
+  // Get a cp from a search, then fetch by cp.
+  std::string s = run(std::string(kQueryBin) + " --burrow " + b +
+                          " --text elephants --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << s;
+  long cp = json::parse(s)["results"][0]["cp"].get<long>();
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                            std::to_string(cp) + " --format jsonl",
                         &code);
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
   EXPECT_EQ(j["found"], true);
-  EXPECT_EQ(j["docid"], "doc-004");
+  EXPECT_EQ(j["cp"].get<long>(), cp);
   EXPECT_NE(j["text"].get<std::string>().find("elephants"), std::string::npos);
 }
 
-TEST(JsonlCli, DISABLED_CountMatches) {
+TEST(JsonlCli, CountMatches) {
   std::string b = build_burrow("cli_count");
   int code;
   std::string out = run(std::string(kQueryBin) + " --burrow " + b +
@@ -244,7 +265,7 @@ TEST(JsonlCli, DISABLED_CountMatches) {
   EXPECT_EQ(j["match_count"], 2);
 }
 
-TEST(JsonlCli, DISABLED_ResultCountAndTruncated) {
+TEST(JsonlCli, ResultCountAndTruncated) {
   std::string b = build_burrow("cli_trunc");
   int code;
   std::string out = run(std::string(kQueryBin) + " --burrow " + b +
@@ -274,7 +295,7 @@ TEST(JsonlCli, DescribeEmitsToolSchema) {
   EXPECT_EQ(names.count("count_matches"), 1u);
 }
 
-TEST(JsonlCli, DISABLED_BatchPreservesOrderAndIsolatesErrors) {
+TEST(JsonlCli, BatchPreservesOrderAndIsolatesErrors) {
   std::string b = build_burrow("cli_batch");
   std::string in = tmpdir() + "/batch_in.txt";
   {

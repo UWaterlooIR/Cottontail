@@ -221,19 +221,18 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 
 ## 4. Program 2 — `cottontail-jsonl-query`
 
-> ⚠️ **Pending the cp-native query cutover.** As of TASK-6.2 the indexer produces
-> the cp-native burrow (contents + `:item`, **no `:docno`**, see §3.4) plus a flat
-> `docno-cp.tsv` dump. The query side described below
-> (`--text`/`--gcl`/`--get`/`--count`/`--cover`,
-> `jsonl_query`/`jsonl_get`/`jsonl_count`/`jsonl_explain`/`jsonl_cover_search`,
-> and the server's `/tools/*`) still reads `:docno`, so it does **not** work
-> against cp-native burrows: results carry empty docids and docid filters/fetches
-> miss. This is the deliberately deferred **retrieval-side cutover** (TASK-5.12 /
-> A3, decision doc-6): the query path will be reframed on `cp` (results carry
-> `cp`; exclusion post-filters on `cp`; `get_document` reads by `cp`, and the CLI
-> `--get <docno>` consults the SQLite map). The sections below describe the
-> *current* (old-model)
-> behavior and are retained for that redo.
+> ⚠️ **cp-native (TASK-5.12 / A3 done; cover_search pending A1/A2).** The
+> **non-cover** query path is now **cp-native** (decisions doc-6/doc-7/doc-8):
+> `--text`/`--gcl` rank within `:item` and each hit carries its **`cp`** (the
+> `:item` start); `--get <cp>` fetches a row's body by `cp`; `get_document` returns
+> `{cp, found, text}`. **The engine is cp-only — it never reads a `docno`/map**
+> (doc-8): `docno ↔ cp` is Python-only (`isj_agent.docno_map`), and a human
+> "fetch by docno" uses the **`cottontail-fetch`** helper (TASK-6.4:
+> `docno → cp → --get <cp>`). Some response-shape snippets **below still show the
+> old `docid` key** and the `:docno` recovery — those are being updated; the
+> authoritative current shapes are `cp` (search/get) per doc-7/doc-8.
+> `--cover`/`cover_search` is a **separate tool** still being reworked under
+> A1/A2 (TASK-5.1/5.2) and is the only part still mid-cutover.
 
 ### 4.1 Synopsis
 

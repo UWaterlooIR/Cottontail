@@ -60,7 +60,7 @@ pid_t start_server(const std::string &burrow, int port) {
 }
 } // namespace
 
-TEST(JsonlServer, DISABLED_EndToEnd) {
+TEST(JsonlServer, EndToEnd) {
   // Build a small burrow from the committed fixture.
   std::string burrow = tmpdir() + "/server.burrow";
   std::string build = std::string(kIndexBin) + " --input test/jsonl/plain --burrow " +
@@ -99,7 +99,8 @@ TEST(JsonlServer, DISABLED_EndToEnd) {
     ASSERT_TRUE(r);
     EXPECT_EQ(r->status, 401);
   }
-  // search_text with the token -> ranked results.
+  // search_text with the token -> ranked results carrying cp (cp-native).
+  long cp = -1;
   {
     auto r = cli.Post("/tools/search_text", auth, R"({"query":"elephants"})",
                       "application/json");
@@ -107,21 +108,22 @@ TEST(JsonlServer, DISABLED_EndToEnd) {
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
     ASSERT_FALSE(j["results"].empty());
-    EXPECT_EQ(j["results"][0]["docid"], "doc-004");
+    cp = j["results"][0]["cp"].get<long>();
     EXPECT_TRUE(j.contains("result_count"));
     EXPECT_TRUE(j.contains("truncated"));
   }
-  // get_document round-trips; unknown docid is found:false (still 200).
+  // get_document round-trips by cp; an unknown cp is found:false (still 200).
   {
-    auto r = cli.Post("/tools/get_document", auth, R"({"docid":"doc-004"})",
-                      "application/json");
+    auto r = cli.Post("/tools/get_document", auth,
+                      "{\"cp\":" + std::to_string(cp) + "}", "application/json");
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
     EXPECT_EQ(j["found"], true);
+    EXPECT_EQ(j["cp"].get<long>(), cp);
     EXPECT_NE(j["text"].get<std::string>().find("elephants"), std::string::npos);
 
-    auto r2 = cli.Post("/tools/get_document", auth, R"({"docid":"nope"})",
+    auto r2 = cli.Post("/tools/get_document", auth, R"({"cp":999999999})",
                        "application/json");
     ASSERT_TRUE(r2);
     EXPECT_EQ(r2->status, 200);
@@ -270,7 +272,7 @@ TEST(JsonlServer, DISABLED_CoverSearch) {
 
 // Many concurrent requests against the clone-per-thread pool must all return
 // correct results and not deadlock (the server is started with --threads 4).
-TEST(JsonlServer, DISABLED_ConcurrentRequests) {
+TEST(JsonlServer, ConcurrentRequests) {
   std::string burrow = tmpdir() + "/server_concurrent.burrow";
   std::string build = std::string(kIndexBin) +
                       " --input test/jsonl/plain --burrow " + burrow +
@@ -308,18 +310,21 @@ TEST(JsonlServer, DISABLED_ConcurrentRequests) {
           auto s = cli.Post("/tools/search_text", auth,
                             R"({"query":"elephants"})", "application/json");
           json js;
-          if (!s || s->status != 200 || (js = json::parse(s->body))["results"].empty() ||
-              js["results"][0]["docid"] != "doc-004") {
+          if (!s || s->status != 200 ||
+              (js = json::parse(s->body))["results"].empty() ||
+              !js["results"][0].contains("cp")) {
             failures++;
             continue;
           }
+          long cp = js["results"][0]["cp"].get<long>();
           auto c = cli.Post("/tools/count_matches", auth,
                             R"({"query":"quick fox"})", "application/json");
           if (!c || c->status != 200 || json::parse(c->body)["match_count"] != 2) {
             failures++;
             continue;
           }
-          auto g = cli.Post("/tools/get_document", auth, R"({"docid":"doc-004"})",
+          auto g = cli.Post("/tools/get_document", auth,
+                            "{\"cp\":" + std::to_string(cp) + "}",
                             "application/json");
           if (!g || g->status != 200 || json::parse(g->body)["found"] != true)
             failures++;
