@@ -3,10 +3,11 @@ id: TASK-5.7
 title: >-
   C1 — isj: HttpSearchEngine (httpx client for cover_search) + full real-LLM
   live e2e
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-18 03:52'
-updated_date: '2026-06-21 19:41'
+updated_date: '2026-06-26 04:25'
 labels:
   - python
   - isj
@@ -152,58 +153,49 @@ message so the model can self-correct.
   connectivity check is a manual, go-ahead-gated run (and is skipped by default in pytest).
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 isj_agent/engine/http.py defines HttpSearchEngine using httpx and implementing the B1 SearchEngine Protocol (search + read); isinstance(HttpSearchEngine(...), SearchEngine) is True; the constructor accepts an injectable client for tests.
+- [x] #2 search() POSTs to base_url + /tools/cover_search with JSON {query, top_k, exclude, window}, sends an Authorization: Bearer header iff a token is configured, and parses a 200 response via SearchResponse.model_validate.
+- [x] #3 read() POSTs to /tools/get_document with {cp} and returns the body text when found is true, or None when found is false.
+- [x] #4 Every failure raises EngineError: a non-2xx response raises EngineError carrying the server's error message (a 400 invalid-GCL response yields a message the B2 controller can bounce on); an httpx transport error (connect refused / timeout) raises EngineError.
+- [x] #5 config.toml and config.example.toml gain a [cottontail_http_json_server] section (base_url; optional api_key_env); config.py gains build_search_engine(cfg) -> HttpSearchEngine reading the bearer token from the env var named by api_key_env (raising if set-but-missing) and never logging it.
+- [x] #6 C1 adds NO CLI entry (the single CLI is C3). It provides a minimal live connectivity check — a live-gated test skipped by default, or a short documented invocation — that against a running server issues a cover_search with a word* query and gets a parsed SearchResponse, and a bad query yields an EngineError. The full real-LLM Searcher-loop live e2e is C3.
+- [x] #7 httpx is added as a direct dependency in isj/pyproject.toml and uv sync --project isj succeeds.
+- [x] #8 Automated tests use httpx.MockTransport (no network) and cover: request path/body and the Authorization header for search; SearchResponse parsing; read found vs None; non-2xx -> EngineError(message); transport error -> EngineError; Protocol conformance.
+- [x] #9 uv run --directory isj pytest tests/ exits 0 (the live connectivity test is skipped by default) and no automated test contacts a network or a real model.
+- [x] #10 The HttpSearchEngine<->server contract is validated by the MockTransport tests (against the contract) plus the go-ahead-gated live connectivity check (a real cover_search round-trip with a word* query + an EngineError on a bad query); the full real-LLM pipeline live run is C3.
+- [x] #11 isj/README.md documents HttpSearchEngine, the [cottontail_http_json_server] config, and the live connectivity check (external services require explicit go-ahead).
+- [x] #12 The JSON server is being MODIFIED by A1/A2 (they add the cover_search endpoint); B1's SearchResponse is the Python mirror of the cover_search JSON the server actually emits (advertised by GET /describe); on divergence, reconcile B1/C1 to the server rather than inventing a shape.
+- [x] #13 The live connectivity check can only run once A1/A2 are built and the server is running; deeper mismatches between the Python mirror and the server's real cover_search request/response surface in C3's full live run.
+<!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Python in isj/. Depends on B1 and A1/A2. Adapt as needed.
+Adopt the task sketch, grounded in the real cp-native server (matches B1; I built it). cp:int. base_url default 8080 (the server's actual default; task's 8081 was a placeholder). Lands on PR #5.
 
-1. uv add httpx to isj/pyproject.toml (direct dep); uv sync --project isj. Read
-   isj_agent/config.py (build_client pattern), isj_agent/engine/base.py (SearchEngine +
-   EngineError), isj_agent/protocol/search.py (SearchResponse), and
-   apps/cottontail-jsonl-server.cc (endpoints/auth) for the contract.
-2. isj_agent/engine/http.py: HttpSearchEngine as sketched (httpx.Client, base_url, optional
-   Bearer header, injectable client; search -> /tools/cover_search -> SearchResponse;
-   read -> /tools/get_document -> str|None; _server_error helper; all failures -> EngineError).
-3. config: add the [cottontail_http_json_server] section to config.toml and
-   config.example.toml; add build_search_engine(cfg) to config.py (token from api_key_env
-   env var, never logged).
-4. isj/tests/test_http_engine.py (NO network): build httpx.Client(transport=httpx.MockTransport(handler))
-   and inject it. Assert: search posts to /tools/cover_search with body {query,top_k,
-   exclude,window} and an Authorization: Bearer header iff a token is set; a canned
-   cover_search JSON parses into SearchResponse; read posts {cp} and returns text when
-   found else None; a 400 response -> EngineError carrying the server message; a transport
-   error (handler raises httpx.ConnectError) -> EngineError; isinstance(engine, SearchEngine).
-   Also add a LIVE-GATED connectivity test (skipped unless an env var / marker is set) that
-   hits a running server with a word* cover_search and asserts a parsed SearchResponse + an
-   EngineError on a bad query.
-5. uv run --directory isj pytest tests/ -v (green by default; the live test is skipped).
-   Update isj/README.md: HttpSearchEngine, the [cottontail_http_json_server] config, and how
-   to run the live connectivity check (server up, go-ahead).
-6. LIVE check (with operator go-ahead, once A1/A2 are built and the server runs over a
-   --stem burrow): run the live-gated test / invocation against the server; confirm the
-   cover_search round-trip + EngineError mapping. (The full pipeline live run is C3.)
+1. isj_agent/engine/http.py: HttpSearchEngine(base_url, token=None, timeout=30, client=None) -- httpx.Client (base_url.rstrip('/'), Authorization: Bearer header IFF token, timeout); injectable client for httpx.MockTransport tests. search(query,*,top_k=10,exclude:Sequence[int]=(),window=75)->SearchResponse: POST /tools/cover_search {query,top_k,exclude:list(exclude),window}; httpx.HTTPError->EngineError(transport); non-200->EngineError(_server_error(r)); 200->SearchResponse.model_validate(r.json()). read(cp:int)->str|None: POST /tools/get_document {cp}; text if found else None; errors->EngineError. _server_error(r): JSON 'error' field if present else f'HTTP {status}: {text}'. Satisfies B1 SearchEngine Protocol (isinstance True).
+2. isj_agent/config.py: build_search_engine(cfg)->HttpSearchEngine: token=os.environ[cfg['api_key_env']] iff api_key_env present (raise if set-but-missing); NEVER logged; HttpSearchEngine(base_url=cfg['base_url'], token=token). Mirrors build_client.
+3. config.toml + config.example.toml: [cottontail_http_json_server] base_url='http://127.0.0.1:8080'; # api_key_env='COTTONTAIL_API_TOKEN' (commented; omit on a no-token loopback server).
+4. pyproject.toml: add httpx (>=0.27) to dependencies; uv sync.
+5. tests/test_http_engine.py (NO network, httpx.MockTransport): search path/body + Authorization header iff token; canned cover_search JSON -> SearchResponse; read found vs None; 400 -> EngineError carrying server message; transport error (handler raises httpx.ConnectError) -> EngineError; isinstance(engine, SearchEngine). + a LIVE-GATED test (skipped unless env COTTONTAIL_SERVER_URL set): word* cover_search -> parsed SearchResponse + read a returned cp; a bad query -> EngineError.
+6. README: HttpSearchEngine, the [cottontail_http_json_server] config, the live check (+ external-services/secret note).
+GATE: uv sync + uv run pytest (live test skipped) green.
+LIVE RUN (user go-ahead, local/in-bounds): start cottontail-jsonl-server --burrow Scrapheap/climbmix-1M-porter.burrow on a free loopback port (no auth), set COTTONTAIL_SERVER_URL, run the live-gated test (word* cover_search round-trip + read-by-cp + bad-query EngineError), stop the server. (The full real-LLM Searcher e2e is C3, with the user's live LLM.)
+FORWARD-COMPAT: HttpSearchEngine satisfies B1's Protocol -> B2 runs against it live (wired by C3 via build_search_engine). Server contract == B1 shapes; SearchResponse extra=forbid catches drift.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. HttpSearchEngine mirrors the cp-keyed cover_search contract: request `exclude` = cp integers; results carry cp; get_document by cp. The server is sidecar-free. Authoritative: doc-6.
+
+Implemented per the task sketch. isj_agent/engine/http.py: HttpSearchEngine(base_url, token, timeout, client|transport injectable) implementing B1's SearchEngine Protocol -- search-> POST /tools/cover_search {query,top_k,exclude(cp ints),window} -> SearchResponse.model_validate; read-> POST /tools/get_document {cp} -> text|None; _server_error extracts the server's JSON error; every failure (non-2xx + httpx transport) -> EngineError. config.py build_search_engine(cfg) (token from api_key_env env, never logged). [cottontail_http_json_server] section in config.toml + config.example.toml (base_url default 8080 = the server's actual default; task's 8081 was a placeholder). httpx>=0.27 added to pyproject. tests/test_http_engine.py: 8 MockTransport tests (body+auth-header, parse, read found/None, 400->EngineError(server msg), transport-error->EngineError, Protocol isinstance) + a live-gated test (skip unless COTTONTAIL_SERVER_URL). VERIFIED: uv sync + uv run pytest -> 48 passed, 1 skipped. LIVE RUN DONE (user go-ahead): started cottontail-jsonl-server on 127.0.0.1:8181 over Scrapheap/climbmix-1M-porter.burrow (no auth, loopback); the live test PASSED, and a manual demo of '(^ black bear* attack*)' returned 673 total_matches, atom_counts (bear*=63691 via family stemming), real ClimbMix summaries with cp/score, read(cp) returned the body, and '(^ unbalanced' -> EngineError carrying the server's parse error. The full real-LLM Searcher e2e is C3.
 <!-- SECTION:NOTES:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 isj_agent/engine/http.py defines HttpSearchEngine using httpx and implementing the B1 SearchEngine Protocol (search + read); isinstance(HttpSearchEngine(...), SearchEngine) is True; the constructor accepts an injectable client for tests.
-- [ ] #2 search() POSTs to base_url + /tools/cover_search with JSON {query, top_k, exclude, window}, sends an Authorization: Bearer header iff a token is configured, and parses a 200 response via SearchResponse.model_validate.
-- [ ] #3 read() POSTs to /tools/get_document with {cp} and returns the body text when found is true, or None when found is false.
-- [ ] #4 Every failure raises EngineError: a non-2xx response raises EngineError carrying the server's error message (a 400 invalid-GCL response yields a message the B2 controller can bounce on); an httpx transport error (connect refused / timeout) raises EngineError.
-- [ ] #5 config.toml and config.example.toml gain a [cottontail_http_json_server] section (base_url; optional api_key_env); config.py gains build_search_engine(cfg) -> HttpSearchEngine reading the bearer token from the env var named by api_key_env (raising if set-but-missing) and never logging it.
-- [ ] #6 C1 adds NO CLI entry (the single CLI is C3). It provides a minimal live connectivity check — a live-gated test skipped by default, or a short documented invocation — that against a running server issues a cover_search with a word* query and gets a parsed SearchResponse, and a bad query yields an EngineError. The full real-LLM Searcher-loop live e2e is C3.
-- [ ] #7 httpx is added as a direct dependency in isj/pyproject.toml and uv sync --project isj succeeds.
-- [ ] #8 Automated tests use httpx.MockTransport (no network) and cover: request path/body and the Authorization header for search; SearchResponse parsing; read found vs None; non-2xx -> EngineError(message); transport error -> EngineError; Protocol conformance.
-- [ ] #9 uv run --directory isj pytest tests/ exits 0 (the live connectivity test is skipped by default) and no automated test contacts a network or a real model.
-- [ ] #10 The HttpSearchEngine<->server contract is validated by the MockTransport tests (against the contract) plus the go-ahead-gated live connectivity check (a real cover_search round-trip with a word* query + an EngineError on a bad query); the full real-LLM pipeline live run is C3.
-- [ ] #11 isj/README.md documents HttpSearchEngine, the [cottontail_http_json_server] config, and the live connectivity check (external services require explicit go-ahead).
-- [ ] #12 The JSON server is being MODIFIED by A1/A2 (they add the cover_search endpoint); B1's SearchResponse is the Python mirror of the cover_search JSON the server actually emits (advertised by GET /describe); on divergence, reconcile B1/C1 to the server rather than inventing a shape.
-- [ ] #13 The live connectivity check can only run once A1/A2 are built and the server is running; deeper mismatches between the Python mirror and the server's real cover_search request/response surface in C3's full live run.
-<!-- AC:END -->
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+C1 ships HttpSearchEngine: the live httpx client implementing B1's SearchEngine Protocol against cottontail-jsonl-server's cover_search + get_document, parsing into SearchResponse and mapping every failure (non-2xx with the server message; transport errors) to EngineError. Config via [cottontail_http_json_server] + build_search_engine (token from api_key_env, never logged). Tested with httpx.MockTransport (no network, 8 tests) + a live-gated check. VALIDATED LIVE against a local server over Scrapheap/climbmix-1M-porter.burrow: word* cover_search round-trip (673 matches, family stemming, summaries, read-by-cp) + bad-query EngineError. C3 wires this into the Searcher for the full real-LLM run.
+<!-- SECTION:FINAL_SUMMARY:END -->

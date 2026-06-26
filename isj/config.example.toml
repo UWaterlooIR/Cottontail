@@ -62,3 +62,16 @@ binary = "bazel-bin/apps/cottontail-jsonl-index"
 # Path to the C++ cottontail-jsonl-query binary (relative paths resolve against
 # the repository root). Override per-invocation with --query-bin.
 binary = "bazel-bin/apps/cottontail-jsonl-query"
+
+# ---------------------------------------------------------------------------
+# [cottontail_http_json_server]
+# The running cottontail-jsonl-server the Searcher queries over HTTP
+# (cover_search / get_document). Start it (from the repo root) over a
+# --stem porter burrow, e.g.:
+#   bazel-bin/apps/cottontail-jsonl-server --burrow my.burrow --port 8080
+# A loopback (127.0.0.1) server runs without auth by default; off-loopback
+# needs a bearer token (set api_key_env to the env var holding it).
+# ---------------------------------------------------------------------------
+[cottontail_http_json_server]
+base_url = "http://127.0.0.1:8080"
+# api_key_env = "COTTONTAIL_API_TOKEN"   # bearer-token env var; omit on a no-token loopback server

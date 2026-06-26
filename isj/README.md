@@ -129,8 +129,28 @@ container start address); `docno` never enters the agent.
   pattern as `Intents`.
 - **`FakeEngine`** (`engine/fake.py`) — a deterministic, scripted `SearchEngine`
   driven by an ordered list of `SearchResponse | EngineError`. **B2's tests run
-  against `FakeEngine`** (no network, no LLM, no C++); **C1 supplies the real
-  HTTP-backed engine** (`HttpSearchEngine`), which satisfies the same Protocol.
+  against `FakeEngine`** (no network, no LLM, no C++).
+- **`HttpSearchEngine`** (`engine/http.py`, C1) — the live engine: an `httpx`
+  client that implements the same Protocol against a running
+  `cottontail-jsonl-server`, POSTing `/tools/cover_search` and `/tools/get_document`
+  and parsing the JSON into `SearchResponse`. Every failure (a non-2xx response —
+  carrying the server's error message — or an httpx transport error) maps to
+  `EngineError`, so the B2 controller can bounce a bad query back to the model.
+  Configured by `[cottontail_http_json_server]` (`base_url`; optional `api_key_env`
+  naming the bearer-token env var, read but never logged) and built by
+  `config.build_search_engine(cfg)`. C3 wires it into the Searcher for live runs.
+
+  **Live connectivity check.** Automated tests use `httpx.MockTransport` (no
+  network). The live check is a pytest case **skipped unless `COTTONTAIL_SERVER_URL`
+  is set**. To run it (the server is a **local** loopback service — fine to run;
+  external services would need explicit go-ahead), from the repo root:
+  ```sh
+  bazel-bin/apps/cottontail-jsonl-server --burrow my-stemmed.burrow --port 8080 &
+  COTTONTAIL_SERVER_URL=http://127.0.0.1:8080 uv run --project isj pytest \
+      tests/test_http_engine.py::test_live_cover_search_round_trip
+  ```
+  (a `word*` query needs a `--stem porter` burrow; a loopback server runs without
+  auth). The full real-LLM Searcher-loop run is C3's CLI, not C1.
 
 ## The Searcher (B2)
 
