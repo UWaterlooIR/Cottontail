@@ -3,10 +3,11 @@ id: TASK-5.10
 title: >-
   Docs — update run/usage docs for the isj Searcher (reflect example-agent
   archival)
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-18 14:19'
-updated_date: '2026-06-21 19:00'
+updated_date: '2026-06-26 19:47'
 labels:
   - searcher
 dependencies:
@@ -80,15 +81,31 @@ documenting the new flow.
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 docs/running-the-search-stack.md documents the isj Searcher path end to end (index -> server with cover_search -> python -m isj_agent.cli --question/--out), with copy-paste commands, and describes the run-output directory layout (intents.json + intent-NN.json + intent-NN.trace.jsonl + optional errors.log; absence of errors.log == whole run succeeded).
-- [ ] #2 isj/README.md no longer describes the Analyst-only demo as the CLI; it describes the full per-intent Searcher pipeline and the output layout, linking to running-the-search-stack.md for run commands rather than duplicating them.
-- [ ] #3 CLAUDE.md 'JSONL search stack' and 'Running the apps' sections point to isj/ as the maintained agent and the cover_search tool path (the example-agent references were archived in TASK-5.4); no doc still presents examples/agent/ as the current example agent.
-- [ ] #4 A repo grep for 'examples/agent' finds no stale pointer presenting it as a runnable/current path (top-level README and other docs repointed to isj/).
-- [ ] #5 Run instructions are not duplicated: running-the-search-stack.md remains the single source and other files link to it.
+- [x] #1 docs/running-the-search-stack.md documents the isj Searcher path end to end (index -> server with cover_search -> python -m isj_agent.cli --question/--out), with copy-paste commands, and describes the run-output directory layout (intents.json + intent-NN.json + intent-NN.trace.jsonl + optional errors.log; absence of errors.log == whole run succeeded).
+- [x] #2 isj/README.md no longer describes the Analyst-only demo as the CLI; it describes the full per-intent Searcher pipeline and the output layout, linking to running-the-search-stack.md for run commands rather than duplicating them.
+- [x] #3 CLAUDE.md 'JSONL search stack' and 'Running the apps' sections point to isj/ as the maintained agent and the cover_search tool path (the example-agent references were archived in TASK-5.4); no doc still presents examples/agent/ as the current example agent.
+- [x] #4 A repo grep for 'examples/agent' finds no stale pointer presenting it as a runnable/current path (top-level README and other docs repointed to isj/).
+- [x] #5 Run instructions are not duplicated: running-the-search-stack.md remains the single source and other files link to it.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+Done together with 5.4. ADD the isj Searcher path on top of 5.4 archival.
+1. docs/running-the-search-stack.md: replace S4 "Run the example LLM agent" with "Run the ISJ Searcher" -- build burrow -> server (cover_search) -> python -m isj_agent.cli --question <q> --out <dir> [--overwrite][--verbose] -> run-output layout (intents.json + intent-NN.json + intent-NN.trace.jsonl + optional errors.log; absence of errors.log == success). Copy-paste commands. Single source.
+2. isj/README.md: already describes the full pipeline (C3); add a link to running-the-search-stack.md as the single source for run commands; fix the stale status note listing 5.4/5.10 as pending.
+3. CLAUDE.md: confirm isj/ is the maintained agent + cover_search path (done in 5.4).
+GATE: git grep examples/agent finds no runnable/current pointer (design/history docs left per user).
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-SPEC cp-native (doc-6, 2026-06-21). The run/usage docs describe the cp-native stack: cp on the wire; docno only at persistence (C2 rewrite) and the human/external fetch via the SQLite map; the index front door is the TASK-6.3 CLI. Authoritative: doc-6 + docs/indexing.md.
+DONE (with TASK-5.4). docs/running-the-search-stack.md S4 is now "Run the ISJ Searcher -- isj/": prerequisites (a --stem porter burrow, the server, vLLM), the CLI command (uv run --directory isj python -m isj_agent.cli --question <q> --out <dir> [--overwrite][--verbose]), the flag list, and the run-output layout (intents.json + intent-NN.json + intent-NN.trace.jsonl + errors.log; absence of errors.log == success; exits non-zero iff written). isj/README.md already describes the full pipeline (C3) + links to the run guide for starting the server; fixed its stale "still to come (5.4/5.10)" status note to point at archive/example-agent/ + the run guide. CLAUDE.md points to isj/ as the maintained agent (done in 5.4). Single source preserved: the run guide holds the run commands; isj/README links to it. grep examples/agent shows no runnable/current pointer (only the superseded agent-spec + history docs + code comments).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Updated the run/usage docs for the post-archival world. docs/running-the-search-stack.md S4 now documents the ISJ Searcher path end to end (porter burrow + server + vLLM -> python -m isj_agent.cli --question/--out) with the run-output layout and the errors.log success signal; it stays the single source. isj/README.md (already the full-pipeline description from C3) links to it for run commands and its stale status note was fixed; CLAUDE.md points to isj/ as the maintained agent. No doc presents examples/agent as a runnable/current path.
+<!-- SECTION:FINAL_SUMMARY:END -->

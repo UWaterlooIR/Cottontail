@@ -1,5 +1,12 @@
 # Example: an LLM search agent over a Cottontail burrow
 
+> **⚠️ ARCHIVED — superseded proof-of-concept (TASK-5.4).** This was a POC built
+> against an earlier, looser tool contract. The **maintained** agent is the ISJ
+> Searcher under [`isj/`](../../isj/); its tool contract is the **`cover_search`**
+> tool reached via the isj client, and the way to run the search stack is
+> [`docs/running-the-search-stack.md`](../../docs/running-the-search-stack.md).
+> This directory is kept for reference only — do not build on it.
+
 A minimal ReAct loop that lets an LLM drive `cottontail-jsonl-query` as a set of
 tools (search / structured search / explain / read-document / count) via native
 function calling. It is a **reference example**, not production — see

@@ -110,41 +110,42 @@ curl -s -X POST http://127.0.0.1:8080/tools/search_text \
 Full contract: [server-spec](cottontail-search-server-spec.md). Concurrency design:
 [threadpool-spec](cottontail-server-threadpool-spec.md).
 
-## 4. Run the example LLM agent — `examples/agent/`
+## 4. Run the ISJ Searcher — `isj/`
 
-A minimal ReAct loop that lets an LLM drive the search tools via native function
-calling. It can talk to a **running server** (`--server-url`) or shell out to the
-**query binary** directly (`--burrow`).
+The maintained agent is the **ISJ Searcher** under [`isj/`](../isj/): an Analyst
+splits the question into interpretations, then a per-intent Searcher drives the
+server's **`cover_search`** tool (search → read cover summaries → judge →
+reformulate) and the CLI writes a run-output directory. One-time setup — the `uv`
+project, `config.toml`, and serving the model with vLLM — is in
+**[`isj/README.md`](../isj/README.md)** (its single source).
 
-The agent has its own complete how-to — Python/`uv` setup, serving the model with
-vLLM, and every flag — in **[`examples/agent/README.md`](../examples/agent/README.md)**
-(its single source). Minimal run against a running server:
-
-```sh
-uv run --project examples/agent python examples/agent/search_agent.py \
-  --server-url http://127.0.0.1:8080 \
-  --model <served-model-name> --base-url http://127.0.0.1:8000/v1 \
-  --question "What is the best rope for climbing?" --verbose
-```
-
-Or run directly against a burrow with no server — the agent shells out to the
-query binary (§0) for each tool call. Pass `--burrow` (and `--query-bin` if it is
-not on your `PATH`) instead of `--server-url`:
+Prerequisites: a **`--stem porter`** burrow (§1 — `cover_search`'s `word*` family
+marker needs the stemmed stream), the **server** running over it (§3), and a
+**vLLM** OpenAI-compatible endpoint. Point `isj/config.toml` at both (the
+`[cottontail_http_json_server]` base_url and the `[llm.*]` endpoint).
 
 ```sh
-uv run --project examples/agent python examples/agent/search_agent.py \
-  --burrow corpus.burrow \
-  --query-bin bazel-bin/apps/cottontail-jsonl-query \
-  --model <served-model-name> --base-url http://127.0.0.1:8000/v1 \
-  --question "What is the best rope for climbing?" --verbose
+# from the repo root, with the server (§3) and vLLM both up:
+uv run --directory isj python -m isj_agent.cli \
+  --question "What should I know about black bear attacks while hiking?" \
+  --out runs/bear --verbose
 ```
 
-Supply exactly one of `--server-url` (HTTP) or `--burrow` (subprocess).
+Flags: `--question` (required), `--out <dir>` (required), `--overwrite` (reuse a
+non-empty dir), `--verbose` (live per-intent trace), `--burrow <path>` (override
+the served burrow whose `docno-cp.sqlite` maps `cp`→`docno`).
 
-Useful flags: `--trace` (tool-call summary after the run), `--verbose` (live
-transcript: each LLM round-trip with the full request messages and reply payload
-plus timing/tokens, assistant text, tool calls, and full observations),
-`--max-steps`, `--reasoning low|medium|high`.
+**Run output** (`<out>/`):
 
-Design and rationale: [search-agent-spec](cottontail-search-agent-spec.md). The
-forward-looking RISC direction (triage/mine/reformulate): [agentic-gcl-search-spec](agentic-gcl-search-spec.md).
+- `intents.json` — the question + the Analyst's ordered interpretations.
+- `intent-NN.json` — interpretation NN's judged, graded ranked list (ids as
+  **docno**).
+- `intent-NN.trace.jsonl` — interpretation NN's heavy event trace (one JSON object
+  per line: per-turn LLM calls with token usage, searches, judgements, …).
+- `errors.log` — present **only if something failed**; its **absence means the whole
+  run succeeded**. The CLI exits non-zero iff it was written.
+
+Contract and internals: [`isj/README.md`](../isj/README.md). (The earlier
+proof-of-concept agent has been archived to
+[`archive/example-agent/`](../archive/example-agent/) and is no longer maintained;
+its design notes live in [search-agent-spec](cottontail-search-agent-spec.md).)

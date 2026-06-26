@@ -272,5 +272,7 @@ run-output writer (C2), and the `Orchestrator` + CLI (C3) that wire Analyst →
 per-intent Searcher (over `HttpSearchEngine`) → `write_run` are all in place; the
 CLI is the full real-LLM live gate. The richer INP / CM / IP pipeline from the
 design spec is shelved in favor of the simpler `Intents` output (see the agent
-design decision docs under `backlog/docs/`). Still to come: retiring the old
-`examples/agent/` demo (TASK-5.4) and the user-facing docs pass (TASK-5.10).
+design decision docs under `backlog/docs/`). The earlier proof-of-concept agent
+has been archived to `archive/example-agent/` (TASK-5.4), and the full run/usage
+flow lives in [`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md)
+(TASK-5.10).

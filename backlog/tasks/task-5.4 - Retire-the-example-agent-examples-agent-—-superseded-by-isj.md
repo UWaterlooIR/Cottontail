@@ -1,10 +1,11 @@
 ---
 id: TASK-5.4
 title: Retire the example agent (examples/agent/) — superseded by isj/
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-17 15:51'
-updated_date: '2026-06-21 19:00'
+updated_date: '2026-06-26 19:47'
 labels:
   - cleanup
   - docs
@@ -68,14 +69,31 @@ This task and TASK-5.10 both touch the same docs (`running-the-search-stack.md`,
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 examples/agent/ is moved to archive/example-agent/ (or deleted if the user opts), with a note that it is a superseded POC and isj/ is the maintained agent.
-- [ ] #2 No authoritative doc presents the example agent as the current tool contract: running-the-search-stack.md, README.md, CLAUDE.md, and cottontail-search-agent-spec.md are updated to remove or mark-as-archived the example-agent references.
-- [ ] #3 The search-stack index/query/server run guidance is preserved; only the example-agent-specific pointers are removed or marked archived.
-- [ ] #4 bazel test //test:tests //test:hazel_test //test:jsonl_test stays green and no doc cross-links are broken.
+- [x] #1 examples/agent/ is moved to archive/example-agent/ (or deleted if the user opts), with a note that it is a superseded POC and isj/ is the maintained agent.
+- [x] #2 No authoritative doc presents the example agent as the current tool contract: running-the-search-stack.md, README.md, CLAUDE.md, and cottontail-search-agent-spec.md are updated to remove or mark-as-archived the example-agent references.
+- [x] #3 The search-stack index/query/server run guidance is preserved; only the example-agent-specific pointers are removed or marked archived.
+- [x] #4 bazel test //test:tests //test:hazel_test //test:jsonl_test stays green and no doc cross-links are broken.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+DECISIONS (user): archive (not delete); leave the design/history docs (trec-rag-2026-design, agentic-*-spec, TASKS.md, memory/*) as historical records. Done together with TASK-5.10 (shared docs).
+1. git mv examples/agent archive/example-agent; prepend an ARCHIVED banner to its README (superseded POC; maintained agent is isj/, contract is cover_search via the isj client).
+2. CLAUDE.md: repoint the examples/agent bullet + search-stack section to isj/.
+3. docs/cottontail-search-agent-spec.md: top banner = superseded prior agent design; maintained agent is isj/. cottontail-search-server-spec.md:353 path reference -> archive/example-agent/.
+4. (shared w/ 5.10) docs/running-the-search-stack.md S4 example-agent run section removed (replaced by the isj path in 5.10).
+GATE: bazel test //test:tests //test:hazel_test //test:jsonl_test green; git grep examples/agent shows no runnable/current pointer (history docs excepted).
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-RE-BASELINE cp-native (2026-06-21): unaffected. Archiving examples/agent/ stands; it is docno/:docno-era and superseded by isj/ regardless.
+DONE. git mv examples/agent -> archive/example-agent (5 tracked files; __pycache__ was gitignored). Prepended an ARCHIVED banner to archive/example-agent/README.md (superseded POC; maintained agent is isj/, contract is cover_search via the isj client). Repointed the authoritative pointers: CLAUDE.md search-stack bullet -> isj/ (note the archived POC); docs/cottontail-search-agent-spec.md top banner = SUPERSEDED historical design; docs/cottontail-search-server-spec.md S10 marked historical + path -> archive/example-agent/. The example-agent run section of docs/running-the-search-stack.md was replaced by the isj path (TASK-5.10). Per user: archived (not deleted); design/history docs (trec-rag-2026-design, agentic-*-spec, TASKS.md, memory/*) left as historical records. The remaining examples/agent refs live only inside the now-superseded agent-spec (under its banner) + those history docs + code comments. GATE: bazel test //test:tests //test:hazel_test //test:jsonl_test green; no broken cross-links.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Retired the proof-of-concept example agent: git mv examples/agent -> archive/example-agent with an ARCHIVED banner pointing to the maintained ISJ Searcher (isj/) and the cover_search contract. Repointed the authoritative docs (CLAUDE.md, the run guide, the agent-spec banner, the server-spec S10) so nothing presents it as the current/runnable contract; the index/query/server guidance is preserved. Archived (not deleted) and the design/history docs left intact, per the user. C++ test gate green.
+<!-- SECTION:FINAL_SUMMARY:END -->

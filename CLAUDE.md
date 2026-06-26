@@ -138,7 +138,9 @@ instructions elsewhere; point at that guide.
 - `//apps:cottontail-jsonl-index` — build a burrow from `*.jsonl`/`*.jsonl.gz`.
 - `//apps:cottontail-jsonl-query` — ranked text / GCL search over a burrow.
 - `//apps:cottontail-jsonl-server` — HTTP/JSON server exposing the same tools.
-- `examples/agent/` — example LLM agent driving the tools (server or burrow).
+- `isj/` — the maintained **ISJ Searcher** agent (Analyst → per-intent Searcher
+  over the server's `cover_search` tool). The earlier proof-of-concept agent is
+  archived under `archive/example-agent/` (superseded; do not build on it).
 
 `*.burrow` and `*.meadow` directories are local working indexes and are gitignored.
 

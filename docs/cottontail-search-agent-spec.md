@@ -1,5 +1,13 @@
 # Specification: Cottontail search as an LLM agent tool
 
+> **⚠️ SUPERSEDED — historical design (TASK-5.4).** This is the *prior* agent
+> design (the 5-tool CISC surface + the ReAct example app, now archived under
+> [`archive/example-agent/`](../archive/example-agent/)). The **maintained** agent
+> is the ISJ Searcher under [`isj/`](../isj/) over the server's `cover_search`
+> tool; to run the stack see
+> [`docs/running-the-search-stack.md`](running-the-search-stack.md). Kept for
+> design reference only.
+
 **Audience:** an implementing agent with full access to this repository.
 **Goal:** harden `cottontail-jsonl-query` into a clean **tool API for an LLM
 search agent**, and build a **minimal example app** that drives it in a ReAct

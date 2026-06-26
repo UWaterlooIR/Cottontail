@@ -350,7 +350,11 @@ passing.
 
 ## 10. Python agent integration (follow-on, small)
 
-`examples/agent/search_agent.py` currently shells out to the binary in
+*Historical note: this describes the now-archived example agent
+(`archive/example-agent/`); the HTTP mode below was implemented. The maintained
+agent is the ISJ Searcher under `isj/`.*
+
+`archive/example-agent/search_agent.py` shells out to the binary in
 `SearchTools.call`. Add an HTTP mode (`--server-url http://127.0.0.1:8080`) where
 `call(name, args)` does `POST {server-url}/tools/{name}` with `json=args` and an
 `Authorization: Bearer` header, and `schema()` does `GET /describe`. Because the
