@@ -2,6 +2,7 @@
 *.swp
 *.burrow
 *.meadow
+isj/runs/
 *temp*
 /*test*
 !/*test*/

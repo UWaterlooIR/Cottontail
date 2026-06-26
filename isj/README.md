@@ -18,9 +18,10 @@ isj/
     protocol/           Typed artifacts (Intents; search/engine contract types)
     engine/             The SearchEngine contract (Protocol + EngineError) and
                         the scripted FakeEngine; docno_map / fetch helpers
-    config.py           load_class() and build_client() utilities
-    cli.py              Entry point
-    orchestrator.py     Orchestrator (stub)
+    config.py           load_class / build_client / build_search_engine /
+                        build_docno_map utilities
+    cli.py              CLI entry point (one question -> a run-output dir)
+    orchestrator.py     Orchestrator: Analyst -> per-intent Searcher
   tests/                pytest suite
 ```
 
@@ -62,28 +63,43 @@ export MY_API_KEY="your-key-here"
 If `api_key_env` is not set in `config.toml`, the key defaults to `"EMPTY"`,
 which works for unauthenticated local vLLM instances.
 
-## Running the CLI
+## Running the CLI (C3)
 
-The CLI runs the Analyst over a set of questions and pretty-prints, for each,
-the question and the Analyst's ordered interpretations of what the user is
-asking for. From the repo root:
+The CLI (`isj_agent/cli.py`) runs the whole pipeline on **one question** and
+writes a run-output directory: it analyzes the question into interpretations
+(Analyst), runs the Searcher per interpretation over the live
+`HttpSearchEngine`, and persists the result with `write_run` (C2). A single
+flag-based entry, no subcommands:
 
 ```sh
-# Analyze the built-in sample questions:
-uv run --directory isj python -m isj_agent.cli
-
-# Or analyze your own questions:
-uv run --directory isj python -m isj_agent.cli "your question" "another question"
+uv run --directory isj python -m isj_agent.cli \
+    --question "What should I know about black bear attacks while hiking?" \
+    --out runs/bear --verbose
 ```
 
-`config.toml` (the CLI's default config path) selects the LLM endpoint and the
-Analyst implementation. Output for each question looks like:
+| Flag | Meaning |
+|---|---|
+| `--question` (required) | the question to investigate |
+| `--out` (required) | run-output directory to write |
+| `--overwrite` | overwrite a non-empty `--out` |
+| `--verbose` | render each interpretation's events live as they happen |
+| `--burrow` | override the served burrow (locates the cp↔docno map) |
+| `--config` | path to `config.toml` (default `isj/config.toml`) |
 
-```
-Q: <the question>
-  1. <most likely interpretation>
-  2. <an alternate interpretation>
-```
+It needs **both** a running vLLM (the `[llm.*]` endpoint) and a running
+`cottontail-jsonl-server` over a `--stem porter` burrow (the
+`[cottontail_http_json_server]` endpoint) — see
+[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md) for
+starting the server. The server is a **local** loopback service (fine to run); an
+off-loopback or external endpoint needs explicit go-ahead.
+
+The output directory is exactly the C2 layout below. On disk the persisted ids
+are **docnos**, rewritten from cps via the read-only map at
+`<burrow>/docno-cp.sqlite` — `burrow` comes from `[cottontail_http_json_server]`
+(or `--burrow`); a corpus with no map persists raw cps. The CLI prints a one-line
+summary (`interpretations` / `succeeded` / `failed`) and **exits non-zero iff
+`errors.log` was written** (the same success signal as its absence in the output
+dir).
 
 ## Running tests
 
@@ -216,15 +232,30 @@ C3 produces the data and catches errors; C2 only writes:
   trace events — so the saved files are portable (the field is renamed `cp` → `docno`). A
   docno-less corpus (no map) persists cps. Pure filesystem: no network, no LLM.
 
+## The Orchestrator (C3)
+
+`isj_agent/orchestrator.py` drives one question end to end.
+`Orchestrator(analyst=…, searcher=…).run_question(question, *, on_intent=None)`
+calls `Analyst.analyze`, then runs the `Searcher` per interpretation in order,
+and returns `(intents, outcomes, run_error)` — one `outcome` per interpretation
+(a `SearcherResult` on success, a `RunError` on a per-intent failure; the run
+continues past a failed intent). An analysis-level failure returns
+`(None, [], <message>)`. It writes no files (the CLI calls `write_run`) and does
+no fusion; `on_intent(i, interp, outcome)` is the hook the CLI's `--verbose` uses
+to render each interpretation as it completes. The CLI (above) is the thin wiring
+layer that builds the agents from config and feeds the 3-tuple straight into
+`write_run`.
+
 ## Status
 
-The `Analyst` is implemented: `analyze()` makes a single guided-decoding LLM
-call and returns an `Intents` object. The engine contract (B1) is implemented:
-the `SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Judgement`,
-and the scripted `FakeEngine`. The `Searcher` (B2), the live `HttpSearchEngine`
-(C1, validated against a real server), and the run-output writer (C2) above are all
-implemented and tested. Still to come: the `Orchestrator` / CLI (C3) that wires
-Analyst → per-intent Searcher (over `HttpSearchEngine`) → `write_run`, and is the
-full real-LLM live gate. The richer INP / CM / IP pipeline from the design spec is
-shelved in favor of the simpler `Intents` output (see the agent design decision
-docs under `backlog/docs/`).
+The full Searcher pipeline is implemented and tested. The `Analyst` makes a
+single guided-decoding LLM call returning an `Intents`. The engine contract (B1)
+— the `SearchEngine` Protocol, `EngineError`, the typed
+`SearchResponse`/`Judgement`, and the scripted `FakeEngine` — backs the `Searcher`
+(B2). The live `HttpSearchEngine` (C1, validated against a real server), the
+run-output writer (C2), and the `Orchestrator` + CLI (C3) that wire Analyst →
+per-intent Searcher (over `HttpSearchEngine`) → `write_run` are all in place; the
+CLI is the full real-LLM live gate. The richer INP / CM / IP pipeline from the
+design spec is shelved in favor of the simpler `Intents` output (see the agent
+design decision docs under `backlog/docs/`). Still to come: retiring the old
+`examples/agent/` demo (TASK-5.4) and the user-facing docs pass (TASK-5.10).

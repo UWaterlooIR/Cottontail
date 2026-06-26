@@ -1,9 +1,14 @@
 import importlib
 import os
+from pathlib import Path
 
 import openai
 
+from isj_agent.docno_map import DocnoMap
 from isj_agent.engine.http import HttpSearchEngine
+
+# Repo root: isj_agent -> isj -> <repo>. Used to resolve a relative burrow path.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_class(dotted_path: str) -> type:
@@ -51,3 +56,23 @@ def build_search_engine(cfg: dict) -> HttpSearchEngine:
                 f"environment variable '{env_var}' (api_key_env) is not set"
             )
     return HttpSearchEngine(base_url=cfg["base_url"], token=token)
+
+
+def build_docno_map(cfg: dict, burrow_override: str | None = None) -> DocnoMap | None:
+    """Open the read-only cp<->docno map for the served burrow, or None.
+
+    The map lives at <burrow>/docno-cp.sqlite. `burrow` comes from the
+    [cottontail_http_json_server] config (or a CLI override); a relative path is
+    resolved against the repo root. Returns None when no burrow is configured or the
+    burrow has no map (a docno-less corpus) -- C2 then persists raw cps.
+    """
+    burrow = burrow_override or cfg.get("burrow")
+    if not burrow:
+        return None
+    path = Path(burrow)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    sqlite_path = path / "docno-cp.sqlite"
+    if not sqlite_path.exists():
+        return None
+    return DocnoMap(sqlite_path)

@@ -3,10 +3,11 @@ id: TASK-5.9
 title: >-
   C3 — isj: CLI orchestrator (question -> Analyst -> per-intent Searcher ->
   write run output)
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-18 04:41'
-updated_date: '2026-06-22 00:32'
+updated_date: '2026-06-26 13:52'
 labels:
   - python
   - isj
@@ -106,59 +107,50 @@ hands them to C2, and on --verbose renders them to the console. C3 builds no tra
   to C2).
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 orchestrator.run_question(question) -> (Intents, list[IntentResult | RunError]): Analyst.analyze -> Intents, then for each interpretation in order TRY sr = Searcher.run(interpretation) and collect IntentResult{ranked_list: sr.ranked_list, events: sr.events}, else CATCH the exception escaping the Searcher and collect a RunError(message) for that intent; outcomes has one entry per interpretation, in order; it does not write files and does not fuse.
+- [x] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), opens the cp->docno SQLite map (read-only) at the configured path (the burrow docno-cp.sqlite, co-located per issue #1), runs run_question, writes the output directory via C2 write_run (passing the map), and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
+- [x] #3 The per-intent structured event trace is B2's SearcherResult.events (a list of TraceEvent); it is always captured per intent and saved as intent-NN.trace.jsonl via C2 (one event per line); --verbose additionally renders the events to the console live. C3 builds no tracer of its own.
+- [x] #4 One question per run; one output directory per run; no fusion/RRF.
+- [x] #5 Automated tests drive run_question with a stub Analyst + a stub/Fake Searcher (no network), assert one outcome per interpretation (an IntentResult on success carrying ranked_list + events), and assert the written output directory contents (intents.json + per-intent json + trace.jsonl).
+- [x] #6 The CLI run is the full real-LLM live integration gate: with the C++ stack built, cottontail-jsonl-server over Scrapheap/climbmix-100k-porter.burrow, and vLLM gpt-oss-120b up, running it on a question completes the whole pipeline (cover_search with word*, exclude accumulation, an EngineError bounce) and produces a populated output directory with per-intent event traces; external services require operator go-ahead; the transcript/notes are captured.
+- [x] #7 uv run --directory isj pytest tests/ exits 0; no automated test contacts a network or a real model.
+- [x] #8 isj/README.md documents the CLI (--question/--out/--overwrite/--verbose, no subcommands), the run output directory (incl. the per-intent .trace.jsonl event logs), and the live-run prerequisites/go-ahead.
+- [x] #9 run_question catches a per-intent Searcher failure as a RunError for that intent and CONTINUES to the next interpretation (one failure does not abort the rest); run-level failures (e.g. Analyst.analyze raising) are also captured; outcomes is one entry per interpretation (IntentResult or RunError).
+- [x] #10 errors.log is the success signal: C2 writes it into the output directory IFF something failed; its ABSENCE means every intent succeeded. The CLI summarizes #succeeded/#failed and exits non-zero when errors.log was written. A test makes one intent's Searcher raise and asserts the other intents are written, errors.log exists with the failing intent's index, and the run did not abort.
+<!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Python in isj/. Depends on B2, C1, C2. Adapt as needed.
+DECISIONS (user): (Q1) docno map located via a 'burrow' field in [cottontail_http_json_server] (CLI opens <burrow>/docno-cp.sqlite read-only; absent -> None -> cps persisted); --burrow override. (Q3) run the live gate after implementing (local server over Scrapheap/climbmix-1M-porter.burrow + the user's vLLM; CLI on a black-bear question).
 
-1. uv sync --project isj. Read isj_agent/orchestrator.py (stub), cli.py (the current Analyst
-   demo + config loading), C1's build_search_engine + HttpSearchEngine, B2's Searcher.run
-   (returns SearcherResult{ranked_list, events}) + the TraceEvent type, and C2's write_run
-   (outcomes = IntentResult | RunError; errors.log).
-2. Orchestrator.run_question(question): analyst.analyze -> Intents (catch a failure here as a
-   run-level error); per interpretation, try searcher.run(interp) -> IntentResult else catch
-   the exception -> RunError(message) and continue; return (intents, outcomes) with one
-   outcome per interpretation. Use sr.events for the trace.
-3. cli.py: REWRITE main() to a single flag-based argparse entry — --question (required),
-   --out (required), --overwrite, --verbose. NO subparsers/positional args. Read config.toml;
-   build_client + build_search_engine; construct Analyst + Searcher + Orchestrator;
-   run_question; write_run(out_dir, intents, outcomes, overwrite); print a summary
-   (#succeeded/#failed) and exit non-zero if any intent failed (errors.log written); if
-   --verbose, render each intent's events live. Remove the old Analyst-only demo.
-4. isj/tests/test_orchestrator.py (no network): (a) drive run_question with a STUB Analyst +
-   a STUB/Fake Searcher (B2 over FakeEngine + a stub LLM, or a fake returning fixed
-   SearcherResults); assert one outcome per interpretation; write_run to tmp_path and assert
-   the dir contents (intents.json + intent-NN.json + intent-NN.trace.jsonl, NO errors.log).
-   (b) make one intent's Searcher RAISE; assert run_question records a RunError for it and
-   continues; assert the other intents are written and errors.log exists with the failing
-   intent's index. No live network.
-5. uv run --directory isj pytest tests/ -v (green). Update isj/README.md: the CLI
-   (--question/--out/--overwrite/--verbose, no subcommands), the output directory (incl.
-   per-intent .trace.jsonl and the optional errors.log whose absence means full success),
-   and the live-run prerequisites (server + vLLM up, operator go-ahead).
-6. LIVE gate (after A1/A2/B2/C1/C2 exist + go-ahead): config.toml -> vLLM + the running
-   server over Scrapheap/climbmix-100k-porter.burrow; run
-   `python -m isj_agent.cli --question <q> --out runs/<name> --verbose`; confirm a populated
-   output directory (and no errors.log on success); capture notes.
+1. C2 amendment (isj_agent/run_output.py): write_run accepts intents: Intents|None -- if None (Analyst-failure run-level case), write ONLY errors.log (no intents.json, skip the count-check). Update C2 tests if needed.
+2. Config: [cottontail_http_json_server] gains optional 'burrow' (config.toml + config.example.toml); isj_agent/config.py build_docno_map(cfg)->DocnoMap|None (open <burrow>/docno-cp.sqlite read-only if present, else None). [agents.searcher] section (class + llm profile + optional top_k/window/max_turns knobs; defaults = B2 recall-first).
+3. orchestrator.py: Orchestrator(*, analyst, searcher); run_question(question, *, on_intent=None)->(intents|None, outcomes, run_error). analyst.analyze (run-level catch -> (None,[],msg)); per interpretation try searcher.run -> SearcherResult else RunError(message) and CONTINUE; call on_intent(i, interp, outcome) for --verbose live render; one outcome per interpretation, in order. No files, no fusion. Success outcome IS the SearcherResult (== the spec's IntentResult).
+4. cli.py REWRITE: single flag entry (no subcommands) python -m isj_agent.cli --question --out [--overwrite] [--verbose] [--burrow]. Read config; build_client([llm/agents.analyst, agents.searcher]) + build_search_engine + build_docno_map; construct Analyst + Searcher(client,model,engine,**knobs) + Orchestrator; run_question; write_run(out_dir, intents, outcomes, docno_map=, run_error=, overwrite=); print summary (#interps/#succeeded/#failed); exit non-zero iff errors.log written. --verbose renders each intent's events live (on_intent). Replaces the Analyst-only demo.
+5. tests/test_orchestrator.py (no network): stub Analyst + stub Searcher; one outcome per interp; a raising intent -> RunError + others still produced + errors.log w/ index + no abort; Analyst-failure -> run-level errors.log; written-dir contents.
+6. README: CLI flags, run-output dir + per-intent .trace.jsonl, live-run prereqs/go-ahead.
+GATE: uv sync + uv run pytest green (no network).
+LIVE GATE (Q3): start cottontail-jsonl-server on a loopback port over Scrapheap/climbmix-1M-porter.burrow; config -> server base_url+burrow + the user's vLLM; run the CLI on a black-bear question --verbose; confirm a populated runs/ dir (per-intent json + trace.jsonl, docnos on disk, no errors.log on success); capture a transcript; stop the server.
+FORWARD-COMPAT: C3 is the last Searcher-track build before 5.4 (cleanup) + 5.10 (docs).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. The pipeline is unchanged; identities are cp on the wire and through the agent, rewritten to docno by C2 at persistence. The live gate runs against the cp-native burrow built by the TASK-6.3 index CLI (dev: Scrapheap/climbmix-100k-porter.burrow). Authoritative: doc-6.
+
+IMPLEMENTED (C3). Files: isj_agent/orchestrator.py (Orchestrator{analyst,searcher}; run_question(question, *, on_intent=None) -> (Intents|None, list[Outcome], run_error); per-intent try Searcher.run -> SearcherResult, except -> RunError(message) and CONTINUE; analyst.analyze run-level catch -> (None,[],msg); no files, no fusion). isj_agent/cli.py REWRITTEN: single flag entry --question/--out/[--overwrite]/[--verbose]/[--burrow]/[--config], no subcommands; builds client+HttpSearchEngine+DocnoMap from config, runs run_question, write_run(docno_map=,run_error=,overwrite=), prints succeeded/failed summary, exits non-zero IFF errors.log written; --verbose renders each intent's events live via on_intent. Replaces the Analyst-only demo (removed format_intents/SAMPLE_QUESTIONS; deleted tests/test_cli.py). isj_agent/config.py: build_docno_map(cfg, burrow_override=None) -> DocnoMap|None (opens <burrow>/docno-cp.sqlite read-only; None if no burrow or no map -> raw cps). run_output.py (C2 amend): write_run now accepts intents: Intents|None (None -> only errors.log; count-check skipped). config.example.toml/config.toml: [cottontail_http_json_server].burrow + [agents.searcher]. .gitignore: isj/runs/. Tests: tests/test_orchestrator.py (7 tests, no network: ordering, per-intent RunError+continue, analysis-failure (None,[],msg), on_intent callback, outputs plug into write_run); +1 run_output test (intents=None -> only errors.log). GATE: uv run pytest = 61 passed, 1 skipped (the live-gated http test); no test touches network/model.
+
+LIVE GATE (real LLM gpt-oss-120b + cottontail-jsonl-server over Scrapheap/climbmix-1M-porter.burrow, user-authorized loopback services): CLI on 'What should I know about black bear attacks while hiking?' --verbose ran the WHOLE pipeline. Analyst -> 3 interpretations. Intent 00: real cover_search with word* operators (total=1151 then 156 hits), exclude accumulation (exclude=10), the judge-before-search guardrail fired (bounce), and the model judged 20 passages with UMBRELA grades (incl. a grade-4); persisted intent-00.json carries DOCNOS (e.g. shard_00011_32456) with NO cp key -> the cp->docno rewrite via the real burrow's docno-cp.sqlite works end to end. Populated runs/bear/ with intents.json + per-intent json + .trace.jsonl, no errors.log, exit 0.
+
+FINDING (pre-existing C++ server bug, NOT C3, flag-only): at intent-00 turn 6 the cottontail-jsonl-server crashed mid-run ('Server disconnected without sending a response', then Connection refused), so intents 01-02 degraded to no results. C3 handled it gracefully: every engine error bounced back as str(error), each Searcher stopped cleanly (no_tool_call), error isolation held, run still exited 0 with valid output. The crashing cover query at intent-00 turn 6 is worth a separate server-robustness task.
 <!-- SECTION:NOTES:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 orchestrator.run_question(question) -> (Intents, list[IntentResult | RunError]): Analyst.analyze -> Intents, then for each interpretation in order TRY sr = Searcher.run(interpretation) and collect IntentResult{ranked_list: sr.ranked_list, events: sr.events}, else CATCH the exception escaping the Searcher and collect a RunError(message) for that intent; outcomes has one entry per interpretation, in order; it does not write files and does not fuse.
-- [ ] #2 The CLI is a SINGLE entry with NO subcommands and all inputs as flags: python -m isj_agent.cli --question <q> --out <dir> [--overwrite] [--verbose]; it reads config.toml, builds the LLM client (build_client) and HttpSearchEngine (build_search_engine), opens the cp->docno SQLite map (read-only) at the configured path (the burrow docno-cp.sqlite, co-located per issue #1), runs run_question, writes the output directory via C2 write_run (passing the map), and prints a summary; it replaces the current Analyst-only demo (Analyst becomes an internal step).
-- [ ] #3 The per-intent structured event trace is B2's SearcherResult.events (a list of TraceEvent); it is always captured per intent and saved as intent-NN.trace.jsonl via C2 (one event per line); --verbose additionally renders the events to the console live. C3 builds no tracer of its own.
-- [ ] #4 One question per run; one output directory per run; no fusion/RRF.
-- [ ] #5 Automated tests drive run_question with a stub Analyst + a stub/Fake Searcher (no network), assert one outcome per interpretation (an IntentResult on success carrying ranked_list + events), and assert the written output directory contents (intents.json + per-intent json + trace.jsonl).
-- [ ] #6 The CLI run is the full real-LLM live integration gate: with the C++ stack built, cottontail-jsonl-server over Scrapheap/climbmix-100k-porter.burrow, and vLLM gpt-oss-120b up, running it on a question completes the whole pipeline (cover_search with word*, exclude accumulation, an EngineError bounce) and produces a populated output directory with per-intent event traces; external services require operator go-ahead; the transcript/notes are captured.
-- [ ] #7 uv run --directory isj pytest tests/ exits 0; no automated test contacts a network or a real model.
-- [ ] #8 isj/README.md documents the CLI (--question/--out/--overwrite/--verbose, no subcommands), the run output directory (incl. the per-intent .trace.jsonl event logs), and the live-run prerequisites/go-ahead.
-- [ ] #9 run_question catches a per-intent Searcher failure as a RunError for that intent and CONTINUES to the next interpretation (one failure does not abort the rest); run-level failures (e.g. Analyst.analyze raising) are also captured; outcomes is one entry per interpretation (IntentResult or RunError).
-- [ ] #10 errors.log is the success signal: C2 writes it into the output directory IFF something failed; its ABSENCE means every intent succeeded. The CLI summarizes #succeeded/#failed and exits non-zero when errors.log was written. A test makes one intent's Searcher raise and asserts the other intents are written, errors.log exists with the failing intent's index, and the run did not abort.
-<!-- AC:END -->
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+C3 wires the full Searcher pipeline behind one CLI. Orchestrator.run_question runs Analyst -> per-intent Searcher in order, returning (Intents|None, one outcome per interpretation, run_error) with per-intent failures isolated as RunError and the run continuing; it writes no files and does no fusion. cli.py is a single flag entry (--question/--out/[--overwrite/--verbose/--burrow]) that builds the LLM client, HttpSearchEngine, and read-only cp->docno DocnoMap from config, runs the question, persists via C2 write_run, prints a succeeded/failed summary, and exits non-zero iff errors.log was written. write_run was amended to accept intents=None (Analyst-failure -> only errors.log). 61 pytest pass with no network/model. Live gate (real gpt-oss-120b + server over the 1M burrow) drove the whole pipeline: real word* cover_search, exclude accumulation, the judge-before-search bounce, 20 UMBRELA-graded passages persisted with docnos (cp->docno rewrite verified end to end), populated runs/bear/ with per-intent traces, exit 0. A pre-existing C++ server crash mid-run was handled gracefully (flagged in notes for a separate server-robustness task).
+<!-- SECTION:FINAL_SUMMARY:END -->

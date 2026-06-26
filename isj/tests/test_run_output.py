@@ -112,6 +112,14 @@ def test_overwrite_guard_and_clears_stale(tmp_path):
     assert not (out / "errors.log").exists()  # stale errors.log cleared
 
 
+def test_intents_none_writes_only_errors_log(tmp_path):
+    # Analyst-level failure: no interpretations, so only errors.log is written.
+    out = tmp_path / "run"
+    write_run(out, None, [], run_error="analysis failed: boom")
+    assert not (out / "intents.json").exists()
+    assert "run-level error: analysis failed: boom" in (out / "errors.log").read_text()
+
+
 def test_docnoless_corpus_persists_cps(tmp_path):
     intents = Intents(question="Q?", interpretations=["a"])
     out = tmp_path / "run"

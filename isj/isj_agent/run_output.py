@@ -47,15 +47,19 @@ Outcome = SearcherResult | RunError
 
 def write_run(
     out_dir: str | Path,
-    intents: Intents,
+    intents: Intents | None,
     outcomes: Sequence[Outcome],
     *,
     docno_map: DocnoMap | None = None,
     run_error: str | None = None,
     overwrite: bool = False,
 ) -> None:
-    """Persist one question's run. `outcomes` is one entry PER interpretation, in order."""
-    if len(outcomes) != len(intents.interpretations):
+    """Persist one question's run. `outcomes` is one entry PER interpretation, in order.
+
+    `intents` is None only for a run-level failure before analysis produced any
+    interpretations (e.g. the Analyst raised): then nothing but errors.log is written.
+    """
+    if intents is not None and len(outcomes) != len(intents.interpretations):
         raise ValueError(
             f"outcomes ({len(outcomes)}) != interpretations "
             f"({len(intents.interpretations)})"
@@ -85,14 +89,16 @@ def write_run(
             cache[cp] = d if d is not None else cp  # unmapped cp -> keep the cp
         return cache[cp]
 
-    (out_dir / "intents.json").write_text(
-        intents.model_dump_json(indent=2), encoding="utf-8"
-    )
+    if intents is not None:
+        (out_dir / "intents.json").write_text(
+            intents.model_dump_json(indent=2), encoding="utf-8"
+        )
 
     errors: list[str] = []
     for i, outcome in enumerate(outcomes):
         if isinstance(outcome, RunError):
-            errors.append(f"intent {i:02d} ({intents.interpretations[i]}): {outcome.message}")
+            interp = intents.interpretations[i] if intents is not None else "?"
+            errors.append(f"intent {i:02d} ({interp}): {outcome.message}")
             continue
         rl = _ranked_list_dict(outcome.ranked_list, resolve, rename)
         (out_dir / f"intent-{i:02d}.json").write_text(

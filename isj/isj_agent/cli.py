@@ -1,89 +1,128 @@
+"""The isj Searcher CLI (C3): one question in, a run-output directory out.
+
+    python -m isj_agent.cli --question "<q>" --out <dir> [--overwrite] [--verbose] [--burrow <path>]
+
+Wires the whole pipeline from config.toml: Analyst -> per-intent Searcher (over the
+live HttpSearchEngine) -> write_run. A single flag-based entry, no subcommands, one
+question per run. The absence of <out>/errors.log means the whole run succeeded;
+the CLI exits non-zero if it was written.
+"""
+
+from __future__ import annotations
+
 import argparse
+import sys
 import tomllib
 from pathlib import Path
 
-from isj_agent.config import build_client, load_class
+from isj_agent.config import (
+    build_client,
+    build_docno_map,
+    build_search_engine,
+    load_class,
+)
 from isj_agent.orchestrator import Orchestrator
-from isj_agent.protocol.intents import Intents
-
-SAMPLE_QUESTIONS = [
-    "Will wearing an ankle brace help heal achilles tendonitis?",
-    "What language and cultural differences impede the integration of foreign "
-    "minorities in Germany?",
-    "What security measures are in effect or are proposed to go into effect in "
-    "airports?",
-    "Find ways of measuring creativity.",
-    "I'm hoping to grasp the intricacies of different healthcare systems, "
-    "particularly what drives their accessibility, cost, and the fundamental "
-    "debate around healthcare as a right versus a privilege. Can you explain "
-    "the main factors affecting healthcare delivery, equity, and expenses, and "
-    "suggest ways to improve health outcomes for everyone?",
-    "I'm a college student who has seen articles about Geoffrey Hinton and his "
-    "resignation from Google, with warnings of AI's impacts, but I don't fully "
-    "understand the context of these warnings. Since I'm interested in the "
-    "future of AI and how it might affect jobs or safety, I'd like a report "
-    "that breaks down the story and why Hinton's warnings matter. I want "
-    "something that helps me follow this issue more clearly without needing a "
-    "tech background.",
-]
+from isj_agent.run_output import Outcome, RunError, write_run
 
 
-def format_intents(intents: Intents) -> str:
-    lines = [f"Q: {intents.question}"]
-    for i, interp in enumerate(intents.interpretations, start=1):
-        lines.append(f"  {i}. {interp}")
-    return "\n".join(lines)
+def _render_event(ev) -> None:
+    d = ev.model_dump()
+    t = d.get("type")
+    if t == "llm_turn":
+        print(f"    turn {d['turn']}: tool={d['tool']} ({d['duration_ms']:.0f} ms)")
+    elif t == "search":
+        print(
+            f"    search {d['query']!r}: total={d['total_matches']} "
+            f"returned={len(d.get('results', []))} exclude={len(d.get('exclude', []))} "
+            f"({d['duration_ms']:.0f} ms)"
+        )
+    elif t == "judge":
+        print(f"    judge: recorded={d['recorded']} grades={[j['grade'] for j in d.get('judgements', [])]}")
+    elif t == "bounce":
+        print(f"    bounce[{d['kind']}]: {d['message']}")
+    elif t == "stop":
+        print(f"    stop: {d['reason']}")
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="isj-agent CLI")
+def _make_on_intent(verbose: bool):
+    if not verbose:
+        return None
+
+    def on_intent(i: int, interp: str, outcome: Outcome) -> None:
+        print(f"\n[intent {i:02d}] {interp}")
+        if isinstance(outcome, RunError):
+            print(f"    FAILED: {outcome.message}")
+        else:
+            for ev in outcome.events:
+                _render_event(ev)
+            print(f"    -> {len(outcome.ranked_list.entries)} judged passages")
+
+    return on_intent
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="isj_agent.cli",
+        description="Run the ISJ Searcher pipeline on one question -> a run-output directory.",
+    )
+    parser.add_argument("--question", required=True, help="the question to investigate")
+    parser.add_argument("--out", required=True, type=Path, help="run-output directory")
+    parser.add_argument("--overwrite", action="store_true", help="overwrite a non-empty --out")
+    parser.add_argument("--verbose", action="store_true", help="render each intent's events live")
+    parser.add_argument("--burrow", help="override the served burrow (for the cp<->docno map)")
     parser.add_argument(
         "--config",
         type=Path,
         default=Path(__file__).parent.parent / "config.toml",
-        help="Path to config.toml (default: isj/config.toml)",
+        help="path to config.toml (default: isj/config.toml)",
     )
-    parser.add_argument(
-        "questions",
-        nargs="*",
-        help="Questions to analyze (default: a built-in sample set)",
-    )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    config_path: Path = args.config
-    if not config_path.exists():
+    if not args.config.exists():
         raise FileNotFoundError(
-            f"config file not found: {config_path}\n"
-            f"Copy config.example.toml to {config_path} and edit as needed."
+            f"config file not found: {args.config}\n"
+            f"Copy config.example.toml to {args.config} and edit as needed."
         )
-
-    with config_path.open("rb") as f:
+    with args.config.open("rb") as f:
         config = tomllib.load(f)
 
-    llm_configs = config.get("llm", {})
-    agent_configs = config.get("agents", {})
+    llm_configs = config["llm"]
+    agent_configs = config["agents"]
+    clients = {name: build_client(cfg) for name, cfg in llm_configs.items()}
 
-    # Build LLM clients keyed by profile name.
-    clients = {name: build_client(llm_cfg) for name, llm_cfg in llm_configs.items()}
+    def _build_agent(role: str, **extra):
+        cfg = agent_configs[role]
+        cls = load_class(cfg["class"])
+        return cls(client=clients[cfg["llm"]], model=llm_configs[cfg["llm"]]["model"], **extra)
 
-    # Instantiate agents from config.
-    analyst_cfg = agent_configs["analyst"]
-    analyst_llm = llm_configs[analyst_cfg["llm"]]
-    AnalystClass = load_class(analyst_cfg["class"])
-    analyst = AnalystClass(
-        client=clients[analyst_cfg["llm"]],
-        model=analyst_llm["model"],
+    analyst = _build_agent("analyst")
+    engine = build_search_engine(config["cottontail_http_json_server"])
+    searcher_cfg = agent_configs["searcher"]
+    knobs = {k: searcher_cfg[k] for k in ("top_k", "window", "max_turns") if k in searcher_cfg}
+    searcher = _build_agent("searcher", engine=engine, **knobs)
+
+    docno_map = build_docno_map(
+        config["cottontail_http_json_server"], burrow_override=args.burrow
     )
 
-    orchestrator = Orchestrator(analyst=analyst)
+    orchestrator = Orchestrator(analyst=analyst, searcher=searcher)
+    intents, outcomes, run_error = orchestrator.run_question(
+        args.question, on_intent=_make_on_intent(args.verbose)
+    )
+    write_run(
+        args.out, intents, outcomes,
+        docno_map=docno_map, run_error=run_error, overwrite=args.overwrite,
+    )
 
-    questions = args.questions or SAMPLE_QUESTIONS
-
-    print(f"endpoint: {analyst_llm['base_url']}  model: {analyst_llm['model']}\n")
-    for question in questions:
-        intents = orchestrator.analyst.analyze(question)
-        print(format_intents(intents))
-        print()
+    n = len(intents.interpretations) if intents is not None else 0
+    failed = sum(1 for o in outcomes if isinstance(o, RunError)) + (1 if run_error else 0)
+    succeeded = sum(1 for o in outcomes if not isinstance(o, RunError))
+    print(
+        f"\nrun: {args.out}  interpretations={n}  succeeded={succeeded}  failed={failed}"
+    )
+    if failed:
+        print(f"errors.log written -> {args.out / 'errors.log'}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

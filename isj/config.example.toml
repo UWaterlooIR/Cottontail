@@ -38,6 +38,15 @@ model = "gpt.oss.120b"
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
 
+[agents.searcher]
+class = "isj_agent.agents.searcher.Searcher"
+llm = "default"
+# Optional recall/budget knobs (B2 defaults shown; the Searcher keeps searching
+# until queries dry up, not a fixed search count):
+# top_k = 10
+# window = 75
+# max_turns = 150
+
 # ---------------------------------------------------------------------------
 # [index]
 # Settings for the cp-native index front door (cottontail-index / the
@@ -74,4 +83,8 @@ binary = "bazel-bin/apps/cottontail-jsonl-query"
 # ---------------------------------------------------------------------------
 [cottontail_http_json_server]
 base_url = "http://127.0.0.1:8080"
+# The burrow the server is serving. Its <burrow>/docno-cp.sqlite is the cp<->docno
+# map the CLI opens read-only to rewrite cp->docno when writing run output. Omit (or
+# point at a docno-less burrow) to persist raw cps; --burrow overrides per run.
+# burrow = "my-stemmed.burrow"
 # api_key_env = "COTTONTAIL_API_TOKEN"   # bearer-token env var; omit on a no-token loopback server
