@@ -40,13 +40,20 @@ class TraceEvent(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    type: str  # llm_turn | search | judge | bounce | stop
+    type: str  # llm_call | search_request | search | judge | bounce | stop | error
     ts: float  # epoch seconds when the event started
     duration_ms: float  # wall-clock duration of the event (LLM / engine latency)
 
 
 class SearcherResult(BaseModel):
-    """One intent's outcome: the ranked list plus the structured event trace."""
+    """One intent's outcome: the ranked list plus the structured event trace.
+
+    `error` is set when the run ended on a caught mid-loop failure (e.g. the LLM
+    raised): the result is then PARTIAL -- `ranked_list` holds whatever was judged
+    before the failure and `events` ends in an `error` event. `error` is None on a
+    clean run. The result is still persisted either way (the trace is never dropped).
+    """
 
     ranked_list: RankedList
     events: list[TraceEvent]
+    error: str | None = None

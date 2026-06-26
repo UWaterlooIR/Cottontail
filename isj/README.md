@@ -196,15 +196,25 @@ the `Analyst`).
   bounces, counts toward it). All of these are constructor knobs the eval harness /
   C3 can tune.
 - **The trace is a research artifact** (`SearcherResult.events`, a `list[TraceEvent]`):
-  detailed, timestamped events — `llm_turn` (LLM latency, which tool, emitted
-  tool-call count), `search_request` (**the query logged going out**, emitted
-  *before* the engine call: query + top_k + window + excluded cps — so a request is
-  on record even if the engine/server dies mid-call), `search` (**the response**:
-  counts + atom_counts + every returned hit with its cp/score/summary + engine
-  latency), `judge` (each recorded `{cp, grade, reason}`), `bounce` (kind + message;
-  an `engine_error` bounce also carries the failing `query`), `stop` (reason) — so
-  the agent's behavior can be reconstructed and measured. C2 rewrites the cps to
-  docnos when persisting it.
+  detailed, timestamped events — `llm_call` (one per LLM round-trip: a `purpose`
+  label, the **actual `request` messages sent** verbatim, the assistant `content`,
+  the emitted `calls` with raw arguments, `finish_reason`, and `prompt`/`completion`/
+  `total` token `usage` — captured per call so the trace stays faithful under future
+  compaction or side-prompts, with no append-only assumption), `search_request`
+  (**the query logged going out**, before the engine call: query + top_k + window +
+  excluded cps — on record even if the engine/server dies mid-call), `search`
+  (**the response**: counts + atom_counts + every returned hit with its
+  cp/score/summary + engine latency), `judge` (each recorded `{cp, grade, reason}`),
+  `bounce` (kind + message; an `engine_error` bounce also carries the failing
+  `query`), `stop` (reason), and `error` (a caught mid-loop LLM failure: type +
+  message + turn + the failing request + last-known usage). C2 rewrites cps to
+  docnos in the structured fields; the `llm_call.request` snapshot is left verbatim
+  (it is what the cp-native agent actually sent the model).
+- **Persist on failure:** a mid-loop LLM error (e.g. a context-length 400) is
+  caught inside `run()` — it emits the `error` event and returns a **partial**
+  `SearcherResult` (`.error` set; `ranked_list` holds what was judged before the
+  failure) rather than discarding the trace. C2 still writes that intent's
+  `.json` + `.trace.jsonl`, and also lists it in `errors.log`.
 
 Tested with a stub LLM (scripted tool-call turns) + the B1 `FakeEngine` — no network,
 no real model. A live real-model run is the C3 integration gate.
@@ -228,8 +238,10 @@ C3 produces the data and catches errors; C2 only writes:
 - `intent-NN` is the zero-based, zero-padded interpretation index; `intent-NN.trace.jsonl`
   is a **JSON-Lines** event log (one `TraceEvent` per line) — a research artifact.
 - **The absence of `errors.log` means the whole run succeeded.** Its presence lists each
-  failure, tagged with the failing intent's index/interpretation; a failed intent gets no
-  `.json`/`.trace.jsonl`.
+  failure, tagged with the failing intent's index/interpretation. A *run-level* failure
+  (no `SearcherResult` at all — e.g. the Analyst raised) gets no `.json`/`.trace.jsonl`; a
+  *partial* result (the Searcher caught a mid-loop failure) keeps its `.json`/`.trace.jsonl`
+  **and** is listed in `errors.log`.
 - **docno on disk.** Results are `cp` in memory but the writer rewrites every persisted `cp`
   to its `docno` via the read-only `DocnoMap` (TASK-6.3) — in the `RankedList` *and* the
   trace events — so the saved files are portable (the field is renamed `cp` → `docno`). A

@@ -119,34 +119,56 @@ class Searcher:
         surfacing_query: dict[int, str] = {}
         events: list[TraceEvent] = []
         dry = no_progress = turns = 0
+        last_usage: dict = {}         # token usage from the most recent LLM call
+        run_error: str | None = None  # set if a mid-loop LLM call raises (e.g. a 400)
 
         def emit(type_: str, ts: float, duration_ms: float, **fields) -> None:
             events.append(TraceEvent(type=type_, ts=ts, duration_ms=duration_ms, **fields))
 
         while turns < self.max_turns:
             turns += 1
+            request = list(msgs)  # snapshot what we ACTUALLY send this call (verbatim)
             t0 = time.time()
-            message = (
-                self.client.chat.completions.create(
+            try:
+                response = self.client.chat.completions.create(
                     model=self.model,
                     messages=msgs,
                     tools=_TOOLS,
                     tool_choice="auto",
                     temperature=self.temperature,
                 )
-                .choices[0]
-                .message
-            )
+            except Exception as exc:  # LLM call failed (e.g. a context-length 400):
+                # keep the trace -- record the failing request + last usage and stop,
+                # returning a PARTIAL result rather than letting the exception escape.
+                emit("error", time.time(), 0.0, error_type=type(exc).__name__,
+                     message=str(exc), turn=turns, request=request, **last_usage)
+                run_error = f"{type(exc).__name__}: {exc}"
+                break
             llm_ms = (time.time() - t0) * 1000.0
+            choice = response.choices[0]
+            message = choice.message
+            usage = getattr(response, "usage", None)
+            last_usage = {
+                "prompt_tokens": getattr(usage, "prompt_tokens", None),
+                "completion_tokens": getattr(usage, "completion_tokens", None),
+                "total_tokens": getattr(usage, "total_tokens", None),
+            }
             tool_calls = message.tool_calls or []
             emit(
-                "llm_turn",
+                "llm_call",
                 t0,
                 llm_ms,
+                purpose="searcher_turn",
                 turn=turns,
+                request=request,          # the actual messages sent (verbatim; cp-native)
+                content=message.content,  # the assistant's reasoning text
+                calls=[{"id": c.id, "name": c.function.name,
+                        "arguments": c.function.arguments} for c in tool_calls],
+                finish_reason=getattr(choice, "finish_reason", None),
                 tool=(tool_calls[0].function.name if tool_calls else None),
                 tool_calls=len(tool_calls),  # emitted count; only the first is processed
                 stopped=not tool_calls,
+                **last_usage,
             )
 
             if not tool_calls:
@@ -280,7 +302,9 @@ class Searcher:
             # Loop exited via the while condition: the runaway backstop tripped.
             emit("stop", time.time(), 0.0, reason="turn_cap")
 
-        return SearcherResult(ranked_list=self._compile(intent, recorded), events=events)
+        return SearcherResult(
+            ranked_list=self._compile(intent, recorded), events=events, error=run_error
+        )
 
     @staticmethod
     def _tool(msgs: list[dict], call, payload: dict) -> None:

@@ -111,6 +111,12 @@ def write_run(
         (out_dir / f"intent-{i:02d}.trace.jsonl").write_text(
             "".join(line + "\n" for line in lines), encoding="utf-8"
         )
+        if outcome.error:
+            # A PARTIAL result (a caught mid-loop failure): its json + trace are still
+            # written above, but surface the failure in errors.log so the run is not
+            # counted a clean success.
+            interp = intents.interpretations[i] if intents is not None else "?"
+            errors.append(f"intent {i:02d} ({interp}): {outcome.error}")
 
     if run_error:
         errors.append(f"run-level error: {run_error}")
@@ -154,4 +160,7 @@ def _event_dict(event, resolve: _Resolve, rename: bool) -> dict:
     elif t == "bounce":
         if "cps" in d:
             d["cps"] = [resolve(cp) for cp in d["cps"]]
+    # An llm_call's `request` (the verbatim messages sent) and the `error` event are
+    # left as-is: the request is what the cp-native agent actually sent the model
+    # (cps), not a portable view; only the structured fields above are docno-rewritten.
     return d

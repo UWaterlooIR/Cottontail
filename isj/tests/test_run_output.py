@@ -23,7 +23,7 @@ def _result(intent):
         RankedEntry(rank=2, cp=200, grade=1, score=2.0, summary="s200", reason="r2", surfacing_query="(^ a*)"),
     ])
     events = [
-        TraceEvent(type="llm_turn", ts=1.0, duration_ms=10.0, turn=1, tool="search", tool_calls=1, stopped=False),
+        TraceEvent(type="llm_call", ts=1.0, duration_ms=10.0, turn=1, tool="search", tool_calls=1, stopped=False),
         TraceEvent(type="search_request", ts=1.05, duration_ms=0.0, query="(^ a*)", top_k=10,
                    window=75, exclude=[100, 200]),
         TraceEvent(type="search", ts=1.1, duration_ms=5.0, query="(^ a*)", top_k=10, window=75,
@@ -60,7 +60,7 @@ def test_all_success_writes_layout_with_docnos(tmp_path):
         assert all("cp" not in e for e in rl["entries"])  # never a raw cp
         evs = _events(out, nn)
         assert [e["type"] for e in evs] == [
-            "llm_turn", "search_request", "search", "bounce", "judge", "stop"
+            "llm_call", "search_request", "search", "bounce", "judge", "stop"
         ]
         req = next(e for e in evs if e["type"] == "search_request")
         assert req["exclude"] == ["doc-A", "doc-B"]  # the request's exclude cps -> docnos
@@ -89,6 +89,18 @@ def test_failure_writes_errors_log_and_skips_intent(tmp_path):
     assert not (out / "intent-01.json").exists()
     assert not (out / "intent-01.trace.jsonl").exists()
     assert "intent 01 (bad): boom" in (out / "errors.log").read_text()
+
+
+def test_partial_result_writes_trace_and_errors_log(tmp_path):
+    # A SearcherResult with .error set (a caught mid-loop failure) keeps its json +
+    # trace AND is surfaced in errors.log (not silently counted a clean success).
+    intents = Intents(question="Q?", interpretations=["a"])
+    out = tmp_path / "run"
+    res = _result("a").model_copy(update={"error": "RuntimeError: context blew"})
+    write_run(out, intents, [res])
+    assert (out / "intent-00.json").exists()
+    assert (out / "intent-00.trace.jsonl").read_text() != ""
+    assert "intent 00 (a): RuntimeError: context blew" in (out / "errors.log").read_text()
 
 
 def test_run_level_error_writes_errors_log(tmp_path):

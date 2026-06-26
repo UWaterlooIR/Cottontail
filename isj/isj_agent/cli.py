@@ -28,8 +28,21 @@ from isj_agent.run_output import Outcome, RunError, write_run
 def _render_event(ev) -> None:
     d = ev.model_dump()
     t = d.get("type")
-    if t == "llm_turn":
-        print(f"    turn {d['turn']}: tool={d['tool']} ({d['duration_ms']:.0f} ms)")
+    if t == "llm_call":
+        pt, ct = d.get("prompt_tokens"), d.get("completion_tokens")
+        toks = f" tokens={pt}+{ct}" if pt is not None else ""
+        print(
+            f"    turn {d['turn']}: tool={d['tool']} finish={d.get('finish_reason')}"
+            f"{toks} ({d['duration_ms']:.0f} ms)"
+        )
+        if d.get("content") and d["content"].strip():
+            print(f"      reasoning: {d['content'].strip()}")
+        for c in d.get("calls", []):
+            print(f"      -> {c['name']}({c['arguments']})")
+    elif t == "error":
+        pt = d.get("prompt_tokens")
+        size = f" (prompt_tokens={pt})" if pt is not None else ""
+        print(f"    ERROR turn {d.get('turn')}: {d.get('error_type')}: {d.get('message')}{size}")
     elif t == "search_request":
         print(f"    -> request: {d['query']!r} (exclude={len(d.get('exclude', []))})")
     elif t == "search":
@@ -57,7 +70,8 @@ def _make_on_intent(verbose: bool):
         else:
             for ev in outcome.events:
                 _render_event(ev)
-            print(f"    -> {len(outcome.ranked_list.entries)} judged passages")
+            note = f" (PARTIAL: {outcome.error})" if outcome.error else ""
+            print(f"    -> {len(outcome.ranked_list.entries)} judged passages{note}")
 
     return on_intent
 
@@ -116,9 +130,13 @@ def main(argv: list[str] | None = None) -> None:
         docno_map=docno_map, run_error=run_error, overwrite=args.overwrite,
     )
 
+    def _failed(o: Outcome) -> bool:
+        # a per-intent RunError, or a SearcherResult that ended on a caught failure
+        return isinstance(o, RunError) or getattr(o, "error", None) is not None
+
     n = len(intents.interpretations) if intents is not None else 0
-    failed = sum(1 for o in outcomes if isinstance(o, RunError)) + (1 if run_error else 0)
-    succeeded = sum(1 for o in outcomes if not isinstance(o, RunError))
+    failed = sum(1 for o in outcomes if _failed(o)) + (1 if run_error else 0)
+    succeeded = sum(1 for o in outcomes if not _failed(o))
     print(
         f"\nrun: {args.out}  interpretations={n}  succeeded={succeeded}  failed={failed}"
     )

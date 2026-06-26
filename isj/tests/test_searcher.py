@@ -33,6 +33,9 @@ def stop_turn(content="done"):
 
 
 class StubLLM:
+    """Scripted turns. A turn may be an Exception instance -> create() RAISES it
+    (to simulate e.g. a context-length 400). Responses carry usage + finish_reason."""
+
     def __init__(self, turns):
         self._turns = list(turns)
         self._i = 0
@@ -44,7 +47,16 @@ class StubLLM:
             self._i += 1
         else:
             msg = stop_turn()
-        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+        if isinstance(msg, BaseException):  # a scripted mid-loop failure
+            raise msg
+        choice = SimpleNamespace(
+            message=msg,
+            finish_reason=("tool_calls" if msg.tool_calls else "stop"),
+        )
+        usage = SimpleNamespace(  # grows per turn so a trace can show context climbing
+            prompt_tokens=100 * self._i, completion_tokens=5, total_tokens=100 * self._i + 5
+        )
+        return SimpleNamespace(choices=[choice], usage=usage)
 
 
 def _resp(hits, total=None, unjudged=None):
@@ -87,10 +99,18 @@ def test_happy_path_ranked_list_and_events():
     types = [e.type for e in result.events]
     # search_request (the query, logged going out) precedes its search (the response).
     assert types == [
-        "llm_turn", "search_request", "search", "llm_turn", "judge", "llm_turn", "stop"
+        "llm_call", "search_request", "search", "llm_call", "judge", "llm_call", "stop"
     ]
     req = next(e for e in result.events if e.type == "search_request")
     assert req.query == "(^ black bear*)" and req.exclude == []
+    # Each llm_call captures the actual request + response detail + token usage.
+    first = next(e for e in result.events if e.type == "llm_call")
+    assert first.purpose == "searcher_turn"
+    # turn-1 request is the verbatim seed conversation actually sent
+    assert [m["role"] for m in first.request] == ["system", "user"]
+    assert first.finish_reason == "tool_calls"
+    assert first.prompt_tokens == 100 and first.completion_tokens == 5
+    assert first.calls == [{"id": "c", "name": "search", "arguments": '{"query": "(^ black bear*)"}'}]
     assert result.events[-1].reason == "no_tool_call"
     assert all(hasattr(e, "duration_ms") for e in result.events)
     # the search event is the heavy, reconstructable kind (AC#8)
@@ -147,6 +167,26 @@ def test_engine_error_bounce_and_recovery():
     assert [e.cp for e in result.ranked_list.entries] == [10]
 
 
+def test_partial_result_on_llm_failure():
+    # search -> judge (records cp 10) -> the NEXT llm call raises (e.g. a 400).
+    turns = [
+        search_turn("(^ bear*)"),
+        judge_turn([{"cp": 10, "grade": 3, "reason": "good"}]),
+        RuntimeError("Input length (163198) exceeds model's maximum context length"),
+    ]
+    script = [_resp([(10, 5.0, "s")])]
+    result = _searcher(turns, script).run("intent")  # MUST NOT raise
+    # the work judged before the failure is kept (a PARTIAL result)
+    assert [e.cp for e in result.ranked_list.entries] == [10]
+    # the failure is recorded on .error and the trace ENDS in an error event
+    assert result.error is not None and "Input length" in result.error
+    last = result.events[-1]
+    assert last.type == "error" and last.error_type == "RuntimeError"
+    assert "Input length" in last.message and last.turn == 3
+    assert last.request[0]["role"] == "system"  # the failing request was captured
+    assert last.prompt_tokens == 200  # last-known usage (turn 2) is on the error event
+
+
 def test_stop_on_three_dry():
     turns = [search_turn(f"(^ x{i})") for i in range(3)] + [stop_turn()]
     script = [_resp([], total=0, unjudged=0) for _ in range(3)]
@@ -173,7 +213,7 @@ def test_turn_cap_stops_a_bounce_loop():
     s = _searcher(turns, script, max_turns=4)
     result = s.run("intent")
     assert result.events[-1].type == "stop" and result.events[-1].reason == "turn_cap"
-    assert sum(1 for e in result.events if e.type == "llm_turn") == 4
+    assert sum(1 for e in result.events if e.type == "llm_call") == 4
     assert len(s.engine.calls) == 4
 
 
@@ -230,7 +270,7 @@ def test_multi_tool_call_turn_processes_first_only():
     script = [_resp([(10, 5.0, "s")]), _resp([(99, 1.0, "t")])]
     s = _searcher(turns, script)
     result = s.run("intent")
-    llm0 = next(e for e in result.events if e.type == "llm_turn")
+    llm0 = next(e for e in result.events if e.type == "llm_call")
     assert llm0.tool_calls == 2  # emitted count recorded
     assert len(s.engine.calls) == 1  # only the first tool call ran
     assert [e.cp for e in result.ranked_list.entries] == [10]
