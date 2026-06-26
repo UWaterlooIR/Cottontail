@@ -14,3 +14,4 @@
 - [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design takes ALL open backlog work (no new branches); gh-https push now wired
 - [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
+- [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace

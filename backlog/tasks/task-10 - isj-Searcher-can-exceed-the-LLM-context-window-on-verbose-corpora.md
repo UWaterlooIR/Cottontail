@@ -4,11 +4,12 @@ title: isj Searcher can exceed the LLM context window on verbose corpora
 status: To Do
 assignee: []
 created_date: '2026-06-26 15:05'
-updated_date: '2026-06-26 15:06'
+updated_date: '2026-06-26 15:50'
 labels:
   - isj
   - bug
-dependencies: []
+dependencies:
+  - TASK-11
 priority: medium
 ordinal: 24000
 ---
@@ -29,17 +30,17 @@ Two distinct problems:
 This is unrelated to the server crash (TASK-7, fixed); the server served every request (all 2xx). It is an isj Searcher context-management issue.
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 Characterize the overflow: with the dev/1M burrow and a real model, identify roughly how many searches / what response sizes drive the message history past the model context window (the live run hit ~163k-168k tokens vs a 131072 limit).
+- [ ] #2 The Searcher bounds the context it feeds back so a long recall-first session does not exceed the model window -- e.g. trim/compact older tool results (the judged state is already tracked separately in the judged/recorded structures), cap retained results per response, and/or drop superseded search responses. The chosen approach is documented.
+- [ ] #3 Tests (no network/model) cover the context trimming/compaction logic with a stub LLM; uv run --directory isj pytest exits 0. (The partial-result-on-failure path and its tests are owned by TASK-11.)
+<!-- AC:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 Discovered in the TASK-7 live gate. Numbers observed: 163198 and 167708 input tokens vs a 131072 max. Relevant code: the loop in isj_agent/agents/searcher.py (msgs.append of tool results), and how C3 (orchestrator.run_question) turns an escaped exception into a RunError (isj_agent/orchestrator.py). Consider: the model knob max_turns already bounds turns, but not token volume; a token/byte budget on retained tool results is the real lever.
-<!-- SECTION:NOTES:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 Characterize the overflow: with the dev/1M burrow and a real model, identify roughly how many searches / what response sizes drive the message history past the model context window (the live run hit ~163k-168k tokens vs a 131072 limit).
-- [ ] #2 The Searcher bounds the context it feeds back so a long recall-first session does not exceed the model window -- e.g. trim/compact older tool results (the judged state is already tracked separately in the judged/recorded structures), cap retained results per response, and/or drop superseded search responses. The chosen approach is documented.
-- [ ] #3 Resilience: a context-length 400 (or other mid-loop LLM error) no longer discards the intent accumulated work -- the Searcher returns the partial SearcherResult (the RankedList judged so far + trace) instead of letting the exception abort the whole intent. (Or an explicit, documented decision otherwise.)
-- [ ] #4 Tests (no network/model) cover the trimming/compaction logic and the partial-result-on-error path with a stub LLM; uv run --directory isj pytest exits 0.
-<!-- AC:END -->
+SCOPE SPLIT: TASK-11 (heavy/detailed trace) now owns the token-usage visibility (its prompt_tokens series characterizes this overflow) and the partial-result-on-failure resilience. This task keeps the actual FIX: budget/trim/compact the context the Searcher feeds back so a long recall-first session does not exceed the model window. Depends on TASK-11 (use its per-turn prompt_tokens trace to characterize and verify).
+<!-- SECTION:NOTES:END -->
