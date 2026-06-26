@@ -100,14 +100,14 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 struct CoverSpec {
   std::string query;  // a GCL cover query that MAY use the word* family marker
   size_t top_k = 10;
-  std::vector<std::string> exclude_docids; // judged docids to carve out (A2)
-  size_t window = 75;                       // summary window in tokens (A2)
+  std::vector<addr> exclude; // judged cp integers to skip (A2; direct cp post-filter)
+  size_t window = 75;        // summary window in tokens (A2)
 };
 
 struct CoverHit {
   int rank = 0;        // 1-based position within this response
   double score = 0.0;  // ssr cover-density score (sum over covers of 1/(K+q-p))
-  std::string docid;
+  addr cp = 0;         // the document's working identity (:item container start)
   std::string summary; // cover-biased extractive summary (replaces best_passage)
 };
 

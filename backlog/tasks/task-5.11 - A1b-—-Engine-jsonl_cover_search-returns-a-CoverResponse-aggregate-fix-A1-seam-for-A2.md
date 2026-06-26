@@ -3,10 +3,11 @@ id: TASK-5.11
 title: >-
   A1b — Engine: jsonl_cover_search returns a CoverResponse aggregate (fix A1
   seam for A2)
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-18 18:25'
-updated_date: '2026-06-21 19:35'
+updated_date: '2026-06-26 03:19'
 labels:
   - searcher
 dependencies:
@@ -139,3 +140,9 @@ noting it corrects the A1 seam and keeps JSON byte-identical; then check the 5 A
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). SUPERSEDES the prior note. The CoverResponse aggregate shape (total_matches, unjudged_matches, atom_counts, results) is unchanged; each result (CoverHit) carries cp, not docid: {rank, score, cp, summary}. Authoritative: doc-6.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Folded into TASK-5.1 (Option B collapse): cover_search already returns the CoverResponse aggregate (total_matches, unjudged_matches, atom_counts, results), now cp-native. No separate work needed.
+<!-- SECTION:FINAL_SUMMARY:END -->

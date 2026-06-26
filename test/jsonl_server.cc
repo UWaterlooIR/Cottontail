@@ -165,7 +165,7 @@ TEST(JsonlServer, EndToEnd) {
         const auto &props = t["function"]["parameters"]["properties"];
         EXPECT_TRUE(props.contains("query"));
         EXPECT_TRUE(props.contains("top_k"));
-        EXPECT_TRUE(props.contains("exclude_docids"));
+        EXPECT_TRUE(props.contains("exclude"));
         EXPECT_TRUE(props.contains("window"));
       }
   }
@@ -176,8 +176,8 @@ TEST(JsonlServer, EndToEnd) {
 }
 
 // cover_search over a stemmed burrow: a word* query round-trips and returns
-// {rank,score,docid,summary}; a malformed cover query is a 400.
-TEST(JsonlServer, DISABLED_CoverSearch) {
+// {rank,score,cp,summary}; a malformed cover query is a 400.
+TEST(JsonlServer, CoverSearch) {
   std::string burrow = tmpdir() + "/server_cover.burrow";
   std::string build = std::string(kIndexBin) +
                       " --input test/jsonl/plain --burrow " + burrow +
@@ -203,6 +203,7 @@ TEST(JsonlServer, DISABLED_CoverSearch) {
 
   // run* reaches doc-002 ("runs") via the word* family marker; the A2 fields are
   // present and there are NO legacy fields (B1's SearchResponse is extra=forbid).
+  long cp = -1;
   {
     auto r = cli.Post("/tools/cover_search", auth, R"({"query":"run*"})",
                       "application/json");
@@ -222,21 +223,27 @@ TEST(JsonlServer, DISABLED_CoverSearch) {
     EXPECT_FALSE(j.contains("result_count"));
     EXPECT_FALSE(j.contains("truncated"));
     EXPECT_FALSE(j.contains("stemmed"));
-    bool found = false;
+    ASSERT_FALSE(j["results"].empty()) << r->body;
     for (const auto &res : j["results"]) {
       EXPECT_TRUE(res.contains("rank"));
       EXPECT_TRUE(res.contains("score"));
+      EXPECT_TRUE(res.contains("cp"));
       EXPECT_TRUE(res.contains("summary"));
-      if (res["docid"] == "doc-002")
-        found = true;
     }
-    EXPECT_TRUE(found) << r->body;
+    cp = j["results"][0]["cp"].get<long>();
+    // The cp resolves to doc-002 ("runs") via get_document.
+    auto g = cli.Post("/tools/get_document", auth,
+                      "{\"cp\":" + std::to_string(cp) + "}", "application/json");
+    ASSERT_TRUE(g);
+    EXPECT_NE(json::parse(g->body)["text"].get<std::string>().find("runs"),
+              std::string::npos);
   }
-  // exclude_docids carves doc-002 (the only run* match): unjudged 0, results
-  // empty, total unchanged.
+  // exclude (the matched cp) carves doc-002 (the only run* match): unjudged 0,
+  // results empty, total unchanged.
   {
     auto r = cli.Post("/tools/cover_search", auth,
-                      R"({"query":"run*","exclude_docids":["doc-002"]})",
+                      "{\"query\":\"run*\",\"exclude\":[" + std::to_string(cp) +
+                          "]}",
                       "application/json");
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;

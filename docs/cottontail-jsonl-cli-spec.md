@@ -267,7 +267,7 @@ of the process.
   distinct from `--gcl`/`search_gcl`). A GCL cover query that may use the **`word*`
   family marker** (a full word + trailing `*` → the word *and* its morphological
   family; bare terms stay exact; honored inside quoted phrases). Ranks `:item` by
-  `ssr` cover density and returns `{rank, score, docid, summary}` where `summary`
+  `ssr` cover density and returns `{rank, score, cp, summary}` where `summary`
   is a cover-biased extractive summary (see §4.8). Requires a `--stem porter`
   burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`
   (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`.
@@ -376,18 +376,18 @@ each shaped like 4.4 with an added `"input_index"` field. A malformed input line
 
 ### 4.8 Cover-search output schema (`--cover`)
 
-Request: `{ "query", "top_k"?, "exclude_docids"? : [docid,…], "window"? : tokens }`.
+Request: `{ "query", "top_k"?, "exclude"? : [cp,…], "window"? : tokens }`.
 
 ```jsonc
 {
-  "total_matches": 50,          // DOCUMENTS matching the query in :item (ignores exclude_docids)
+  "total_matches": 50,          // DOCUMENTS matching the query in :item (ignores exclude)
   "unjudged_matches": 4,        // matching documents NOT excluded; results are drawn from these
   "atom_counts": [              // per query leaf -> total OCCURRENCES of the feature it resolves to
     { "term": "black",   "count": 1840 },
     { "term": "bear*",   "count": 9004 }
   ],
   "results": [
-    { "rank": 1, "score": 12.3, "docid": "doc-002",
+    { "rank": 1, "score": 12.3, "cp": 12345,
       "summary": "…cover-biased extractive summary…" }
   ]
 }
@@ -397,21 +397,21 @@ These four keys are the whole response — nothing else (the Python client mirro
 is strict).
 
 - `total_matches` / `unjudged_matches` — **document** counts (matching `:item`
-  rows), exact. `total_matches` ignores `exclude_docids`; `unjudged_matches` =
-  `total_matches − (excluded docids that actually match the query)` (excluding a
-  docid that does not match, or is absent, leaves it unchanged). Both are
-  independent of `top_k`.
+  rows), exact, computed as a **byproduct of the single ssr ranking pass** (doc-6
+  §4). `total_matches` ignores `exclude`; `unjudged_matches` =
+  `total_matches − (excluded cps that actually match the query)` (excluding a cp
+  that does not match, or is absent, leaves it unchanged). Both are independent of
+  `top_k`.
 - `atom_counts` — one `{term, count}` per query **leaf** (the content terms: bare
   words and `word*` markers; operators/`:tags` skipped, phrase words counted
   individually, deduped). `term` is **as written** (`bear*`, never `porter:…`);
   `count` is the total **occurrences** (collection frequency) of the feature it
   resolves to, `0` when nothing matches (a dead atom). No `stream` field.
-- `exclude_docids` — judged docids to carve out. Exclusion is a **containment**
-  match on `:docno` (the same mechanism `get_document` uses), applied to the
-  ranking **container** so excluded rows never appear and `top_k` fills (not a
-  post-filter). It is not a verified-exact match: a docid whose `:docno` token run
-  is an ordered substring of another's could over-exclude — not a concern for
-  unique ids like `shard_00012_0003`.
+- `exclude` — judged **cps** (the `cp` of each prior result) to skip. Exclusion is
+  a direct **cp post-filter** on the ranked results (doc-6 §4): ranking over-fetches
+  `depth = top_k + |exclude|`, drops hits whose `cp` is in the set, and returns up
+  to `top_k` survivors. Exact (integer set membership), stateless (per-request),
+  and never opens a `:docno`/map.
 - `window` — summary window size in tokens (default 75); affects only the
   `summary` text, never `rank`/`score`.
 - `rank` — 1-based position within the returned (post-exclusion) results,

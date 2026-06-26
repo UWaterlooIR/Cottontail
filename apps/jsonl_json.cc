@@ -107,7 +107,7 @@ json cover_results_json(const CoverResponse &resp) {
     json r;
     r["rank"] = h.rank;
     r["score"] = h.score;
-    r["docid"] = h.docid;
+    r["cp"] = h.cp;
     r["summary"] = h.summary;
     arr.push_back(r);
   }
@@ -194,14 +194,14 @@ json describe_json() {
   cs["top_k"] = intp("Max documents to return (default 10).");
   {
     json items;
-    items["type"] = "string";
+    items["type"] = "integer";
     json arrp;
     arrp["type"] = "array";
     arrp["items"] = items;
     arrp["description"] =
-        "docids already judged, to carve out of this search (the engine skips "
-        "them so top_k fills with new documents).";
-    cs["exclude_docids"] = arrp;
+        "cps already judged (the cp of each prior result), to skip in this search "
+        "(the engine post-filters them so top_k fills with new documents).";
+    cs["exclude"] = arrp;
   }
   cs["window"] = intp("Summary window size in tokens, centered on each cover "
                       "(default 75).");

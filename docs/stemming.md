@@ -202,11 +202,11 @@ primitive with no `word*` handling).
 - `cover_search` requires a **stemmed stream**: a `word*` query against a burrow
   built without `--stem porter` is a hard error — **no** silent fallback to exact.
 - `cover_search` ranks `:item` documents by `ssr` cover density and returns, per
-  document, `{rank, score, docid, summary}`, where `summary` is a **cover-biased
+  document, `{rank, score, cp, summary}`, where `summary` is a **cover-biased
   extractive summary** (windows centered on the query's covers, merged, with gaps
   shown as ` . . . `). It replaces the old `best_passage` (which was just the
-  document head). A2 adds `total_matches`/`unjudged_matches`/`atom_counts`,
-  `exclude_docids`, and a request-side `window` override.
+  document head). It also returns `total_matches`/`unjudged_matches`/`atom_counts`
+  and accepts `exclude` (judged cps; a cp post-filter) and a request-side `window`.
 
 So: `--stem` = whole-query recall on `search_text`/`search_gcl`; `word*` =
 per-term, opt-in recall on the dedicated `cover_search` tool. They are distinct

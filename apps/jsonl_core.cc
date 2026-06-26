@@ -5,6 +5,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "src/builder.h"
@@ -384,68 +385,81 @@ std::string cover_summary(std::shared_ptr<Warren> warren,
   return out;
 }
 
-// ---- cover_search enrichment helpers (TASK-5.2 / A2) ----------------------
+// ---- cover_search ranking (cp-native, one pass: rank + match counts) -------
 
-// The :docno match phrase for one docid -- the SAME form jsonl_get builds: a
-// single token, or (... t1 t2 ...) for a multi-token id. (Containment match per
-// the A2 Q1 decision, NOT a verified-exact match; documented in the specs.)
-std::string docid_phrase(std::shared_ptr<Warren> warren,
-                         const std::string &docid) {
-  std::vector<std::string> terms = warren->tokenizer()->split(docid);
-  if (terms.empty())
-    return "";
-  if (terms.size() == 1)
-    return terms[0];
-  std::string p = "(...";
-  for (const auto &t : terms)
-    p += " " + t;
-  p += ")";
-  return p;
-}
+// A ranked :item container: its cp (start), cq (end), and ssr cover-density score.
+struct CoverRanked {
+  addr cp = 0;
+  addr cq = 0;
+  double score = 0.0;
+};
 
-// The ranking/counting container: plain ":item" when nothing is excluded, else
-// :item rows that do NOT contain any excluded docid's :docno -- carved DURING
-// ranking so excluded rows never appear and top_k fills.
-std::string exclusion_container(std::shared_ptr<Warren> warren,
-                                const std::vector<std::string> &exclude) {
-  std::vector<std::string> parts;
-  for (const auto &d : exclude) {
-    std::string ph = docid_phrase(warren, d);
-    if (!ph.empty())
-      parts.push_back("(>> :docno " + ph + ")");
-  }
-  if (parts.empty())
-    return ":item";
-  std::string excl;
-  if (parts.size() == 1) {
-    excl = parts[0];
-  } else {
-    excl = "(+";
-    for (const auto &p : parts)
-      excl += " " + p;
-    excl += ")";
-  }
-  return "(!> :item " + excl + ")";
-}
-
-// Count the DOCUMENTS in `container` that match `query` -- the :item-style rows
-// containing a cover of the query. Exact (Q3): a full enumeration, since no
-// precomputed document frequency exists for a cover query.
-bool count_container_matches(std::shared_ptr<Warren> warren,
-                             const std::string &container,
-                             const std::string &query, long *count,
-                             std::string *error) {
-  *count = 0;
-  std::string gcl = "(>> " + container + " " + query + ")";
-  auto hopper = warren->hopper_from_gcl(gcl, error);
+// One cp-native pass (doc-6 section 4): walk the query hopper and the :item
+// container hopper once over the PUBLIC Hopper API -- mirroring ssr's recurrence
+// (score += 1/(K + q - p), K = ssr's default 42) -- keeping the top `depth`
+// containers by score (over-fetched for the exclude cp post-filter), and counting
+// matches as a BYPRODUCT of the same pass: total_matches as each matching
+// container closes, unjudged_matches for those whose cp is not in `exclude`. Does
+// NOT call ssr_ranking and touches no src/ file. Ranked containers are returned
+// in score-descending order.
+bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
+                   size_t depth, const std::unordered_set<addr> &exclude,
+                   std::vector<CoverRanked> *ranked, long *total_matches,
+                   long *unjudged_matches, std::string *error) {
+  const double K = 42.0; // ssr default (smoothed 1/(K + q - p))
+  ranked->clear();
+  *total_matches = 0;
+  *unjudged_matches = 0;
+  auto hopper = warren->hopper_from_gcl(query, error);
   if (hopper == nullptr)
     return false;
-  addr p, q;
-  long n = 0;
-  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
-       hopper->tau(p + 1, &p, &q))
-    n++;
-  *count = n;
+  auto chopper = warren->hopper_from_gcl(":item", error);
+  if (chopper == nullptr)
+    return false;
+  // Bounded min-heap (smallest score on top) of the top `depth` containers.
+  auto lower_score = [](const CoverRanked &a, const CoverRanked &b) {
+    return a.score > b.score;
+  };
+  std::vector<CoverRanked> heap;
+  auto close_container = [&](addr cp, addr cq, double score) {
+    if (score <= 0.0)
+      return; // not a matching container (no cover accumulated)
+    (*total_matches)++;
+    if (exclude.find(cp) == exclude.end())
+      (*unjudged_matches)++;
+    if (depth == 0)
+      return;
+    if (heap.size() < depth) {
+      heap.push_back({cp, cq, score});
+      std::push_heap(heap.begin(), heap.end(), lower_score);
+    } else if (score > heap.front().score) {
+      std::pop_heap(heap.begin(), heap.end(), lower_score);
+      heap.back() = {cp, cq, score};
+      std::push_heap(heap.begin(), heap.end(), lower_score);
+    }
+  };
+  addr p, q, cp, cq;
+  hopper->tau(minfinity + 1, &p, &q);
+  chopper->rho(q, &cp, &cq);
+  double score = 0.0;
+  while (p < maxfinity && cq < maxfinity) {
+    if (p < cp) {
+      hopper->tau(cp, &p, &q);
+    } else if (q > cq) {
+      close_container(cp, cq, score);
+      score = 0.0;
+      chopper->rho(q, &cp, &cq);
+    } else {
+      score += 1.0 / (K + q - p);
+      hopper->tau(p + 1, &p, &q);
+    }
+  }
+  close_container(cp, cq, score); // flush the last open container
+  std::sort(heap.begin(), heap.end(),
+            [](const CoverRanked &a, const CoverRanked &b) {
+              return a.score > b.score; // descending by score
+            });
+  *ranked = std::move(heap);
   return true;
 }
 
@@ -765,18 +779,6 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   auto check = warren->hopper_from_gcl(rewritten, error);
   if (check == nullptr)
     return false;
-  // The exclude_docids carve lives in the CONTAINER (built once, reused for
-  // ranking and the unjudged count) so excluded rows never appear and top_k fills.
-  const std::string container = exclusion_container(warren, spec.exclude_docids);
-  // Breadth/novelty signals (exact document counts, Q3). total ignores excludes;
-  // unjudged = total - (excluded docids that ACTUALLY match the query) = the
-  // query counted within the carved container (NOT total - len(exclude_docids), Q2).
-  if (!count_container_matches(warren, ":item", rewritten, &out->total_matches,
-                               error))
-    return false;
-  if (!count_container_matches(warren, container, rewritten,
-                               &out->unjudged_matches, error))
-    return false;
   // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
   // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
   for (const auto &leaf : cover_leaves(spec.query)) {
@@ -793,35 +795,38 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
         (long)warren->idx()->count(warren->featurizer()->featurize(atom));
     out->atom_counts.push_back(std::move(ac));
   }
-  // PHASE 1: rank documents by ssr cover density within the (carved) container.
-  std::vector<RankingResult> ranked =
-      ssr_ranking(warren, rewritten, container, spec.top_k);
-  auto docno = warren->hopper_from_gcl(":docno", error);
+  // ONE cp-native pass (doc-6 section 4): rank plain :item -- over-fetching
+  // depth = top_k + |exclude| so the exclude cp post-filter still fills top_k --
+  // and count total_matches / unjudged_matches as a byproduct of the same pass.
+  std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
+  std::vector<CoverRanked> ranked;
+  if (!cover_ranking(warren, rewritten, spec.top_k + exclude.size(), exclude,
+                     &ranked, &out->total_matches, &out->unjudged_matches, error))
+    return false;
+  // cp POST-FILTER: drop excluded hits, keep top_k survivors, build summaries.
   int rank = 1;
   for (const auto &r : ranked) {
+    if (out->results.size() >= spec.top_k)
+      break;
+    if (exclude.find(r.cp) != exclude.end())
+      continue;
     CoverHit h;
     h.rank = rank++;
-    h.score = r.score();
-    addr cp = r.container_p(), cq = r.container_q();
-    addr dp = 0, dq = -1;
-    if (docno != nullptr) {
-      docno->tau(cp, &dp, &dq);
-      h.docid = trim(warren->txt()->translate(dp, dq));
-    }
-    addr body_start = (dq >= 0 ? dq + 1 : cp);
-    // PHASE 2: recover THIS document's covers (ssr discards them, returning only
-    // the container span) by walking the query hopper within [cp,cq]. This is a
-    // localized re-walk over the top_k results -- NOT a second corpus pass.
+    h.score = r.score;
+    h.cp = r.cp;
+    // PHASE 2: recover THIS document's covers (cover_ranking returns only the
+    // container span) by walking the query hopper within [cp,cq]. This is a
+    // localized re-walk over the survivors only -- NOT a second corpus pass.
     std::vector<std::pair<addr, addr>> covers;
     auto qh = warren->hopper_from_gcl(rewritten, error);
     if (qh != nullptr) {
       addr p, q;
-      for (qh->tau(cp, &p, &q); p < maxfinity && q <= cq; qh->tau(p + 1, &p, &q))
-        if (p >= cp)
+      for (qh->tau(r.cp, &p, &q); p < maxfinity && q <= r.cq;
+           qh->tau(p + 1, &p, &q))
+        if (p >= r.cp)
           covers.emplace_back(p, q);
     }
-    h.summary =
-        cover_summary(warren, covers, body_start, cq, (addr)spec.window);
+    h.summary = cover_summary(warren, covers, r.cp, r.cq, (addr)spec.window);
     out->results.push_back(std::move(h));
   }
   return true;

@@ -157,7 +157,7 @@ TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
   EXPECT_TRUE(j.contains("error"));
 }
 
-TEST(JsonlCli, DISABLED_CoverSearchWordStar) {
+TEST(JsonlCli, CoverSearchWordStar) {
   std::string b = tmpdir() + "/cli_cover.burrow";
   int code;
   std::string idx = run(std::string(kIndexBin) +
@@ -171,13 +171,17 @@ TEST(JsonlCli, DISABLED_CoverSearchWordStar) {
                         &code);
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
-  bool found = false;
-  for (const auto &r : j["results"]) {
-    if (r["docid"] == "doc-002")
-      found = true;
+  ASSERT_FALSE(j["results"].empty()) << out;
+  for (const auto &r : j["results"])
     EXPECT_TRUE(r.contains("summary")); // cover-biased summary, not best_passage
-  }
-  EXPECT_TRUE(found) << out;
+  // The match carries its cp; it resolves to doc-002's body ("runs").
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  EXPECT_NE(json::parse(g)["text"].get<std::string>().find("runs"),
+            std::string::npos);
 }
 
 TEST(JsonlCli, CoverMidTokenStarExits2) {
@@ -203,7 +207,7 @@ TEST(JsonlCli, CoverWordStarPlainBurrowExits2) {
   EXPECT_TRUE(json::parse(out).contains("error"));
 }
 
-TEST(JsonlCli, DISABLED_CoverWindowAndExcludeFlags) {
+TEST(JsonlCli, CoverWindowAndExcludeFlags) {
   std::string b = tmpdir() + "/cli_cover_a2.burrow";
   int code;
   run(std::string(kIndexBin) + " --input test/jsonl/plain --burrow " + b +
@@ -217,16 +221,13 @@ TEST(JsonlCli, DISABLED_CoverWindowAndExcludeFlags) {
   json j = json::parse(out);
   EXPECT_TRUE(j.contains("total_matches"));
   EXPECT_TRUE(j.contains("atom_counts"));
-  bool found = false;
-  for (const auto &r : j["results"])
-    if (r["docid"] == "doc-002")
-      found = true;
-  EXPECT_TRUE(found) << out;
+  ASSERT_FALSE(j["results"].empty()) << out;
+  long cp = j["results"][0]["cp"].get<long>();
 
-  // --exclude carves doc-002 (the only run* match): unjudged 0, results empty,
-  // total unchanged.
-  out = run(std::string(kQueryBin) + " --burrow " + b +
-                " --cover \"run*\" --exclude doc-002 --format jsonl",
+  // --exclude <cp> carves doc-002 (the only run* match): unjudged 0, results
+  // empty, total unchanged.
+  out = run(std::string(kQueryBin) + " --burrow " + b + " --cover \"run*\" --exclude " +
+                std::to_string(cp) + " --format jsonl",
             &code);
   ASSERT_EQ(code, 0) << out;
   j = json::parse(out);

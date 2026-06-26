@@ -30,7 +30,7 @@ void usage(const char *prog) {
   std::cerr << "usage:\n"
             << "  " << prog << " --burrow <path> --text \"<words>\" [options]\n"
             << "  " << prog << " --burrow <path> --gcl \"<expr>\" [options]\n"
-            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--exclude <docid>]...\n"
+            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--exclude <cp>]...\n"
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
             << "  " << prog << " --burrow <path> --get <cp>\n"
@@ -63,7 +63,7 @@ int main(int argc, char **argv) {
   std::string text, gcl, get_cp, cover;
   bool have_text = false, have_gcl = false, batch = false, explain = false;
   bool have_get = false, count = false, describe = false, have_cover = false;
-  std::vector<std::string> cover_exclude; // --cover: docids to carve out
+  std::vector<cottontail::addr> cover_exclude; // --cover: judged cps to skip
   size_t cover_window = 75;               // --cover: summary window in tokens
   QuerySpec base;
   std::string format = "json";
@@ -86,7 +86,8 @@ int main(int argc, char **argv) {
     else if (a == "--cover")
       cover = next(), have_cover = true;
     else if (a == "--exclude")
-      cover_exclude.push_back(next());
+      cover_exclude.push_back(
+          static_cast<cottontail::addr>(std::stoll(next())));
     else if (a == "--window")
       cover_window = std::stoul(next());
     else if (a == "--get")
@@ -166,7 +167,7 @@ int main(int argc, char **argv) {
     CoverSpec spec;
     spec.query = cover;
     spec.top_k = base.top_k;
-    spec.exclude_docids = cover_exclude;
+    spec.exclude = cover_exclude;
     spec.window = cover_window;
     CoverResponse resp;
     if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &resp, &error))
