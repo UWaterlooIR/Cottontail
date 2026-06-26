@@ -227,8 +227,9 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 > `:item` start); `--get <cp>` fetches a row's body by `cp`; `get_document` returns
 > `{cp, found, text}`. **The engine is cp-only — it never reads a `docno`/map**
 > (doc-8): `docno ↔ cp` is Python-only (`isj_agent.docno_map`), and a human
-> "fetch by docno" uses the **`cottontail-fetch`** helper (TASK-6.4:
-> `docno → cp → --get <cp>`). Some response-shape snippets **below still show the
+> "fetch by docno" uses the **`cottontail-fetch`** helper (TASK-6.4): `--docno`
+> does `docno → cp → --get <cp>`, and `--cp <cp>` does the reverse — `cp → docno`
+> (via the same map) plus the text. Some response-shape snippets **below still show the
 > old `docid` key** and the `:docno` recovery — those are being updated; the
 > authoritative current shapes are `cp` (search/get) per doc-7/doc-8.
 > `--cover`/`cover_search` is a **separate tool** still being reworked under

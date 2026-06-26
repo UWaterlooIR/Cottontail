@@ -170,7 +170,8 @@ in the document length). Two access paths, by identity:
 - **By `docno` (the boundary path).** A human/external caller that holds only a
   **docno** uses the **Python helper** `cottontail-fetch` (TASK-6.4): it resolves
   `docno → cp` with `isj_agent.docno_map.DocnoMap` (read-only SQLite) and then calls
-  the C++ get-by-`cp` (`cottontail-jsonl-query --get <cp>`). **The C++ engine itself
+  the C++ get-by-`cp` (`cottontail-jsonl-query --get <cp>`). The reverse, `--cp <cp>`,
+  resolves `cp → docno` via the same map and reads the text. **The C++ engine itself
   is cp-only and never opens the map** (decision **doc-8**): `docno ↔ cp` lives only
   in Python. Occasional and latency-tolerant; the multi-threaded `cover_search` /
   exclusion path never touches the map either.
@@ -203,8 +204,8 @@ store, built once at index time and read occasionally (decision doc-6):
 - **Read (boundary only — Python-only; the C++ engine never opens the map, doc-8).**
   Both readers are Python over `isj_agent.docno_map`: **C2** does the run-output
   `cp → docno` rewrite (a bounded batch per intent and trace), and the
-  **`cottontail-fetch` helper (TASK-6.4)** does `docno → cp` for a human/external
-  fetch, then calls the C++ get-by-`cp`. The C++ side takes **no SQLite dependency**;
+  **`cottontail-fetch` helper (TASK-6.4)** does `docno → cp` (or `cp → docno` in
+  reverse) for a human/external fetch, then calls the C++ get-by-`cp`. The C++ side takes **no SQLite dependency**;
   it is cp-only. The document *text* always comes from the warren; the store holds
   only the identity mapping (`cq` is derived from the `:item` container at `cp`, not
   stored).
