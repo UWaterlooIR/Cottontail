@@ -1,10 +1,11 @@
 ---
 id: TASK-5.6
 title: 'B2 — isj: Searcher agent + guardrailed loop controller (vs FakeEngine)'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-18 03:20'
-updated_date: '2026-06-22 00:31'
+updated_date: '2026-06-26 04:03'
 labels:
   - python
   - isj
@@ -314,66 +315,54 @@ Engine-delegated error handling requires B1 (TASK-5.5) to provide an `EngineErro
 engine may raise + FakeEngine scripted-error support (already specced in B1).
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 isj_agent/agents/searcher.py defines a Searcher with run(intent: str) -> SearcherResult (ranked_list + events), constructed with an injected OpenAI-compatible client + model and an injected SearchEngine (B1), loading its prompt from a bundled searcher.md.
+- [x] #2 The LLM is given exactly two tools: search (arg query: str) and judge (arg judgements: list of {cp, grade 0-4, reason}); one tool call per turn, no parallel calls; no read and no finish tool. The LLM-facing search tool maps to the engine's cover_search via the Protocol.
+- [x] #3 The model writes only the query; the controller injects exclude = the accumulated judged set and supplies top_k and window from config defaults (asserted via FakeEngine.calls).
+- [x] #4 Judge-before-search guardrail: a search while surfaced passages are unjudged is refused (no engine call) with a tool message naming the cps, recorded as a bounce event, and the model recovers by judging.
+- [x] #5 Engine-delegated errors: engine.search raising EngineError produces a bounce event and feeds str(error) back as the tool result; the controller never crashes.
+- [x] #6 Judge handling records only cps that were SURFACED (in pending) and not yet judged; a hallucinated/un-surfaced cp is ignored (not added); each recorded judgement (grade 0 included) takes its summary and score from the surfaced Hit plus its surfacing query; an empty/all-duplicate/all-ignored judge counts as no progress.
+- [x] #7 Termination is controller-owned: stop on a no-tool-call turn (trailing prose discarded), or >=2 consecutive dry searches, or >=2 consecutive no-progress turns, or the search budget, or a hard max-turns cap; EVERY turn (including bounces) counts toward the turn cap, so repeated invalid-GCL or premature-search bounces cannot loop forever; a stop event records the reason.
+- [x] #8 The controller emits a structured trace = list[TraceEvent], each with type, ts (epoch seconds), duration_ms, and type-specific fields, returned in SearcherResult.events; it is a DETAILED, reconstructable research artifact -- it records the actual requests, results, and judgements (document identifiers as cp), NOT just counts. The taxonomy covers at least: llm_turn (LLM latency, which tool); search (the query + top_k + window + the excluded cps + total_matches/unjudged_matches + atom_counts + the RETURNED HITS, each with its cp/score/summary + engine latency); judge (the recorded judgements, each {cp, grade, reason}); bounce (kind = judge_before_search | engine_error | judge_invalid, message); and stop (reason). C2 rewrites the cps in the persisted trace to docnos (TASK-5.8).
+- [x] #9 run(intent) returns a RankedList of ALL judged passages (grade 0 included), ordered by grade desc then engine score desc, ranks assigned 1..N; RankedEntry.rank is the compiled per-intent rank, distinct from the engine Hit.rank (a per-search position).
+- [x] #10 isj_agent/protocol defines pydantic RankedEntry{rank,cp,grade(0-4),score,summary,reason,surfacing_query}, RankedList{intent,entries}, TraceEvent{type,ts,duration_ms,(+ type-specific fields via extra=allow)}, and SearcherResult{ranked_list,events}.
+- [x] #11 isj_agent/agents/searcher.md is built from the §3 prompt EMBEDDED in this task (the verbatim starting point), with ONLY the adaptations listed there applied: 0-3 -> 0-4 grades plus a 0-4 relevance rubric, the search-count line left advisory while the controller enforces the budget/turn cap, and everything else kept verbatim. The finished prompt is self-contained and contains the ISJ loop; a GCL cheatsheet using the word* family marker (full word + *), facet covers, and !> carve; the three-way term model (bare exact / word* family / (+ ) synonyms); a 0-4 relevance rubric; and the loop rules (judge before re-search, reformulate from what was read, stop when dry, stop = no tool call and write nothing). It never mentions porter: or index streams.
+- [x] #12 Tests use a stub LLM (scripted tool-call sequences) + the B1 FakeEngine and cover: the happy path (correctly ordered RankedList incl. grade 0, plus a SearcherResult.events list with the expected event types and recorded durations); judge-before-search bounce+recovery; EngineError bounce+recovery; stop-on-2-dry; no-progress stop; the max-turns cap terminating a repeated-bounce loop; search-budget cap; exclude accumulation; a hallucinated un-surfaced cp not recorded; nothing surfaced left unjudged. No test contacts a network or a real model.
+- [x] #13 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0; isj/README.md documents the Searcher (run -> SearcherResult, the two tools, controller guardrails + termination incl. the turn cap, 0-4 grades, the structured event trace) and that read() stays on the engine Protocol as future-proofing, not exposed as an LLM tool yet.
+- [x] #14 Judge-arg validation and multiple-tool-call handling are explicit: the controller validates each judge argument through B1's Judgement model before recording, and an invalid judge call (e.g., an out-of-range grade or a missing field) is bounced via a bounce event (kind judge_invalid) with the pydantic error fed back as the tool result, counts as a turn and as no progress, records nothing that turn, and the model recovers by re-judging; and when the model emits more than one tool call in a turn the controller processes only the first and ignores the rest, recording the emitted count on the llm_turn event (tool_calls). Tests cover an out-of-range-grade bounce+recovery and a multi-tool-call turn.
+<!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Python in isj/. Depends on B1 (incl. EngineError + FakeEngine scripted errors). Adapt.
+Adopt the embedded plan + pseudocode, with these DECISIONS (user, 2026-06-26):
+- cp is INT throughout (carries from B1): RankedEntry.cp/Judgement.cp int; judged set = set[int]; exclude = sorted(judged) -> list[int].
+- RECALL-FIRST stopping: NO hard search cap. Loop while turns < max_turns. Natural termination is the real stop: no-tool-call, OR >=3 consecutive dry searches, OR >=3 consecutive no-progress turns. max_turns is the sole hard backstop (runaway/infinite-loop net; bounces count as turns), default 150, configurable. dry_threshold=no_progress_threshold=3 (configurable). stop reasons: no_tool_call|dry|no_progress|turn_cap (no 'budget').
+- HEAVY DETAILED trace (AC#8): search event records query+top_k+window+excluded cps+total/unjudged+atom_counts+every returned Hit (cp/score/summary); judge records each verdict {cp,grade,reason}; llm_turn/bounce/stop as specced. Fully reconstructable; cps as ints (C2 rewrites cp->docno).
+- Multi-tool-call: append ONLY the first tool_call to the assistant message (so real vLLM's 'each tool_call needs a tool response' contract holds), record emitted count (tool_calls=len) on llm_turn.
+- Defaults: top_k=10, window=75, temperature=0, all configurable (C3 wires real values).
 
-1. uv sync --project isj. Read analyst.py + analyst.md (injected client/model + bundled
-   prompt), B1's engine/ (Protocol + FakeEngine + EngineError) and protocol/search.py
-   (types), docs/searcher-agent-lessons section 3 (the prompt, a dated 0-3 snapshot to adapt
-   to 0-4), and isj/scouting/scout_searcher.py (the working loop prototype).
-2. isj_agent/protocol/: add RankedEntry, RankedList, TraceEvent (extra="allow"; type, ts,
-   duration_ms + type-specific fields), SearcherResult (ranked_list + events).
-3. isj_agent/agents/searcher.py: the Searcher class + the loop controller (pseudocode in the
-   description). Two tool schemas (search{query}; judge{judgements:[{cp,grade,reason}]});
-   one tool call per turn; inject exclude + config top_k/window; judge-before-search
-   bounce; EngineError bounce; judge only surfaced+unjudged cps (resolve summary/score
-   from the surfaced Hit); controller stops (no-tool-call / 2 dry / 2 no-progress / search
-   budget / MAX-TURNS cap with bounces counting as turns); emit TraceEvents (ts +
-   duration_ms; time the llm call and engine.search); compile_ranked_list sorted (grade desc,
-   score desc), ranks 1..N. Validate judge args via the Judgement model (grade 0-4).
-4. isj_agent/agents/searcher.md: author the prompt per the contract (word* GCL cheatsheet;
-   three-way terms; 0-4 rubric; loop rules; no porter:/streams).
-5. isj/tests/test_searcher.py: STUB LLM (a fake client whose chat.completions.create returns
-   a SCRIPTED sequence of assistant turns with tool_calls, ending in a no-tool-call turn) +
-   the B1 FakeEngine. Cover: happy path -> ordered RankedList (grade desc, score desc; grade
-   0 retained) AND a SearcherResult.events list with the expected event types and recorded
-   durations; judge-before-search bounce + recovery (bounce event); EngineError bounce +
-   recovery (FakeEngine scripted error -> bounce event, then a real batch); stop-on-2-dry;
-   no-progress stop; TURN-CAP stop (script repeated invalid-GCL/engine-error or premature
-   searches and assert it terminates via turn_cap, not an infinite loop); search-budget cap;
-   exclude accumulates and is passed to engine.search (assert via FakeEngine.calls);
-   a hallucinated (un-surfaced) cp in a judge call is NOT recorded; nothing surfaced left
-   unjudged. No network/real model.
-6. uv run --directory isj pytest tests/ -v (green). Update isj/README.md: the Searcher
-   (run -> SearcherResult), its two tools, the controller guardrails + termination (incl. the
-   turn cap), the 0-4 grade scale, the structured event trace, and that read() stays on the
-   engine Protocol as future-proofing (not exposed as an LLM tool yet). A real-LLM run is a
-   manual step (the live integration gate is C3).
+FILES:
+1. isj_agent/protocol/results.py: RankedEntry{rank,cp:int,grade(0-4),score,summary,reason,surfacing_query}, RankedList{intent,entries}, TraceEvent{type,ts,duration_ms; ConfigDict(extra=allow)}, SearcherResult{ranked_list,events}.
+2. isj_agent/agents/searcher.py: Searcher(client, model, engine, *, top_k=10, window=75, max_turns=150, dry_threshold=3, no_progress_threshold=3, temperature=0); run(intent)->SearcherResult. Loop per pseudocode: two tools search{query}+judge{judgements: array of Judgement.model_json_schema()}; tool_choice=auto; one call/turn (first only, appended-first); inject exclude+top_k+window; judge-before-search bounce; EngineError bounce; judge-arg validation via B1 Judgement -> judge_invalid bounce (counts as turn+no_progress); record only surfaced+unjudged cps (pull summary/score from the surfaced Hit + surfacing query); detailed TraceEvents (time llm + engine.search); compile_ranked_list sorted grade desc then score desc, ranks 1..N.
+3. isj_agent/agents/searcher.md: verbatim section-3 prompt + adaptations: grades 0-4 + the recommended 0-4 rubric; line 'after 2 dry' -> 3; drop the fixed 'at most N searches' (no cap) -> keep reformulating across facets until dry, then stop (no tool call, write nothing); two tools search/judge; never porter:/streams; passages are the cover summaries.
+4. isj/tests/test_searcher.py: stub LLM (fake client.chat.completions.create returning scripted assistant turns with tool_calls, ending no-tool-call) + B1 FakeEngine. Cover AC#12/#14: happy path (ordered RankedList incl grade 0 + events w/ types+durations); judge-before-search bounce+recovery; EngineError bounce+recovery; 3-dry stop; no-progress stop; turn-cap stops a repeated-bounce loop; exclude accumulation (FakeEngine.calls); hallucinated un-surfaced cp ignored; nothing-left-unjudged; out-of-range-grade judge_invalid bounce+recovery; multi-tool-call turn (first processed, tool_calls count recorded). No network/LLM.
+5. isj/README.md: document the Searcher (run->SearcherResult, two tools, guardrails+termination incl turn cap + natural stops, 0-4 grades, the heavy structured trace, read() future-proofing).
+GATE: uv sync --project isj; uv run --project isj pytest green.
+FORWARD-COMPAT: SearcherResult/RankedList/TraceEvent consumed by C2 (5.8, cp->docno rewrite + persistence) and C3 (5.9, orchestrator). engine via B1 SearchEngine Protocol (FakeEngine here; HttpSearchEngine in C1).
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
 RE-SPEC cp-native (doc-6, 2026-06-21). The judged set is keyed on cp (the agent holds cps and sends `exclude` as cp integers); RankedEntry/Judgement carry cp. No docno in the agent; the cp->docno rewrite is C2 at persistence. Loop/controller/prompt/trace otherwise unchanged. Authoritative: doc-6.
+
+Implemented per the embedded plan + pseudocode with the user's decisions: cp:int; recall-first stopping (NO search cap; natural termination via no-tool-call / >=3 dry / >=3 no-progress; max_turns=150 the sole runaway backstop, bounces count as turns); heavy detailed AC#8 trace (search event carries excluded cps + every returned hit cp/score/summary + atom_counts; judge carries each {cp,grade,reason}); multi-tool-call -> only the first is appended to the assistant message + processed (real-API correctness), emitted count recorded on llm_turn. Files: isj_agent/protocol/results.py (RankedEntry{cp:int}/RankedList/TraceEvent{extra=allow}/SearcherResult); isj_agent/agents/searcher.py (Searcher + controller: two tools, inject exclude+top_k+window, judge-before-search/EngineError/judge_invalid guardrails, surfaced-only recording pulling summary/score from the Hit, detailed trace timing llm+engine, compile grade desc->score desc ranks 1..N); searcher.md (verbatim section-3 prompt + adaptations: 0-4 + rubric, dryness->3, no fixed search limit, two tools, no porter:); tests/test_searcher.py (10 tests, stub LLM + B1 FakeEngine). README documents the Searcher. VERIFIED: uv sync + uv run pytest -> 40 passed (10 new); no network/LLM.
 <!-- SECTION:NOTES:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 isj_agent/agents/searcher.py defines a Searcher with run(intent: str) -> SearcherResult (ranked_list + events), constructed with an injected OpenAI-compatible client + model and an injected SearchEngine (B1), loading its prompt from a bundled searcher.md.
-- [ ] #2 The LLM is given exactly two tools: search (arg query: str) and judge (arg judgements: list of {cp, grade 0-4, reason}); one tool call per turn, no parallel calls; no read and no finish tool. The LLM-facing search tool maps to the engine's cover_search via the Protocol.
-- [ ] #3 The model writes only the query; the controller injects exclude = the accumulated judged set and supplies top_k and window from config defaults (asserted via FakeEngine.calls).
-- [ ] #4 Judge-before-search guardrail: a search while surfaced passages are unjudged is refused (no engine call) with a tool message naming the cps, recorded as a bounce event, and the model recovers by judging.
-- [ ] #5 Engine-delegated errors: engine.search raising EngineError produces a bounce event and feeds str(error) back as the tool result; the controller never crashes.
-- [ ] #6 Judge handling records only cps that were SURFACED (in pending) and not yet judged; a hallucinated/un-surfaced cp is ignored (not added); each recorded judgement (grade 0 included) takes its summary and score from the surfaced Hit plus its surfacing query; an empty/all-duplicate/all-ignored judge counts as no progress.
-- [ ] #7 Termination is controller-owned: stop on a no-tool-call turn (trailing prose discarded), or >=2 consecutive dry searches, or >=2 consecutive no-progress turns, or the search budget, or a hard max-turns cap; EVERY turn (including bounces) counts toward the turn cap, so repeated invalid-GCL or premature-search bounces cannot loop forever; a stop event records the reason.
-- [ ] #8 The controller emits a structured trace = list[TraceEvent], each with type, ts (epoch seconds), duration_ms, and type-specific fields, returned in SearcherResult.events; it is a DETAILED, reconstructable research artifact -- it records the actual requests, results, and judgements (document identifiers as cp), NOT just counts. The taxonomy covers at least: llm_turn (LLM latency, which tool); search (the query + top_k + window + the excluded cps + total_matches/unjudged_matches + atom_counts + the RETURNED HITS, each with its cp/score/summary + engine latency); judge (the recorded judgements, each {cp, grade, reason}); bounce (kind = judge_before_search | engine_error | judge_invalid, message); and stop (reason). C2 rewrites the cps in the persisted trace to docnos (TASK-5.8).
-- [ ] #9 run(intent) returns a RankedList of ALL judged passages (grade 0 included), ordered by grade desc then engine score desc, ranks assigned 1..N; RankedEntry.rank is the compiled per-intent rank, distinct from the engine Hit.rank (a per-search position).
-- [ ] #10 isj_agent/protocol defines pydantic RankedEntry{rank,cp,grade(0-4),score,summary,reason,surfacing_query}, RankedList{intent,entries}, TraceEvent{type,ts,duration_ms,(+ type-specific fields via extra=allow)}, and SearcherResult{ranked_list,events}.
-- [ ] #11 isj_agent/agents/searcher.md is built from the §3 prompt EMBEDDED in this task (the verbatim starting point), with ONLY the adaptations listed there applied: 0-3 -> 0-4 grades plus a 0-4 relevance rubric, the search-count line left advisory while the controller enforces the budget/turn cap, and everything else kept verbatim. The finished prompt is self-contained and contains the ISJ loop; a GCL cheatsheet using the word* family marker (full word + *), facet covers, and !> carve; the three-way term model (bare exact / word* family / (+ ) synonyms); a 0-4 relevance rubric; and the loop rules (judge before re-search, reformulate from what was read, stop when dry, stop = no tool call and write nothing). It never mentions porter: or index streams.
-- [ ] #12 Tests use a stub LLM (scripted tool-call sequences) + the B1 FakeEngine and cover: the happy path (correctly ordered RankedList incl. grade 0, plus a SearcherResult.events list with the expected event types and recorded durations); judge-before-search bounce+recovery; EngineError bounce+recovery; stop-on-2-dry; no-progress stop; the max-turns cap terminating a repeated-bounce loop; search-budget cap; exclude accumulation; a hallucinated un-surfaced cp not recorded; nothing surfaced left unjudged. No test contacts a network or a real model.
-- [ ] #13 uv sync --project isj succeeds and uv run --directory isj pytest tests/ exits 0; isj/README.md documents the Searcher (run -> SearcherResult, the two tools, controller guardrails + termination incl. the turn cap, 0-4 grades, the structured event trace) and that read() stays on the engine Protocol as future-proofing, not exposed as an LLM tool yet.
-- [ ] #14 Judge-arg validation and multiple-tool-call handling are explicit: the controller validates each judge argument through B1's Judgement model before recording, and an invalid judge call (e.g., an out-of-range grade or a missing field) is bounced via a bounce event (kind judge_invalid) with the pydantic error fed back as the tool result, counts as a turn and as no progress, records nothing that turn, and the model recovers by re-judging; and when the model emits more than one tool call in a turn the controller processes only the first and ignores the rest, recording the emitted count on the llm_turn event (tool_calls). Tests cover an out-of-range-grade bounce+recovery and a multi-tool-call turn.
-<!-- AC:END -->
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+B2 ships the Searcher: a guardrailed ISJ LLM loop that, per intent, writes GCL cover queries, judges the returned cover summaries (0-4), reformulates, and compiles a RankedList (grade desc, score desc) plus a detailed timestamped trace -- run(intent)->SearcherResult. Controller-owned guardrails (judge-before-search, engine-delegated EngineError, judge-arg validation) + recall-first termination (no search cap; stop on model-stop / 3 dry / 3 no-progress; max_turns backstop). cp-native; two tools (search/judge), read() reserved for future. Tested with a stub LLM + B1 FakeEngine (10 tests, 40 total green, no network).
+<!-- SECTION:FINAL_SUMMARY:END -->

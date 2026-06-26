@@ -132,13 +132,52 @@ container start address); `docno` never enters the agent.
   against `FakeEngine`** (no network, no LLM, no C++); **C1 supplies the real
   HTTP-backed engine** (`HttpSearchEngine`), which satisfies the same Protocol.
 
+## The Searcher (B2)
+
+`isj_agent/agents/searcher.py` plays one human "interactive searcher" as a
+guardrailed LLM loop. `Searcher(client, model, engine).run(intent)` returns a
+`SearcherResult` = a per-intent `RankedList` (judged, graded passages, best-first)
+plus a structured event **trace**. Its prompt is bundled in `searcher.md` (mirroring
+the `Analyst`).
+
+- **Two LLM tools, one tool call per turn:** `search` (the model writes only a GCL
+  cover `query`; the controller injects `exclude` = the accumulated judged set plus
+  `top_k`/`window`) and `judge` (a batch of `{cp, grade 0-4, reason}`; its argument
+  schema is derived from the B1 `Judgement` model so grades are guided to 0-4).
+  There is **no `read` and no `finish` tool**; `read()` stays on the engine Protocol
+  as documented future-proofing (RAG grounding), not exposed to the model.
+- **The controller owns the guardrails and termination** (model behavior is not
+  portable — see `docs/searcher-agent-lessons-June-16-2026.md`): judge-before-search
+  (a search with unjudged passages is refused), engine-delegated errors
+  (`EngineError` is bounced back as `str(error)`; there is no Python GCL validator),
+  and judge-argument validation through `Judgement` (an out-of-range grade is bounced
+  with the pydantic error). Only **surfaced + unjudged** cps are recorded
+  (hallucinated cps ignored), each pulling its summary/score from the surfaced hit.
+- **Recall-first stopping:** there is **no hard search budget**. The agent keeps
+  reformulating until it exhausts new material — the model stops (no tool call), or
+  ≥3 consecutive dry searches, or ≥3 consecutive no-progress turns — with a generous
+  `max_turns` cap (default 150) as the only runaway backstop (every turn, including
+  bounces, counts toward it). All of these are constructor knobs the eval harness /
+  C3 can tune.
+- **The trace is a research artifact** (`SearcherResult.events`, a `list[TraceEvent]`):
+  detailed, timestamped events — `llm_turn` (LLM latency, which tool, emitted
+  tool-call count), `search` (the query + the excluded cps + counts + atom_counts +
+  every returned hit with its cp/score/summary + engine latency), `judge` (each
+  recorded `{cp, grade, reason}`), `bounce` (kind + message), `stop` (reason) — so
+  the agent's behavior can be reconstructed and measured. C2 rewrites the cps to
+  docnos when persisting it.
+
+Tested with a stub LLM (scripted tool-call turns) + the B1 `FakeEngine` — no network,
+no real model. A live real-model run is the C3 integration gate.
+
 ## Status
 
 The `Analyst` is implemented: `analyze()` makes a single guided-decoding LLM
-call and returns an `Intents` object (the question plus an ordered list of
-interpretations). The engine contract above (B1) is implemented: the
-`SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Judgement`,
-and the scripted `FakeEngine`. The `Searcher` (B2), `HttpSearchEngine` (C1), and
-the `Orchestrator` are still to come. The richer INP / CM / IP pipeline from the
+call and returns an `Intents` object. The engine contract (B1) is implemented:
+the `SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Judgement`,
+and the scripted `FakeEngine`. The `Searcher` (B2) above is implemented (loop
+controller, guardrails, recall-first termination, structured trace), tested against
+the `FakeEngine`. Still to come: `HttpSearchEngine` (C1), the run-output writer
+(C2), and the `Orchestrator` / CLI (C3). The richer INP / CM / IP pipeline from the
 design spec is shelved in favor of the simpler `Intents` output (see the agent
 design decision docs under `backlog/docs/`).
