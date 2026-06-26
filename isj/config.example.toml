@@ -50,3 +50,15 @@ llm = "default"
 # used as-is. Override per-invocation with --index-bin. The default points at the
 # Bazel build output.
 binary = "bazel-bin/apps/cottontail-jsonl-index"
+
+# ---------------------------------------------------------------------------
+# [query]
+# Settings for the docno fetch helper (cottontail-fetch), which resolves
+# docno -> cp (Python, isj_agent.docno_map) and reads the text via the C++ query
+# binary by cp.
+# ---------------------------------------------------------------------------
+[query]
+
+# Path to the C++ cottontail-jsonl-query binary (relative paths resolve against
+# the repository root). Override per-invocation with --query-bin.
+binary = "bazel-bin/apps/cottontail-jsonl-query"

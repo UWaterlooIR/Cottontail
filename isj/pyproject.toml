@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 cottontail-index = "isj_agent.index:main"
+cottontail-fetch = "isj_agent.fetch:main"
 
 [build-system]
 requires = ["hatchling"]
