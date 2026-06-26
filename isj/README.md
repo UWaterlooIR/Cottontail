@@ -15,8 +15,9 @@ isj/
   config.toml           Your local config (git-ignored)
   isj_agent/            Importable Python package
     agents/             LLM-role wrappers (Analyst, …) with bundled prompts
-    protocol/           Typed artifacts (Intents, …)
-    engine/             Deterministic engine modules (Searcher, Bookkeeper, …)
+    protocol/           Typed artifacts (Intents; search/engine contract types)
+    engine/             The SearchEngine contract (Protocol + EngineError) and
+                        the scripted FakeEngine; docno_map / fetch helpers
     config.py           load_class() and build_client() utilities
     cli.py              Entry point
     orchestrator.py     Orchestrator (stub)
@@ -94,10 +95,50 @@ uv run --directory isj pytest tests/ -v
 uv run pytest tests/ -v
 ```
 
+## Engine contract (the Searcher's boundary)
+
+The Searcher (B2) talks to "an engine" through a small typed contract, defined in
+`isj_agent/engine/base.py` and `isj_agent/protocol/search.py`. It is **cp-native**
+(decision doc-6): a document's working identity is its integer `cp` (the `:item`
+container start address); `docno` never enters the agent.
+
+- **`SearchEngine` (a `runtime_checkable` `typing.Protocol`)** — two methods that
+  mirror the C++ server's tools:
+  - `search(query, *, top_k=10, exclude=(), window=75) -> SearchResponse`
+    (`cover_search`); `exclude` is the judged set as **cp integers** (the engine
+    is stateless — the agent passes its whole judged set each call).
+  - `read(cp) -> str | None` (`get_document`). It is **intentionally part of the
+    contract for future use** — a possible agent read-tool and the downstream RAG
+    grounding / Writer step — even though the B2 MVP does not call it; do not
+    remove it as unused.
+  - There is **no `judge` method**: judging is the controller's job in B2; the
+    engine only searches and reads.
+- **`EngineError`** — `search()`/`read()` MAY raise it on any engine-side failure
+  (an invalid query the engine rejects is one cause). There is **no Python-side
+  query validation** — the engine is the source of truth; B2's controller feeds
+  `str(error)` back to the model so it can self-correct.
+- **Types** (`protocol/search.py`, pydantic v2, mirroring the enriched
+  `cover_search` response): `SearchResponse{total_matches, unjudged_matches,
+  atom_counts:[{term,count}], results:[{rank,score,cp,summary}]}` and
+  `Judgement{cp, grade, reason}` with **grade on the 0–4 UMBRELA scale**
+  (out-of-range raises `ValidationError`). `SearchResponse` is
+  `ConfigDict(extra="forbid")` so an unexpected server field fails loudly (catches
+  contract drift). The models round-trip losslessly
+  (`model_validate(x.model_dump()) == x`) and emit JSON Schema for the LLM
+  boundary (`Judgement.model_json_schema()`), the same single-source-of-truth
+  pattern as `Intents`.
+- **`FakeEngine`** (`engine/fake.py`) — a deterministic, scripted `SearchEngine`
+  driven by an ordered list of `SearchResponse | EngineError`. **B2's tests run
+  against `FakeEngine`** (no network, no LLM, no C++); **C1 supplies the real
+  HTTP-backed engine** (`HttpSearchEngine`), which satisfies the same Protocol.
+
 ## Status
 
 The `Analyst` is implemented: `analyze()` makes a single guided-decoding LLM
 call and returns an `Intents` object (the question plus an ordered list of
-interpretations). The `Orchestrator` is still a stub. The richer INP / CM / IP
-pipeline from the design spec is shelved in favor of the simpler `Intents`
-output (see the agent design decision docs under `backlog/docs/`).
+interpretations). The engine contract above (B1) is implemented: the
+`SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Judgement`,
+and the scripted `FakeEngine`. The `Searcher` (B2), `HttpSearchEngine` (C1), and
+the `Orchestrator` are still to come. The richer INP / CM / IP pipeline from the
+design spec is shelved in favor of the simpler `Intents` output (see the agent
+design decision docs under `backlog/docs/`).
