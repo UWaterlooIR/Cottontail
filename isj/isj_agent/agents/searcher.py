@@ -184,8 +184,10 @@ class Searcher:
             if name == "search":
                 if pending:  # GUARDRAIL: judge the surfaced passages first
                     cps = [h.cp for h in pending]
+                    # cps in a STRUCTURED field (so C2 can rewrite cp -> docno);
+                    # the persisted message carries no raw cps.
                     emit("bounce", time.time(), 0.0, kind="judge_before_search",
-                         message=f"unjudged passages: {cps}")
+                         cps=cps, message="search refused: judge the surfaced passages first")
                     self._tool(msgs, call, {"error": f"Judge these passages first: {cps}"})
                     continue
                 query = args.get("query", "")

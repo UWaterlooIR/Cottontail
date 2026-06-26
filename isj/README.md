@@ -190,14 +190,41 @@ the `Analyst`).
 Tested with a stub LLM (scripted tool-call turns) + the B1 `FakeEngine` — no network,
 no real model. A live real-model run is the C3 integration gate.
 
+## Run output (C2)
+
+`isj_agent/run_output.py` persists one question's run to a directory (`write_run`).
+C3 produces the data and catches errors; C2 only writes:
+
+```
+<out_dir>/
+  intents.json            the Intents (question + ordered interpretations)
+  intent-00.json          interpretations[0]'s RankedList (only if it succeeded)
+  intent-00.trace.jsonl   interpretations[0]'s event trace, one TraceEvent per line
+  intent-01.json
+  intent-01.trace.jsonl
+  ...
+  errors.log              present ONLY if something failed
+```
+
+- `intent-NN` is the zero-based, zero-padded interpretation index; `intent-NN.trace.jsonl`
+  is a **JSON-Lines** event log (one `TraceEvent` per line) — a research artifact.
+- **The absence of `errors.log` means the whole run succeeded.** Its presence lists each
+  failure, tagged with the failing intent's index/interpretation; a failed intent gets no
+  `.json`/`.trace.jsonl`.
+- **docno on disk.** Results are `cp` in memory but the writer rewrites every persisted `cp`
+  to its `docno` via the read-only `DocnoMap` (TASK-6.3) — in the `RankedList` *and* the
+  trace events — so the saved files are portable (the field is renamed `cp` → `docno`). A
+  docno-less corpus (no map) persists cps. Pure filesystem: no network, no LLM.
+
 ## Status
 
 The `Analyst` is implemented: `analyze()` makes a single guided-decoding LLM
 call and returns an `Intents` object. The engine contract (B1) is implemented:
 the `SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Judgement`,
-and the scripted `FakeEngine`. The `Searcher` (B2) above is implemented (loop
-controller, guardrails, recall-first termination, structured trace), tested against
-the `FakeEngine`. Still to come: `HttpSearchEngine` (C1), the run-output writer
-(C2), and the `Orchestrator` / CLI (C3). The richer INP / CM / IP pipeline from the
-design spec is shelved in favor of the simpler `Intents` output (see the agent
-design decision docs under `backlog/docs/`).
+and the scripted `FakeEngine`. The `Searcher` (B2), the live `HttpSearchEngine`
+(C1, validated against a real server), and the run-output writer (C2) above are all
+implemented and tested. Still to come: the `Orchestrator` / CLI (C3) that wires
+Analyst → per-intent Searcher (over `HttpSearchEngine`) → `write_run`, and is the
+full real-LLM live gate. The richer INP / CM / IP pipeline from the design spec is
+shelved in favor of the simpler `Intents` output (see the agent design decision
+docs under `backlog/docs/`).

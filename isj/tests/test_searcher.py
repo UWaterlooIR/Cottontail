@@ -110,7 +110,11 @@ def test_judge_before_search_bounce_and_recovery():
     script = [_resp([(10, 5.0, "s")]), _resp([(11, 4.0, "t")])]
     s = _searcher(turns, script)
     result = s.run("intent")
-    assert any(e.type == "bounce" and e.kind == "judge_before_search" for e in result.events)
+    bounce = next(
+        e for e in result.events if e.type == "bounce" and e.kind == "judge_before_search"
+    )
+    assert bounce.cps == [10]  # structured pending cps (for C2's cp->docno rewrite)
+    assert "10" not in bounce.message  # the persisted message carries no raw cps
     assert len(s.engine.calls) == 1  # the bounce did not call the engine
     assert [e.cp for e in result.ranked_list.entries] == [10]
 
