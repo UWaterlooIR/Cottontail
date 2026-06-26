@@ -265,18 +265,30 @@ SExpression::to_hopper(std::shared_ptr<Featurizer> featurizer,
       return nullptr;
     std::unique_ptr<cottontail::Hopper> expr =
         subx_[0]->to_hopper(featurizer, idx);
+    if (expr == nullptr) // an invalid sub-expression must propagate, not build a
+      return nullptr;    // Link with a null child (its tau would deref null).
     return std::make_unique<cottontail::gcl::Link>(std::move(expr));
   }
   if (subx_.size() > 2) {
     std::shared_ptr<SExpression> binary_expr = to_binary();
     return binary_expr->to_hopper(featurizer, idx);
   }
+  // A 1-ary Or/And is identity: (+ X) == (^ X) == X. The grammar already accepts a
+  // single operand for +/^; only this builder rejected it. (Binary relations like
+  // >> still need 2 -- they fall through to the nullptr below.)
+  if (subx_.size() == 1 && (kind_ == ONE_OF || kind_ == ALL_OF))
+    return subx_[0]->to_hopper(featurizer, idx);
   if (subx_.size() < 2)
     return nullptr;
   std::unique_ptr<cottontail::Hopper> left =
       subx_[0]->to_hopper(featurizer, idx);
   std::unique_ptr<cottontail::Hopper> right =
       subx_[1]->to_hopper(featurizer, idx);
+  // An invalid operand (e.g. "(^ x)" -- ALL_OF with one element -- returns null
+  // above) must propagate as a null result, NOT build a binary operator with a
+  // null child: the walk would dereference it (left_/right_->tau) and segfault.
+  if (left == nullptr || right == nullptr)
+    return nullptr;
   switch (kind_) {
   case ONE_OF:
     return std::make_unique<cottontail::gcl::Or>(std::move(left),

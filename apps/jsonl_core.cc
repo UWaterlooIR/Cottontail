@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "src/builder.h"
+#include "src/content_index.h"
 #include "src/nlohmann.h"
 #include "src/ranking.h"
 #include "src/recipe.h"
@@ -57,9 +61,25 @@ std::string trim(const std::string &s) {
   return s.substr(b, e - b + 1);
 }
 
+// Truncate to at most n bytes, then step back so the result never ends inside a
+// multi-byte UTF-8 character. A mid-character split leaves invalid UTF-8, which
+// the JSON serializer rejects (type_error.316). n is a byte budget and snippets
+// are short previews, so dropping the final partial character is fine.
 std::string truncate(std::string s, size_t n) {
-  if (s.size() > n)
-    s = s.substr(0, n);
+  if (s.size() <= n)
+    return s;
+  s.resize(n);
+  // Walk back over UTF-8 continuation bytes (10xxxxxx) to the lead byte, then
+  // drop the whole sequence if the lead's expected length runs past the cut.
+  size_t i = s.size();
+  while (i > 0 && (static_cast<unsigned char>(s[i - 1]) & 0xC0) == 0x80)
+    --i;
+  if (i > 0) {
+    unsigned char lead = static_cast<unsigned char>(s[i - 1]);
+    size_t need = lead < 0x80 ? 1 : lead < 0xE0 ? 2 : lead < 0xF0 ? 3 : 4;
+    if (s.size() - (i - 1) < need)
+      s.resize(i - 1);
+  }
   return s;
 }
 
@@ -76,8 +96,10 @@ std::string all_of(const std::vector<std::string> &terms) {
 }
 
 bool is_gcl_operator(const std::string &t) {
+  // The full prefix-operator set the parser accepts (src/parse.cc:19), so cover
+  // rewriting and atom-count leaf enumeration never mistake an operator for a term.
   return t == "^" || t == "+" || t == "..." || t == "<>" || t == "<<" ||
-         t == ">>";
+         t == ">>" || t == "!<" || t == "!>" || t == "#" || t == "@";
 }
 
 // True for things in a GCL expression that are not bare query terms: operators
@@ -194,6 +216,355 @@ std::vector<std::string> gcl_terms(const std::string &gcl) {
   flush();
   return out;
 }
+
+// ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
+
+// The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
+// reuses this). `word` is the bare word WITHOUT the trailing '*'. Resolves
+// through the burrow's own Porter, so bear -> porter:bear (the symmetric stemmed
+// stream) and an unstemmable word -> the exact surface form (ox -> ox).
+std::string resolve_family_atom(std::shared_ptr<Stemmer> stemmer,
+                                const std::string &word) {
+  return stem_atom(stemmer, word);
+}
+
+// Translate one bareword token under the word* rules into *out. Operators and
+// :tags pass verbatim; a token with a single TRAILING '*' becomes its family
+// atom; any other '*' (mid-token, repeated, or a lone '*') is a hard error.
+bool emit_cover_term(const std::string &t, std::shared_ptr<Stemmer> stemmer,
+                     std::string *out, std::string *error) {
+  if (t.empty())
+    return true;
+  if (is_gcl_nonterm(t)) {
+    *out += t;
+    return true;
+  }
+  auto star = t.find('*');
+  if (star == std::string::npos) {
+    *out += t; // bare term -> exact
+    return true;
+  }
+  if (star == t.size() - 1 && star > 0 && t.find('*') == t.rfind('*')) {
+    *out += resolve_family_atom(stemmer, t.substr(0, star));
+    return true;
+  }
+  safe_error(error) =
+      "invalid '*' in term '" + t +
+      "': the family marker must be a single trailing '*' (e.g. bear*)";
+  return false;
+}
+
+// Rewrite a cover query, translating word* markers to stemmed-stream atoms. Bare
+// terms stay exact; operators/:tags are untouched. A quoted phrase that uses
+// word* is desugared HERE (before the normal expand_phrases pass) into the
+// explicit (>> (# n) (... ...)) form with each word translated -- splitting the
+// phrase on WHITESPACE so a trailing '*' survives (the tokenizer would drop it).
+// A star-free phrase is left quoted for the standard pass. Returns false on a
+// malformed '*' or an unterminated phrase.
+bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
+                   std::string *out, std::string *error) {
+  out->clear();
+  std::string tok, phrase;
+  bool in_phrase = false;
+  auto flush = [&]() -> bool {
+    bool ok = emit_cover_term(tok, stemmer, out, error);
+    tok.clear();
+    return ok;
+  };
+  auto emit_phrase = [&]() -> bool {
+    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted
+      *out += '"';
+      *out += phrase;
+      *out += '"';
+      return true;
+    }
+    std::vector<std::string> words;
+    std::string w;
+    for (char c : phrase) {
+      if (c == ' ' || c == '\t' || c == '\n') {
+        if (!w.empty()) {
+          words.push_back(w);
+          w.clear();
+        }
+      } else {
+        w.push_back(c);
+      }
+    }
+    if (!w.empty())
+      words.push_back(w);
+    std::vector<std::string> atoms;
+    for (const auto &word : words) {
+      std::string a;
+      if (!emit_cover_term(word, stemmer, &a, error))
+        return false;
+      atoms.push_back(a);
+    }
+    if (atoms.empty())
+      return true;
+    if (atoms.size() == 1) {
+      *out += atoms[0];
+      return true;
+    }
+    *out += "(>> (# " + std::to_string(atoms.size()) + ") (...";
+    for (const auto &a : atoms)
+      *out += " " + a;
+    *out += "))";
+    return true;
+  };
+  for (char c : gcl) {
+    if (c == '"') {
+      if (!in_phrase) {
+        if (!flush())
+          return false;
+        in_phrase = true;
+        phrase.clear();
+      } else {
+        if (!emit_phrase())
+          return false;
+        in_phrase = false;
+      }
+    } else if (in_phrase) {
+      phrase.push_back(c);
+    } else if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n') {
+      if (!flush())
+        return false;
+      *out += c;
+    } else {
+      tok.push_back(c);
+    }
+  }
+  if (in_phrase) {
+    safe_error(error) = "unterminated phrase quote in cover query";
+    return false;
+  }
+  return flush();
+}
+
+// Build a cover-biased extractive summary from a document's covers (in document
+// order). Per cover: a window of max(W, cover_length) tokens centered on the
+// cover, shifted inward at the body edges to keep the width (clamped to the body
+// when it is shorter). Overlapping or touching windows merge; non-contiguous
+// extents join with " . . . ". Translates the token extents to text.
+// max_words (0 = uncapped) caps the WHOLE summary to that many tokens: a window
+// wider than the cap is anchored at its cover's START (not centered) and the total
+// is bounded across covers; any cut extent ends with " ...". Capping the token
+// extents before translate() avoids materializing a huge cover span.
+std::string cover_summary(std::shared_ptr<Warren> warren,
+                          const std::vector<std::pair<addr, addr>> &covers,
+                          addr body_start, addr body_end, addr W, addr max_words) {
+  if (covers.empty() || body_end < body_start)
+    return "";
+  std::vector<std::pair<addr, addr>> wins;
+  std::vector<bool> cut; // this window was truncated -> show a trailing " ..."
+  for (const auto &c : covers) {
+    addr p = c.first, q = c.second;
+    addr cover_len = q - p + 1;
+    addr T = std::max<addr>(W, cover_len);
+    if (max_words > 0 && T > max_words) {
+      // Too long for the cap: anchor at the COVER START and show max_words tokens,
+      // marking it truncated (the rest of the cover is cut).
+      addr start = p;
+      addr end = std::min<addr>(p + max_words - 1, body_end);
+      wins.emplace_back(start, end);
+      cut.push_back(true);
+      continue;
+    }
+    // Fits: a T-token window centered on the cover, shifted inward at the edges.
+    addr start = p + cover_len / 2 - T / 2;
+    addr end = start + T - 1;
+    if (end > body_end) {
+      start -= (end - body_end);
+      end = body_end;
+    }
+    if (start < body_start) {
+      start = body_start;
+      end = start + T - 1;
+      if (end > body_end)
+        end = body_end;
+    }
+    wins.emplace_back(start, end);
+    cut.push_back(false);
+  }
+  std::vector<std::pair<addr, addr>> merged;
+  std::vector<bool> merged_cut;
+  for (size_t i = 0; i < wins.size(); i++) {
+    if (!merged.empty() && wins[i].first <= merged.back().second + 1) {
+      merged.back().second = std::max(merged.back().second, wins[i].second);
+      merged_cut.back() = merged_cut.back() || cut[i];
+    } else {
+      merged.push_back(wins[i]);
+      merged_cut.push_back(cut[i]);
+    }
+  }
+  // Cap the WHOLE summary to max_words tokens across the merged extents (applied to
+  // the token extents, before translate(), so a huge cover is never materialized).
+  if (max_words > 0) {
+    addr budget = max_words;
+    size_t keep = 0;
+    bool dropped = false;
+    while (keep < merged.size()) {
+      addr len = merged[keep].second - merged[keep].first + 1;
+      if (len <= budget) {
+        budget -= len;
+        keep++;
+        if (budget == 0 && keep < merged.size()) {
+          dropped = true;
+          break;
+        }
+      } else { // cut this extent to fit the remaining budget
+        merged[keep].second = merged[keep].first + budget - 1;
+        merged_cut[keep] = true;
+        keep++;
+        dropped = (keep < merged.size());
+        break;
+      }
+    }
+    if (dropped)
+      merged_cut[keep - 1] = true;
+    merged.resize(keep);
+    merged_cut.resize(keep);
+  }
+  std::string out;
+  for (size_t i = 0; i < merged.size(); i++) {
+    if (i)
+      out += " . . . ";
+    out += trim(warren->txt()->translate(merged[i].first, merged[i].second));
+    if (merged_cut[i])
+      out += " ...";
+  }
+  return out;
+}
+
+// ---- cover_search ranking (cp-native, one pass: rank + match counts) -------
+
+// A ranked :item container: its cp (start), cq (end), and ssr cover-density score.
+struct CoverRanked {
+  addr cp = 0;
+  addr cq = 0;
+  double score = 0.0;
+};
+
+// One cp-native pass (doc-6 section 4): walk the query hopper and the :item
+// container hopper once over the PUBLIC Hopper API -- mirroring ssr's recurrence
+// (score += 1/(K + q - p), K = ssr's default 42) -- keeping the top `depth`
+// containers by score (over-fetched for the exclude cp post-filter), and counting
+// matches as a BYPRODUCT of the same pass: total_matches as each matching
+// container closes, unjudged_matches for those whose cp is not in `exclude`. Does
+// NOT call ssr_ranking and touches no src/ file. Ranked containers are returned
+// in score-descending order.
+bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
+                   size_t depth, const std::unordered_set<addr> &exclude,
+                   std::vector<CoverRanked> *ranked, long *total_matches,
+                   long *unjudged_matches, std::string *error) {
+  const double K = 42.0; // ssr default (smoothed 1/(K + q - p))
+  ranked->clear();
+  *total_matches = 0;
+  *unjudged_matches = 0;
+  auto hopper = warren->hopper_from_gcl(query, error);
+  if (hopper == nullptr)
+    return false;
+  auto chopper = warren->hopper_from_gcl(":item", error);
+  if (chopper == nullptr)
+    return false;
+  // Bounded min-heap (smallest score on top) of the top `depth` containers.
+  auto lower_score = [](const CoverRanked &a, const CoverRanked &b) {
+    return a.score > b.score;
+  };
+  std::vector<CoverRanked> heap;
+  auto close_container = [&](addr cp, addr cq, double score) {
+    if (score <= 0.0)
+      return; // not a matching container (no cover accumulated)
+    (*total_matches)++;
+    if (exclude.find(cp) == exclude.end())
+      (*unjudged_matches)++;
+    if (depth == 0)
+      return;
+    if (heap.size() < depth) {
+      heap.push_back({cp, cq, score});
+      std::push_heap(heap.begin(), heap.end(), lower_score);
+    } else if (score > heap.front().score) {
+      std::pop_heap(heap.begin(), heap.end(), lower_score);
+      heap.back() = {cp, cq, score};
+      std::push_heap(heap.begin(), heap.end(), lower_score);
+    }
+  };
+  addr p, q, cp, cq;
+  hopper->tau(minfinity + 1, &p, &q);
+  chopper->rho(q, &cp, &cq);
+  double score = 0.0;
+  while (p < maxfinity && cq < maxfinity) {
+    if (p < cp) {
+      hopper->tau(cp, &p, &q);
+    } else if (q > cq) {
+      close_container(cp, cq, score);
+      score = 0.0;
+      chopper->rho(q, &cp, &cq);
+    } else {
+      score += 1.0 / (K + q - p);
+      hopper->tau(p + 1, &p, &q);
+    }
+  }
+  close_container(cp, cq, score); // flush the last open container
+  std::sort(heap.begin(), heap.end(),
+            [](const CoverRanked &a, const CoverRanked &b) {
+              return a.score > b.score; // descending by score
+            });
+  *ranked = std::move(heap);
+  return true;
+}
+
+// The query's content-term LEAVES (bare words and word* markers), AS WRITTEN,
+// deduped first-seen. Operators / parens / :tags are skipped; each word inside a
+// quoted phrase is its own leaf. Used to build atom_counts. The query has already
+// been validated by cover_rewrite, so no mid-token '*' reaches here.
+std::vector<std::string> cover_leaves(const std::string &gcl) {
+  std::vector<std::string> out;
+  std::set<std::string> seen;
+  auto add = [&](const std::string &t) {
+    if (t.empty() || is_gcl_nonterm(t))
+      return;
+    if (seen.insert(t).second)
+      out.push_back(t);
+  };
+  std::string tok, phrase;
+  bool in_phrase = false;
+  for (char c : gcl) {
+    if (c == '"') {
+      if (!in_phrase) {
+        add(tok);
+        tok.clear();
+        in_phrase = true;
+        phrase.clear();
+      } else {
+        std::string w;
+        for (char pc : phrase) {
+          if (pc == ' ' || pc == '\t' || pc == '\n') {
+            if (!w.empty()) {
+              add(w);
+              w.clear();
+            }
+          } else {
+            w.push_back(pc);
+          }
+        }
+        if (!w.empty())
+          add(w);
+        in_phrase = false;
+      }
+    } else if (in_phrase) {
+      phrase.push_back(c);
+    } else if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n') {
+      add(tok);
+      tok.clear();
+    } else {
+      tok.push_back(c);
+    }
+  }
+  if (!in_phrase)
+    add(tok);
+  return out;
+}
+
 } // namespace
 
 bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
@@ -246,6 +617,20 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
   if (builder == nullptr)
     return false;
   builder->verbose(opts.verbose);
+  // The cp-native content indexer (docs/indexing.md, doc-6) stores each document
+  // as text + one ":item" annotation and hands back its cp. It does NOT tokenize
+  // the docno and creates no ":docno"; instead the docno is paired with cp in a
+  // flat (docno<TAB>cp) dump written alongside the burrow, from which the index
+  // CLI (TASK-6.3) builds the cp<->docno SQLite map.
+  auto indexer = ContentIndexer::make(builder, error);
+  if (indexer == nullptr)
+    return false;
+  std::string flat_name = working->make_name("docno-cp.tsv");
+  std::ofstream flat_out(flat_name, std::ios::out | std::ios::trunc);
+  if (flat_out.fail()) {
+    safe_error(error) = "jsonl_index: cannot create " + flat_name;
+    return false;
+  }
 
   addr t0 = now();
   size_t rows = 0, skipped = 0, files_seen = 0;
@@ -270,22 +655,22 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
       sp = nl + 1;
       if (trim(line).empty())
         continue;
-      std::string docid, contents;
+      std::string docno, text;
       try {
         json j = json::parse(line);
-        if (!j.contains(opts.docid_field) || !j.contains(opts.contents_field) ||
-            !j[opts.docid_field].is_string() ||
-            !j[opts.contents_field].is_string()) {
+        if (!j.contains(opts.docno_field) || !j.contains(opts.text_field) ||
+            !j[opts.docno_field].is_string() ||
+            !j[opts.text_field].is_string()) {
           skipped++;
           if (opts.strict) {
-            safe_error(error) = "row missing/!string " + opts.docid_field +
-                                "/" + opts.contents_field + " in " + file;
+            safe_error(error) = "row missing/!string " + opts.docno_field +
+                                "/" + opts.text_field + " in " + file;
             return false;
           }
           continue;
         }
-        docid = j[opts.docid_field].get<std::string>();
-        contents = j[opts.contents_field].get<std::string>();
+        docno = j[opts.docno_field].get<std::string>();
+        text = j[opts.text_field].get<std::string>();
       } catch (...) {
         skipped++;
         if (opts.strict) {
@@ -294,17 +679,31 @@ bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
         }
         continue;
       }
-      addr p_id, q_id, p_body, q_body;
-      if (!builder->add_text(docid, &p_id, &q_id, error) ||
-          !builder->add_annotation(":docno", p_id, q_id, 0.0, error) ||
-          !builder->add_text(contents, &p_body, &q_body, error) ||
-          !builder->add_annotation(":item", p_id, q_body, 0.0, error))
-        return false;
+      std::string row_error;
+      addr cp;
+      if (!indexer->add_document(text, &cp, &row_error)) {
+        // A contentless row -- empty text, or text with no indexable tokens --
+        // is handled like a malformed row: skipped, fatal only under --strict.
+        // A duplicate docno is NOT detected here; docno uniqueness is enforced
+        // when the index CLI builds the SQLite map (TASK-6.3).
+        skipped++;
+        if (opts.strict) {
+          safe_error(error) = row_error + " in " + file;
+          return false;
+        }
+        continue;
+      }
+      flat_out << docno << '\t' << cp << '\n';
       rows++;
     }
   }
-  if (!builder->finalize(error))
+  if (!indexer->finalize(error))
     return false;
+  flat_out.close();
+  if (flat_out.fail()) {
+    safe_error(error) = "jsonl_index: flat dump write failure: " + flat_name;
+    return false;
+  }
 
   if (summary != nullptr) {
     summary->burrow = opts.burrow;
@@ -384,25 +783,19 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     }
   }
 
-  auto docno = warren->hopper_from_gcl(":docno", error);
   hits->clear();
   int rank = 1;
   for (const auto &r : ranked) {
     Hit h;
     h.rank = rank++;
     h.score = r.score();
-    addr dp = 0, dq = -1;
-    if (docno != nullptr) {
-      docno->tau(r.container_p(), &dp, &dq);
-      h.docid = trim(warren->txt()->translate(dp, dq));
-    }
+    h.cp = r.container_p(); // cp-native: the document's working identity
     h.best_passage.start = r.p();
     h.best_passage.end = r.q();
     h.best_passage.text =
         truncate(warren->txt()->translate(r.p(), r.q()), spec.snippet_chars);
     if (spec.full_text) {
-      addr body_start = (dq >= 0 ? dq + 1 : r.container_p());
-      h.full_text = warren->txt()->translate(body_start, r.container_q());
+      h.full_text = warren->txt()->translate(r.container_p(), r.container_q());
       h.has_full_text = true;
     }
     hits->push_back(std::move(h));
@@ -410,41 +803,116 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
   return true;
 }
 
-bool jsonl_get(std::shared_ptr<Warren> warren, const std::string &docid,
-               std::string *text, bool *found, std::string *error) {
-  *found = false;
-  text->clear();
-  std::vector<std::string> terms = warren->tokenizer()->split(docid);
-  if (terms.empty())
-    return true; // nothing to match on -> not found
-  // Find an :item whose :docno contains the docid's token sequence, then verify
-  // the recovered docid string matches exactly (guards against a docid whose
-  // tokens are a subset of another's).
-  std::string phrase = terms[0];
-  if (terms.size() > 1) {
-    phrase = "(...";
-    for (const auto &t : terms)
-      phrase += " " + t;
-    phrase += ")";
-  }
-  std::string gcl = "(>> :item (>> :docno " + phrase + "))";
-  auto hopper = warren->hopper_from_gcl(gcl, error);
-  if (hopper == nullptr)
-    return false;
-  auto docno = warren->hopper_from_gcl(":docno", error);
-  if (docno == nullptr)
-    return false;
-  addr p, q;
-  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
-       hopper->tau(p + 1, &p, &q)) {
-    addr dp = 0, dq = -1;
-    docno->tau(p, &dp, &dq);
-    if (trim(warren->txt()->translate(dp, dq)) == docid) {
-      *found = true;
-      *text = warren->txt()->translate(dq + 1, q); // body after the :docno span
-      return true;
+bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
+                        CoverResponse *out, std::string *error) {
+  out->results.clear();
+  out->atom_counts.clear();
+  out->total_matches = 0;
+  out->unjudged_matches = 0;
+  // word* needs a stemmed stream; fail loudly (no silent fallback to exact).
+  std::shared_ptr<Stemmer> stemmer;
+  if (spec.query.find('*') != std::string::npos) {
+    stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "cover_search query uses the word* family marker but this burrow has "
+          "no stemmed stream (rebuild the index with --stem porter)";
+      return false;
     }
   }
+  std::string rewritten;
+  if (!cover_rewrite(spec.query, stemmer, &rewritten, error))
+    return false;
+  if (rewritten.empty())
+    return true; // nothing to search -> no hits, zero counts, no atoms
+  // Validate up front so malformed GCL is a reported error, not a silent empty.
+  auto check = warren->hopper_from_gcl(rewritten, error);
+  if (check == nullptr)
+    return false;
+  // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
+  // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
+  for (const auto &leaf : cover_leaves(spec.query)) {
+    std::string atom;
+    auto star = leaf.find('*');
+    if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
+        stemmer != nullptr)
+      atom = resolve_family_atom(stemmer, leaf.substr(0, star));
+    else
+      atom = leaf; // bare exact (validated: no mid-token '*')
+    AtomCount ac;
+    ac.term = leaf;
+    ac.count =
+        (long)warren->idx()->count(warren->featurizer()->featurize(atom));
+    out->atom_counts.push_back(std::move(ac));
+  }
+  // ONE cp-native pass (doc-6 section 4): rank plain :item -- over-fetching
+  // depth = top_k + |exclude| so the exclude cp post-filter still fills top_k --
+  // and count total_matches / unjudged_matches as a byproduct of the same pass.
+  std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
+  std::vector<CoverRanked> ranked;
+  if (!cover_ranking(warren, rewritten, spec.top_k + exclude.size(), exclude,
+                     &ranked, &out->total_matches, &out->unjudged_matches, error))
+    return false;
+  // cp POST-FILTER: drop excluded hits, keep top_k survivors, build summaries.
+  int rank = 1;
+  for (const auto &r : ranked) {
+    if (out->results.size() >= spec.top_k)
+      break;
+    if (exclude.find(r.cp) != exclude.end())
+      continue;
+    CoverHit h;
+    h.rank = rank++;
+    h.score = r.score;
+    h.cp = r.cp;
+    // PHASE 2: recover THIS document's covers (cover_ranking returns only the
+    // container span) by walking the query hopper within [cp,cq]. This is a
+    // localized re-walk over the survivors only -- NOT a second corpus pass.
+    std::vector<std::pair<addr, addr>> covers;
+    auto qh = warren->hopper_from_gcl(rewritten, error);
+    if (qh != nullptr) {
+      addr p, q;
+      for (qh->tau(r.cp, &p, &q); p < maxfinity && q <= r.cq;
+           qh->tau(p + 1, &p, &q))
+        if (p >= r.cp)
+          covers.emplace_back(p, q);
+    }
+    // Summarize only the BEST K covers (K = max_covers, >= 1): the K tightest
+    // (smallest span q-p; ties -> earlier position), then put them back in document
+    // order so the snippet reads left to right. K=1 gives a single focused window;
+    // K>1 reuses cover_summary's overlap-merge and " . . . " join over just those K.
+    size_t k = std::max<size_t>(1, spec.max_covers);
+    if (covers.size() > k) {
+      auto tighter = [](const std::pair<addr, addr> &a,
+                        const std::pair<addr, addr> &b) {
+        addr sa = a.second - a.first, sb = b.second - b.first;
+        return sa != sb ? sa < sb : a.first < b.first;
+      };
+      std::nth_element(covers.begin(), covers.begin() + k, covers.end(), tighter);
+      covers.resize(k);
+      std::sort(covers.begin(), covers.end()); // back to document order
+    }
+    h.summary = cover_summary(warren, covers, r.cp, r.cq, (addr)spec.window,
+                              (addr)spec.max_words);
+    out->results.push_back(std::move(h));
+  }
+  return true;
+}
+
+bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
+               bool *found, std::string *error) {
+  *found = false;
+  text->clear();
+  // cp-native: cp is an :item container start (from search). Recover the span end
+  // cq from the :item container at cp, then translate the whole body. No docno.
+  auto item = warren->hopper_from_gcl(":item", error);
+  if (item == nullptr)
+    return false;
+  addr p, q;
+  item->tau(cp, &p, &q);
+  if (p != cp || p >= maxfinity)
+    return true; // cp is not an :item start -> not found (not an error)
+  *found = true;
+  *text = warren->txt()->translate(cp, q);
   return true;
 }
 

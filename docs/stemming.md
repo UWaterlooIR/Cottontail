@@ -175,6 +175,45 @@ A no-op term is safe and symmetric: `Porter::stem("ox")` returns `"ox"`
 
 ---
 
+## 6a. The `word*` family marker (`cover_search`) — per-atom, opt-in per term
+
+The whole-query `--stem` flag above stems **every** term. The ISJ search agent
+needs finer control: stem *this* word but keep *that* proper noun exact, without
+knowing the engine's stem encoding. That is the **`word*` family marker**, served
+by a **separate tool, `cover_search`** (not `search_gcl`, which stays a pure GCL
+primitive with no `word*` handling).
+
+- A bare term is **exact**: `bear` matches only `bear`.
+- A term with a **single trailing `*`** matches the word **and its morphological
+  family**: `bear*` matches `bear`, `bears`, …; `attack*` matches
+  `attack`/`attacked`/`attacking`. Write the **full ordinary word** then `*` —
+  never a shortened stem (`statistic*`, not `stat*`).
+- Internally `word*` resolves through the burrow's **own Porter** (the single
+  helper `resolve_family_atom` = `stem_atom`), so it targets the same
+  `porter:<stem>` feature the index built — the agent never types `porter:`. An
+  unstemmable word (`ox*`, short/non-alpha) falls back to the exact surface form
+  (symmetric, no silent miss), exactly like `--stem`.
+- `word*` is honored **inside a quoted phrase**: `"black bear*"` is desugared
+  *before* the normal `expand_phrases` pass into `(>> (# 2) (... black porter:bear))`,
+  so it matches the adjacent `black bears`. (The phrase is split on whitespace to
+  preserve the trailing `*`, which the tokenizer would otherwise drop.)
+- A **non-trailing / mid-token `*`** (e.g. `at*ack`) is a hard error (CLI exit 2 /
+  server `400`), never a crash.
+- `cover_search` requires a **stemmed stream**: a `word*` query against a burrow
+  built without `--stem porter` is a hard error — **no** silent fallback to exact.
+- `cover_search` ranks `:item` documents by `ssr` cover density and returns, per
+  document, `{rank, score, cp, summary}`, where `summary` is a **cover-biased
+  extractive summary** (windows centered on the query's covers, merged, with gaps
+  shown as ` . . . `). It replaces the old `best_passage` (which was just the
+  document head). It also returns `total_matches`/`unjudged_matches`/`atom_counts`
+  and accepts `exclude` (judged cps; a cp post-filter) and a request-side `window`.
+
+So: `--stem` = whole-query recall on `search_text`/`search_gcl`; `word*` =
+per-term, opt-in recall on the dedicated `cover_search` tool. They are distinct
+mechanisms and do not interact.
+
+---
+
 ## 7. Tests to add (extend `test/jsonl.cc` + `test/jsonl_cli.cc`; library-level unless noted)
 
 a. **Stemmed recall** — with a `--stem porter` index, `--stem "elephant"` matches

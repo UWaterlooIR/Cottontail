@@ -78,7 +78,7 @@ TEST(JsonlCli, IndexSummaryToStdout) {
   EXPECT_EQ(j["rows_skipped"], 0);
 }
 
-TEST(JsonlCli, QueryHappyPath) {
+TEST(JsonlCli, QueryEmitsCp) {
   std::string b = build_burrow("cli_q");
   int code;
   std::string out = run(std::string(kQueryBin) + " --burrow " + b +
@@ -88,7 +88,17 @@ TEST(JsonlCli, QueryHappyPath) {
   json j = json::parse(out);
   ASSERT_TRUE(j.contains("results"));
   ASSERT_FALSE(j["results"].empty());
-  EXPECT_EQ(j["results"][0]["docid"], "doc-004");
+  // cp-native: each hit carries an integer cp; it round-trips through --get to
+  // doc-004's body.
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  json jg = json::parse(g);
+  EXPECT_EQ(jg["found"], true);
+  EXPECT_EQ(jg["cp"].get<long>(), cp);
+  EXPECT_NE(jg["text"].get<std::string>().find("middle east"), std::string::npos);
 }
 
 TEST(JsonlCli, UsageErrorExit1) {
@@ -124,11 +134,16 @@ TEST(JsonlCli, StemBuildAndQuery) {
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
   EXPECT_EQ(j["stemmed"], true);
-  bool found = false;
-  for (const auto &r : j["results"])
-    if (r["docid"] == "doc-002")
-      found = true;
-  EXPECT_TRUE(found) << out;
+  ASSERT_FALSE(j["results"].empty()) << out;
+  // The match round-trips via --get to doc-002's body ("runs").
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  EXPECT_NE(json::parse(g)["text"].get<std::string>().find("runs"),
+            std::string::npos)
+      << g;
 }
 
 TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
@@ -142,16 +157,101 @@ TEST(JsonlCli, StemAgainstPlainBurrowExits2) {
   EXPECT_TRUE(j.contains("error"));
 }
 
-TEST(JsonlCli, GetDocument) {
-  std::string b = build_burrow("cli_get");
+TEST(JsonlCli, CoverSearchWordStar) {
+  std::string b = tmpdir() + "/cli_cover.burrow";
+  int code;
+  std::string idx = run(std::string(kIndexBin) +
+                            " --input test/jsonl/plain --burrow " + b +
+                            " --stem porter --overwrite",
+                        &code);
+  ASSERT_EQ(code, 0) << idx;
+  // --cover "run*" reaches doc-002 ("runs") via the word* family marker.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"run*\" --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  ASSERT_FALSE(j["results"].empty()) << out;
+  for (const auto &r : j["results"])
+    EXPECT_TRUE(r.contains("summary")); // cover-biased summary, not best_passage
+  // The match carries its cp; it resolves to doc-002's body ("runs").
+  long cp = j["results"][0]["cp"].get<long>();
+  std::string g = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                          std::to_string(cp) + " --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << g;
+  EXPECT_NE(json::parse(g)["text"].get<std::string>().find("runs"),
+            std::string::npos);
+}
+
+TEST(JsonlCli, CoverMidTokenStarExits2) {
+  std::string b = tmpdir() + "/cli_cover_badstar.burrow";
+  int code;
+  run(std::string(kIndexBin) + " --input test/jsonl/plain --burrow " + b +
+          " --stem porter --overwrite",
+      &code);
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"ru*n\"",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  EXPECT_TRUE(json::parse(out).contains("error"));
+}
+
+TEST(JsonlCli, CoverWordStarPlainBurrowExits2) {
+  std::string b = build_burrow("cli_cover_plain"); // built without --stem
   int code;
   std::string out = run(std::string(kQueryBin) + " --burrow " + b +
-                            " --get doc-004 --format jsonl",
+                            " --cover \"run*\"",
+                        &code);
+  ASSERT_EQ(code, 2) << out;
+  EXPECT_TRUE(json::parse(out).contains("error"));
+}
+
+TEST(JsonlCli, CoverWindowAndExcludeFlags) {
+  std::string b = tmpdir() + "/cli_cover_a2.burrow";
+  int code;
+  run(std::string(kIndexBin) + " --input test/jsonl/plain --burrow " + b +
+          " --stem porter --overwrite",
+      &code);
+  // --window runs and returns the matching doc with the A2 response fields.
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                            " --cover \"run*\" --window 50 --format jsonl",
+                        &code);
+  ASSERT_EQ(code, 0) << out;
+  json j = json::parse(out);
+  EXPECT_TRUE(j.contains("total_matches"));
+  EXPECT_TRUE(j.contains("atom_counts"));
+  ASSERT_FALSE(j["results"].empty()) << out;
+  long cp = j["results"][0]["cp"].get<long>();
+
+  // --exclude <cp> carves doc-002 (the only run* match): unjudged 0, results
+  // empty, total unchanged.
+  out = run(std::string(kQueryBin) + " --burrow " + b + " --cover \"run*\" --exclude " +
+                std::to_string(cp) + " --format jsonl",
+            &code);
+  ASSERT_EQ(code, 0) << out;
+  j = json::parse(out);
+  EXPECT_EQ(j["total_matches"], 1);
+  EXPECT_EQ(j["unjudged_matches"], 0);
+  EXPECT_TRUE(j["results"].empty()) << out;
+}
+
+TEST(JsonlCli, GetByCp) {
+  std::string b = build_burrow("cli_get");
+  int code;
+  // Get a cp from a search, then fetch by cp.
+  std::string s = run(std::string(kQueryBin) + " --burrow " + b +
+                          " --text elephants --format jsonl",
+                      &code);
+  ASSERT_EQ(code, 0) << s;
+  long cp = json::parse(s)["results"][0]["cp"].get<long>();
+  std::string out = run(std::string(kQueryBin) + " --burrow " + b + " --get " +
+                            std::to_string(cp) + " --format jsonl",
                         &code);
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
   EXPECT_EQ(j["found"], true);
-  EXPECT_EQ(j["docid"], "doc-004");
+  EXPECT_EQ(j["cp"].get<long>(), cp);
   EXPECT_NE(j["text"].get<std::string>().find("elephants"), std::string::npos);
 }
 

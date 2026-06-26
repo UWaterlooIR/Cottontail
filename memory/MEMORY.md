@@ -9,5 +9,9 @@
 - [ClimbMix corpus location](climbmix-corpus-location.md) — gzip'd JSONL shards at /share/corpora/climbmix-400b-corpus-jsonl/ (outside repo)
 - [SimpleWarren scaling model](simplewarren-scaling-model.md) — external-memory build, on-demand posting reads, WAND ranking; tuning levers + stats caveat
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
-- [PR: JSONL CLI](pr-jsonl-cli.md) — PRs #1, #3, #4 merged into main (JSONL CLI, stemming, agent tooling, HTTP server + thread pool); no active feature branch
+- [Dev burrow (climbmix-100k-porter)](dev-burrow-climbmix-100k.md) — new-style porter dev index for Searcher cp/sidecar work
+- [Backlog AC editing](backlog-acceptance-criteria-editing.md) — CLI gotchas (--acceptance-criteria dups!) + the safe AC-replace recipe
+- [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design takes ALL open backlog work (no new branches); gh-https push now wired
+- [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
+- [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace

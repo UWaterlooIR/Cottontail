@@ -14,7 +14,7 @@ json hit_json(const Hit &h) {
   json r;
   r["rank"] = h.rank;
   r["score"] = h.score;
-  r["docid"] = h.docid;
+  r["cp"] = h.cp;
   json bp;
   bp["start"] = h.best_passage.start;
   bp["end"] = h.best_passage.end;
@@ -71,9 +71,9 @@ json explain_json(const QuerySpec &spec, const ExplainResult &ex) {
   return o;
 }
 
-json get_json(const std::string &docid, bool found, const std::string &text) {
+json get_json(addr cp, bool found, const std::string &text) {
   json o;
-  o["docid"] = docid;
+  o["cp"] = cp;
   o["found"] = found;
   o["text"] = found ? text : std::string("");
   return o;
@@ -85,6 +85,33 @@ json count_json(const QuerySpec &spec, long count) {
   o["query_mode"] = spec.is_gcl ? "gcl" : "text";
   o["stemmed"] = spec.stem;
   o["match_count"] = count;
+  return o;
+}
+
+json cover_results_json(const CoverResponse &resp) {
+  // EXACTLY these four keys (B1's SearchResponse is extra="forbid"): no query
+  // echo, no elapsed_ms, no result_count/truncated.
+  json o;
+  o["total_matches"] = resp.total_matches;
+  o["unjudged_matches"] = resp.unjudged_matches;
+  json atoms = json::array();
+  for (const auto &a : resp.atom_counts) {
+    json e;
+    e["term"] = a.term;
+    e["count"] = a.count;
+    atoms.push_back(e);
+  }
+  o["atom_counts"] = atoms;
+  json arr = json::array();
+  for (const auto &h : resp.results) {
+    json r;
+    r["rank"] = h.rank;
+    r["score"] = h.score;
+    r["cp"] = h.cp;
+    r["summary"] = h.summary;
+    arr.push_back(r);
+  }
+  o["results"] = arr;
   return o;
 }
 
@@ -136,7 +163,7 @@ json describe_json() {
   tools.push_back(tool(
       "search_text",
       "Ranked full-text search over the corpus (cover-density proximity ranking). "
-      "Use first for broad recall. Returns ranked rows with docid, score and a "
+      "Use first for broad recall. Returns ranked rows with cp, score and a "
       "best-passage snippet; result_count and truncated indicate if there may be "
       "more.",
       st, {"query"}));
@@ -145,8 +172,8 @@ json describe_json() {
   sg["query"] = strp(
       "A GCL S-expression. Operators: (^ a b) smallest span containing BOTH; "
       "(+ a b) EITHER; (... a b) a then b in order/proximity; (>> :item (^ a b)) "
-      "rows CONTAINING both terms; (<< a :item) a contained in a row. Tags: :item "
-      "= a whole row, :docno = its id. Example: (>> :item (^ elephant vaccine)).");
+      "rows CONTAINING both terms; (<< a :item) a contained in a row. Tag :item "
+      "= a whole row. Example: (>> :item (^ elephant vaccine)).");
   sg["top_k"] = intp("Max rows to return (default 10).");
   sg["stem"] = boolp("Stem bare terms for recall.");
   sg["full_text"] = boolp("Return the whole row body instead of a snippet.");
@@ -155,6 +182,41 @@ json describe_json() {
       "Structured search for precision: Boolean, phrase, proximity, containment. "
       "Use when bag-of-words is too noisy. Same ranked output as search_text.",
       sg, {"query"}));
+
+  json cs;
+  cs["query"] = strp(
+      "A GCL cover query. Build it as a COVER: one facet per concept, AND-ed "
+      "with ^, e.g. (^ black bear* attack*). A bare word matches EXACTLY (use "
+      "for proper nouns / defining words). A word followed by * matches that "
+      "word AND its whole family (bear* -> bear, bears; write the FULL word "
+      "then *, never a shortened stem). (+ a b) is for SYNONYMS. \"a b\" is an "
+      "exact phrase (a trailing * is honored inside it too).");
+  cs["top_k"] = intp("Max documents to return (default 10).");
+  {
+    json items;
+    items["type"] = "integer";
+    json arrp;
+    arrp["type"] = "array";
+    arrp["items"] = items;
+    arrp["description"] =
+        "cps already judged (the cp of each prior result), to skip in this search "
+        "(the engine post-filters them so top_k fills with new documents).";
+    cs["exclude"] = arrp;
+  }
+  cs["window"] = intp("Summary window size in tokens, centered on each cover "
+                      "(default 75).");
+  cs["max_covers"] = intp("How many of the best (tightest) covers to include in "
+                          "the summary (default 1 -> a single focused snippet).");
+  cs["max_words"] = intp("Cap the whole summary to this many tokens (default 150; "
+                         "0 = uncapped). A cover wider than the cap is shown from "
+                         "its start and ends with ' ...'.");
+  tools.push_back(tool(
+      "cover_search",
+      "Ranked cover-density search for the ISJ agent. Ranks documents by "
+      "proximity of the query's facets and returns, per document, a "
+      "cover-biased extractive summary to read and judge. Use the word* family "
+      "marker for ordinary content words so you need not enumerate inflections.",
+      cs, {"query"}));
 
   json ex;
   ex["query"] = strp("The query to analyze.");
@@ -168,12 +230,12 @@ json describe_json() {
       ex, {"query"}));
 
   json gd;
-  gd["docid"] = strp("A docid from a prior search result.");
+  gd["cp"] = intp("A cp from a prior search result.");
   tools.push_back(tool(
       "get_document",
-      "Read the full body of one row by its docid (e.g. to read a candidate "
-      "before answering). Returns {docid, found, text}.",
-      gd, {"docid"}));
+      "Read the full body of one row by its cp (e.g. to read a candidate "
+      "before answering). Returns {cp, found, text}.",
+      gd, {"cp"}));
 
   json cm;
   cm["query"] = strp("The query to count.");

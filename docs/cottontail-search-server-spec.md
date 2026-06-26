@@ -75,6 +75,7 @@ URL. All bodies and responses are JSON; `Content-Type: application/json`.
 | `GET /describe` | yes | — | the tool schema array (`describe_json()`) |
 | `POST /tools/search_text` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "ranker"?, "snippet_chars"?}` | search results (`results_json`) |
 | `POST /tools/search_gcl` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "snippet_chars"?}` | search results |
+| `POST /tools/cover_search` | yes | `{"query", "top_k"?, "exclude"? : [cp,…], "window"?, "max_covers"?, "max_words"?}` | cover results (`cover_results_json`): `{"total_matches","unjudged_matches","atom_counts":[{term,count}],"results":[{rank,score,cp,summary}]}` |
 | `POST /tools/explain` | yes | `{"query", "is_gcl"?, "stem"?}` | explain (`explain_json`) |
 | `POST /tools/get_document` | yes | `{"docid"}` | `{"docid","found","text"}` |
 | `POST /tools/count_matches` | yes | `{"query", "is_gcl"?, "stem"?}` | `{"query","query_mode","stemmed","match_count"}` |
@@ -85,6 +86,26 @@ Notes:
   `result_count` and `truncated`).
 - Field names match the `--describe` schema exactly (`query`, not `q`) so the
   request body **is** the tool-call arguments object.
+- `cover_search` (the ISJ agent's tool, distinct from `search_gcl`) calls
+  `jsonl_cover_search` and returns `cover_results_json`. Its query may use the
+  `word*` family marker (per-term stemming via the burrow's Porter; see
+  `docs/stemming.md §6a`). A single-operand `+`/`^` group is identity (`(+ X)` and
+  `(^ X)` reduce to `X`), so a one-term facet is just the bare word. It requires a `--stem porter` burrow; a `word*` query
+  against a non-stemmed burrow, a non-trailing `*`, or malformed GCL → `400` with
+  an `{error, where}` body. The response is EXACTLY `total_matches`,
+  `unjudged_matches`, `atom_counts`, `results` — no `result_count`/`truncated`/
+  `query` (the Python client mirror is strict). `total_matches`/`unjudged_matches`
+  are document counts computed as a byproduct of the single ssr ranking pass
+  (`unjudged = total − excluded-cps-that-match`); `atom_counts` is per query leaf
+  `{term, count}` (occurrences, term as written, no `stream`); `exclude` is a list
+  of judged **cps** dropped by a direct **cp post-filter** on the ranked results
+  (over-fetch `top_k + |exclude|`), `window` sizes the summary. `max_covers`
+  (default `1`) selects how many of the **best (tightest) covers** the summary is
+  built from — `1` gives a single focused snippet; higher values include more
+  covers (windowed/merged/`" . . . "`-joined as before). `max_words` (default
+  `150`, `0` = uncapped) caps the whole summary to that many tokens; a cover wider
+  than the cap is shown from its **start** and ends with `" ..."`. The server is
+  stateless and cp-only: `exclude` is per-request and never opens a `:docno`/map.
 - Unknown tool name under `/tools/...` → `404`.
 
 ### Request → QuerySpec mapping
@@ -329,7 +350,11 @@ passing.
 
 ## 10. Python agent integration (follow-on, small)
 
-`examples/agent/search_agent.py` currently shells out to the binary in
+*Historical note: this describes the now-archived example agent
+(`archive/example-agent/`); the HTTP mode below was implemented. The maintained
+agent is the ISJ Searcher under `isj/`.*
+
+`archive/example-agent/search_agent.py` shells out to the binary in
 `SearchTools.call`. Add an HTTP mode (`--server-url http://127.0.0.1:8080`) where
 `call(name, args)` does `POST {server-url}/tools/{name}` with `json=args` and an
 `Authorization: Bearer` header, and `schema()` does `GET /describe`. Because the

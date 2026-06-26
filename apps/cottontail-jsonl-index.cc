@@ -1,5 +1,9 @@
 // cottontail-jsonl-index — index a directory tree of *.jsonl / *.jsonl.gz into a
-// static SimpleWarren burrow. See docs/cottontail-jsonl-cli-spec.md.
+// static SimpleWarren burrow. Each document is stored as its text plus one
+// ":item" annotation (no ":docno", no docno tokens); each docno is paired with
+// its cp in a flat <burrow>/docno-cp.tsv dump, from which the index CLI
+// (TASK-6.3) builds the cp<->docno SQLite map. See docs/indexing.md (doc-6,
+// doc-7) and docs/cottontail-jsonl-cli-spec.md.
 //
 // Progress/warnings -> stderr; the final summary -> stdout as JSON.
 
@@ -13,8 +17,8 @@ namespace {
 void usage(const char *prog) {
   std::cerr
       << "usage: " << prog << " --input <dir> --burrow <path> [options]\n"
-      << "  --docid-field <name>     (default docid)\n"
-      << "  --contents-field <name>  (default contents)\n"
+      << "  --docno-field <name>     JSON field holding the docno (default docid)\n"
+      << "  --text-field <name>      JSON field holding the text (default contents)\n"
       << "  --buffer <records>       builder buffer size (default 268435456)\n"
       << "  --overwrite              replace an existing burrow\n"
       << "  --limit <n>              index at most n rows\n"
@@ -50,10 +54,10 @@ int main(int argc, char **argv) {
       opts.input = next("--input"), have_input = true;
     else if (a == "--burrow")
       opts.burrow = next("--burrow"), have_burrow = true;
-    else if (a == "--docid-field")
-      opts.docid_field = next("--docid-field");
-    else if (a == "--contents-field")
-      opts.contents_field = next("--contents-field");
+    else if (a == "--docno-field")
+      opts.docno_field = next("--docno-field");
+    else if (a == "--text-field")
+      opts.text_field = next("--text-field");
     else if (a == "--buffer")
       opts.buffer = std::stoull(next("--buffer"));
     else if (a == "--limit")

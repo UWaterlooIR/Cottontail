@@ -1,5 +1,12 @@
 # Example: an LLM search agent over a Cottontail burrow
 
+> **⚠️ ARCHIVED — superseded proof-of-concept (TASK-5.4).** This was a POC built
+> against an earlier, looser tool contract. The **maintained** agent is the ISJ
+> Searcher under [`isj/`](../../isj/); its tool contract is the **`cover_search`**
+> tool reached via the isj client, and the way to run the search stack is
+> [`docs/running-the-search-stack.md`](../../docs/running-the-search-stack.md).
+> This directory is kept for reference only — do not build on it.
+
 A minimal ReAct loop that lets an LLM drive `cottontail-jsonl-query` as a set of
 tools (search / structured search / explain / read-document / count) via native
 function calling. It is a **reference example**, not production — see
@@ -70,8 +77,13 @@ uv run --project examples/agent python examples/agent/search_agent.py \
 The token is read from the environment (never a flag). Supply exactly one of
 `--server-url` (HTTP) or `--burrow` (subprocess).
 
-It prints the final answer and the cited docids; `--trace` shows the tool calls
-on stderr. Other flags: `--max-steps` (tool-call budget), `--reasoning low|medium|high`.
+It prints the final answer and the cited docids. `--trace` shows a tool-call
+summary on stderr after the run; `--verbose` streams a live transcript as the loop
+runs — each LLM round-trip (the full request messages and the reply payload, plus
+latency, finish reason, and token usage), the assistant's text, each tool call with
+its JSON args, and the full observation, all pretty-printed and wrapped to the
+terminal width. Other flags:
+`--max-steps` (tool-call budget), `--reasoning low|medium|high`.
 
 ## Test (no GPU / no network)
 

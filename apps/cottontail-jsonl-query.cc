@@ -14,6 +14,10 @@
 
 namespace {
 using cottontail::jsonl::count_json;
+using cottontail::jsonl::cover_results_json;
+using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverResponse;
+using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::describe_json;
 using cottontail::jsonl::explain_json;
 using cottontail::jsonl::ExplainResult;
@@ -26,9 +30,10 @@ void usage(const char *prog) {
   std::cerr << "usage:\n"
             << "  " << prog << " --burrow <path> --text \"<words>\" [options]\n"
             << "  " << prog << " --burrow <path> --gcl \"<expr>\" [options]\n"
+            << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--max-covers N] [--max-words N] [--exclude <cp>]...\n"
             << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
-            << "  " << prog << " --burrow <path> --get <docid>\n"
+            << "  " << prog << " --burrow <path> --get <cp>\n"
             << "  " << prog << " --describe   (print the agent tool schema as JSON)\n"
             << "  ... --batch   (one query object per stdin line -> JSONL)\n"
             << "options: --ranker icover|ssr|tiered  --top-k N  --full-text\n"
@@ -36,7 +41,7 @@ void usage(const char *prog) {
             << "  --stem   match the stemmed stream (index must be built --stem;\n"
             << "           ranks via cover density over stemmed terms)\n"
             << "  --count  report match_count for --text/--gcl instead of ranking\n"
-            << "  --get <docid>  fetch one row's full body by docid\n"
+            << "  --get <cp>  fetch one row's full body by cp (from a search result)\n"
             << "  --describe     emit the LLM tool schema (no burrow needed)\n"
             << "note: structured/precise queries are fast at any scale; a broad\n"
             << "      common-term ranked query can be second-scale on a very\n"
@@ -55,9 +60,13 @@ void usage(const char *prog) {
 
 int main(int argc, char **argv) {
   std::string burrow;
-  std::string text, gcl, get_docid;
+  std::string text, gcl, get_cp, cover;
   bool have_text = false, have_gcl = false, batch = false, explain = false;
-  bool have_get = false, count = false, describe = false;
+  bool have_get = false, count = false, describe = false, have_cover = false;
+  std::vector<cottontail::addr> cover_exclude; // --cover: judged cps to skip
+  size_t cover_window = 75;               // --cover: summary window in tokens
+  size_t cover_max_covers = 1;            // --cover: best K covers in the summary
+  size_t cover_max_words = 150;           // --cover: cap the summary in tokens
   QuerySpec base;
   std::string format = "json";
 
@@ -76,8 +85,19 @@ int main(int argc, char **argv) {
       text = next(), have_text = true;
     else if (a == "--gcl")
       gcl = next(), have_gcl = true;
+    else if (a == "--cover")
+      cover = next(), have_cover = true;
+    else if (a == "--exclude")
+      cover_exclude.push_back(
+          static_cast<cottontail::addr>(std::stoll(next())));
+    else if (a == "--window")
+      cover_window = std::stoul(next());
+    else if (a == "--max-covers")
+      cover_max_covers = std::stoul(next());
+    else if (a == "--max-words")
+      cover_max_words = std::stoul(next());
     else if (a == "--get")
-      get_docid = next(), have_get = true;
+      get_cp = next(), have_get = true;
     else if (a == "--count")
       count = true;
     else if (a == "--describe")
@@ -119,9 +139,10 @@ int main(int argc, char **argv) {
     return 1;
   }
   int modes = (have_text ? 1 : 0) + (have_gcl ? 1 : 0) + (have_get ? 1 : 0) +
-              (batch ? 1 : 0);
+              (batch ? 1 : 0) + (have_cover ? 1 : 0);
   if (modes != 1) {
-    std::cerr << "supply exactly one of --text / --gcl / --get / --batch\n";
+    std::cerr
+        << "supply exactly one of --text / --gcl / --cover / --get / --batch\n";
     usage(argv[0]);
     return 1;
   }
@@ -132,11 +153,34 @@ int main(int argc, char **argv) {
     die(error, "open");
 
   if (have_get) {
+    cottontail::addr cp;
+    try {
+      cp = static_cast<cottontail::addr>(std::stoll(get_cp));
+    } catch (...) {
+      die("--get takes a cp (an integer from a prior search result)", "get");
+    }
     std::string body;
     bool found = false;
-    if (!cottontail::jsonl::jsonl_get(warren, get_docid, &body, &found, &error))
+    if (!cottontail::jsonl::jsonl_get(warren, cp, &body, &found, &error))
       die(error, "get");
-    std::cout << get_json(get_docid, found, body).dump(format == "jsonl" ? -1 : 2)
+    std::cout << get_json(cp, found, body).dump(format == "jsonl" ? -1 : 2)
+              << "\n";
+    warren->end();
+    return 0;
+  }
+
+  if (have_cover) {
+    CoverSpec spec;
+    spec.query = cover;
+    spec.top_k = base.top_k;
+    spec.exclude = cover_exclude;
+    spec.window = cover_window;
+    spec.max_covers = cover_max_covers;
+    spec.max_words = cover_max_words;
+    CoverResponse resp;
+    if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &resp, &error))
+      die(error, "cover_search");
+    std::cout << cover_results_json(resp).dump(format == "jsonl" ? -1 : 2)
               << "\n";
     warren->end();
     return 0;

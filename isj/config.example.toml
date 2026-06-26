@@ -1,0 +1,90 @@
+# isj configuration file — example
+#
+# Copy this file to isj/config.toml and edit as needed.
+# config.toml is git-ignored; this example file is the checked-in reference.
+#
+# Usage (from repo root):
+#   cp isj/config.example.toml isj/config.toml
+
+# ---------------------------------------------------------------------------
+# [llm.<name>]
+# Named LLM profiles. Each profile defines a vLLM endpoint and the model
+# served on it. Profiles are referenced by name in [agents.<role>].
+# ---------------------------------------------------------------------------
+[llm.default]
+
+# Base URL of the vLLM endpoint (OpenAI-compatible API).
+# Local deployments typically use the loopback address.
+base_url = "http://127.0.0.1:8000/v1"
+
+# Must match the --served-model-name option used when launching the vLLM instance.
+model = "gpt.oss.120b"
+
+# Name of the environment variable holding the API key for this endpoint.
+# If not set here, the key defaults to "EMPTY", which works for unauthenticated
+# local vLLM instances. If set, the named environment variable must exist at
+# startup or an error is raised.
+# api_key_env = "MY_VLLM_API_KEY"
+
+# ---------------------------------------------------------------------------
+# [agents.<role>]
+# Maps each agent role to an implementation class and a named LLM profile.
+# class: fully-qualified Python class path — the CLI uses load_class() to
+#        resolve and instantiate it. To swap implementations, point this at
+#        a different class with the same interface.
+# llm:   name of the [llm.*] profile to use for this agent.
+# ---------------------------------------------------------------------------
+[agents.analyst]
+class = "isj_agent.agents.analyst.Analyst"
+llm = "default"
+
+[agents.searcher]
+class = "isj_agent.agents.searcher.Searcher"
+llm = "default"
+# Optional recall/budget knobs (B2 defaults shown; the Searcher keeps searching
+# until queries dry up, not a fixed search count):
+# top_k = 10
+# window = 75
+# max_turns = 150
+
+# ---------------------------------------------------------------------------
+# [index]
+# Settings for the cp-native index front door (cottontail-index / the
+# isj_agent.index CLI), which builds a burrow from JSONL and its cp<->docno map.
+# ---------------------------------------------------------------------------
+[index]
+
+# Path to the C++ cottontail-jsonl-index binary the front door subprocesses.
+# A relative path is resolved against the repository root; an absolute path is
+# used as-is. Override per-invocation with --index-bin. The default points at the
+# Bazel build output.
+binary = "bazel-bin/apps/cottontail-jsonl-index"
+
+# ---------------------------------------------------------------------------
+# [query]
+# Settings for the docno fetch helper (cottontail-fetch), which resolves
+# docno -> cp (Python, isj_agent.docno_map) and reads the text via the C++ query
+# binary by cp.
+# ---------------------------------------------------------------------------
+[query]
+
+# Path to the C++ cottontail-jsonl-query binary (relative paths resolve against
+# the repository root). Override per-invocation with --query-bin.
+binary = "bazel-bin/apps/cottontail-jsonl-query"
+
+# ---------------------------------------------------------------------------
+# [cottontail_http_json_server]
+# The running cottontail-jsonl-server the Searcher queries over HTTP
+# (cover_search / get_document). Start it (from the repo root) over a
+# --stem porter burrow, e.g.:
+#   bazel-bin/apps/cottontail-jsonl-server --burrow my.burrow --port 8080
+# A loopback (127.0.0.1) server runs without auth by default; off-loopback
+# needs a bearer token (set api_key_env to the env var holding it).
+# ---------------------------------------------------------------------------
+[cottontail_http_json_server]
+base_url = "http://127.0.0.1:8080"
+# The burrow the server is serving. Its <burrow>/docno-cp.sqlite is the cp<->docno
+# map the CLI opens read-only to rewrite cp->docno when writing run output. Omit (or
+# point at a docno-less burrow) to persist raw cps; --burrow overrides per run.
+# burrow = "my-stemmed.burrow"
+# api_key_env = "COTTONTAIL_API_TOKEN"   # bearer-token env var; omit on a no-token loopback server

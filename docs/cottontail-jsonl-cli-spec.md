@@ -34,8 +34,11 @@ These decisions were made deliberately after measuring the engine at scale (see 
    ever wanted, it would be a clearly separate, opt-in offline tool — out of scope here.)
 3. **Index type:** a static, disk-based **`SimpleWarren`** burrow. The indexer writes it;
    the query tool opens it **read-only**.
-4. **Indexed content:** only the `contents` field (body text) plus **`docid`** (the
-   document identifier). **All other JSON fields are ignored** — including `id` (its
+4. **Indexed content:** only the **text** (the `contents` field by default) is
+   tokenized; the **docno** (the `docid` field by default) is recorded out-of-index
+   in the cp↔docno map (§3.4), never tokenized. Field names are configurable
+   (`--docno-field` / `--text-field`); internal terms are `docno`/`text` (doc-7).
+   **All other JSON fields are ignored** — including `id` (its
    semantics are unknown and it must not be used), `source_file`, `row_number`, `mode`,
    and any future fields. They are not indexed, stored, or returned.
 5. **Retrieval unit:** one **row = one document**. Ranking and dedup happen at row
@@ -116,8 +119,8 @@ read-only by `SimpleWarren`.
 |---|---|---|
 | `--input <dir>` | (required) | Root directory; recurse for `*.jsonl`/`*.jsonl.gz`. |
 | `--burrow <path>` | (required) | Output burrow path. |
-| `--docid-field <name>` | `docid` | JSON field used as the document identifier. |
-| `--contents-field <name>` | `contents` | JSON field holding the body text. |
+| `--docno-field <name>` | `docid` | JSON field holding the docno (document id). |
+| `--text-field <name>` | `contents` | JSON field holding the text (body). |
 | `--buffer <records>` | 256Mi | Builder token/annotation buffer size (records). Raise on big-RAM hosts to spill less; see §3.5. |
 | `--overwrite` | off | If the burrow exists, replace it; otherwise fail rather than silently append. |
 | `--limit <n>` | none | Index at most `n` rows total (smoke tests). |
@@ -135,22 +138,39 @@ is no matching flag on the query side. Default retrieval is exact surface tokens
 ### 3.3 JSONL parsing rules
 
 - One JSON object per line; blank lines skipped silently.
-- A line that fails to parse, or is missing the docid/contents field, is **skipped,
-  counted, and logged** at `--verbose`. It must **not** abort the run unless `--strict`.
-- Only `docid` and `contents` are read; every other field (including `id`) is ignored.
+- A line that fails to parse, is missing the docno/text field, or is
+  **contentless** (empty docno/text, or text with no indexable tokens) is
+  **skipped, counted, and logged** at `--verbose`. It must **not** abort the run
+  unless `--strict`.
+- A **duplicate docno** is **not** detected at index time (cp-native: the indexer
+  stores no docno). Both rows are indexed and both appear in the flat dump; docno
+  uniqueness is enforced later, when the index CLI (TASK-6.3) builds the SQLite
+  map (its `UNIQUE` index fails the build, naming the offender).
+- Only the docno field (default `docid`) and text field (default `contents`) are
+  read; every other field (including `id`) is ignored.
 
 ### 3.4 Indexing model (one row = one document)
 
-For each row, drive the builder directly (the `treccast21-build.cc` idiom), producing two
-structural annotations per row:
+For each row, the **content indexer** (`ContentIndexer`, `src/content_index.h`)
+stores **only the text**, bracketed by one structural annotation, and hands back
+the document's `cp`:
 
 ```
-add_text(docid)            -> (p_id,  q_id)      ; add_annotation(":docno", p_id, q_id)
-add_text(contents)         -> (p_body, q_body)   ; add_annotation(":item",  p_id, q_body)
+cp = add_document(text):
+  add_text(text) -> (p_body, q_body) ; add_annotation(":item", p_body, q_body)
+  return cp = p_body
 ```
 
-- `:item` spans the **whole row** (id + body) and is the document/container extent.
-- `:docno` marks the identifier so every hit resolves back to its `docid`.
+- `:item` spans the **body** and is the document/container extent.
+- The docno is **not** tokenized and there is **no `:docno`** annotation. Indexing
+  the docno would bloat the inverted index with tokens we never search (e.g.
+  `shard_*`) — see `docs/indexing.md` §2.
+- The unique internal id is the `:item` start address `cp`. `jsonl_index` pairs
+  each docno with its `cp` in a flat `<burrow>/docno-cp.tsv` dump (one
+  `docno<TAB>cp` line per indexed row), from which the index CLI (TASK-6.3) builds
+  the `cp ↔ docno` **SQLite** map (`docno-cp.sqlite`), whose `UNIQUE` index
+  enforces docno uniqueness. See `docs/indexing.md` (decision doc-6 cp-native,
+  doc-7 naming).
 - Body text is indexed **verbatim**.
 
 Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokenizer**
@@ -158,8 +178,7 @@ Use the **`hashing` featurizer** and, by default, the **`utf8` (Unicode) tokeniz
 folding). `--tokenizer ascii` selects the byte-level `ascii`/`noxml` tokenizer
 instead (faster, but non-ASCII bytes are separators, so e.g. `café` → `caf`).
 Neither tokenizer needs body sanitization: `<`, `>`, `&` are ordinary characters.
-The container/id are referenced at query time as the bare GCL tags `:item` and
-`:docno`.
+The container is referenced at query time as the bare GCL tag `:item`.
 
 ### 3.5 Build path & resource behavior
 
@@ -202,6 +221,20 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 
 ## 4. Program 2 — `cottontail-jsonl-query`
 
+> ⚠️ **cp-native (TASK-5.12 / A3 done; cover_search pending A1/A2).** The
+> **non-cover** query path is now **cp-native** (decisions doc-6/doc-7/doc-8):
+> `--text`/`--gcl` rank within `:item` and each hit carries its **`cp`** (the
+> `:item` start); `--get <cp>` fetches a row's body by `cp`; `get_document` returns
+> `{cp, found, text}`. **The engine is cp-only — it never reads a `docno`/map**
+> (doc-8): `docno ↔ cp` is Python-only (`isj_agent.docno_map`), and a human
+> "fetch by docno" uses the **`cottontail-fetch`** helper (TASK-6.4): `--docno`
+> does `docno → cp → --get <cp>`, and `--cp <cp>` does the reverse — `cp → docno`
+> (via the same map) plus the text. Some response-shape snippets **below still show the
+> old `docid` key** and the `:docno` recovery — those are being updated; the
+> authoritative current shapes are `cp` (search/get) per doc-7/doc-8.
+> `--cover`/`cover_search` is a **separate tool** still being reworked under
+> A1/A2 (TASK-5.1/5.2) and is the only part still mid-cutover.
+
 ### 4.1 Synopsis
 
 ```
@@ -231,17 +264,38 @@ of the process.
 - **`--ranker <icover|ssr|tiered>`** — optional ranker selection for `--text`
   (default `icover`). All three are cover-density / proximity rankers requiring no
   precompute. (There is intentionally no BM25/LMD/PRF option — see §0.2.)
+- **`--cover "<cover query>"`** — the ISJ agent's search tool (`cover_search`,
+  distinct from `--gcl`/`search_gcl`). A GCL cover query that may use the **`word*`
+  family marker** (a full word + trailing `*` → the word *and* its morphological
+  family; bare terms stay exact; honored inside quoted phrases). A single-operand
+  group is identity — `(+ X)` and `(^ X)` reduce to `X`, so a one-term facet is just
+  the bare word (no wrapper needed). Ranks `:item` by
+  `ssr` cover density and returns `{rank, score, cp, summary}` where `summary`
+  is a cover-biased extractive summary (see §4.8). Requires a `--stem porter`
+  burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`
+  (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`.
+  `--exclude <docid>` (repeatable) carves judged documents out of the search;
+  `--window N` sets the summary window in tokens; `--max-covers N` (default `1`)
+  selects how many of the best (tightest) covers the summary is built from (`1` =
+  a single focused snippet); `--max-words N` (default `150`, `0` = uncapped) caps
+  the whole summary to that many tokens (a cover wider than the cap is shown from
+  its start and ends with ` ...`). The response also carries
+  `total_matches`/`unjudged_matches`/`atom_counts` (see §4.8).
 
-Exactly one of `--text` / `--gcl` (or `--batch`) must be supplied.
+Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 
 ### 4.3 Options
 
 | Option | Default | Meaning |
 |---|---|---|
 | `--burrow <path>` | (required) | Burrow to open read-only as a `SimpleWarren`. |
-| `--text` / `--gcl` | — | Query (see 4.2). |
+| `--text` / `--gcl` / `--cover` | — | Query (see 4.2). |
 | `--ranker <name>` | `icover` | Cover-density ranker for `--text` (`icover`/`ssr`/`tiered`). |
 | `--top-k <n>` | 10 | Number of ranked rows to return. |
+| `--window <n>` | 75 | `--cover` only: summary window size in tokens, centered on each cover. |
+| `--max-covers <n>` | 1 | `--cover` only: build the summary from the best (tightest) `n` covers (`1` = a single focused snippet). |
+| `--max-words <n>` | 150 | `--cover` only: cap the whole summary to `n` tokens (`0` = uncapped); a cover wider than the cap starts at the cover and ends with ` ...`. |
+| `--exclude <docid>` | — | `--cover` only, repeatable: carve a judged document out of the search. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
 | `--snippet-chars <n>` | 240 | Max chars of the best-passage text when `--full-text` is off. |
 | `--explain` | off | Dry run: parse + cheap diagnostics, no ranking (see 4.5). |
@@ -329,6 +383,64 @@ each shaped like 4.4 with an added `"input_index"` field. A malformed input line
 - Open the burrow **once** and reuse the handle. (A one-shot CLI needs one handle; if you
   ever thread query handling, clone per thread.)
 
+### 4.8 Cover-search output schema (`--cover`)
+
+Request: `{ "query", "top_k"?, "exclude"? : [cp,…], "window"? : tokens }`.
+
+```jsonc
+{
+  "total_matches": 50,          // DOCUMENTS matching the query in :item (ignores exclude)
+  "unjudged_matches": 4,        // matching documents NOT excluded; results are drawn from these
+  "atom_counts": [              // per query leaf -> total OCCURRENCES of the feature it resolves to
+    { "term": "black",   "count": 1840 },
+    { "term": "bear*",   "count": 9004 }
+  ],
+  "results": [
+    { "rank": 1, "score": 12.3, "cp": 12345,
+      "summary": "…cover-biased extractive summary…" }
+  ]
+}
+```
+
+These four keys are the whole response — nothing else (the Python client mirror
+is strict).
+
+- `total_matches` / `unjudged_matches` — **document** counts (matching `:item`
+  rows), exact, computed as a **byproduct of the single ssr ranking pass** (doc-6
+  §4). `total_matches` ignores `exclude`; `unjudged_matches` =
+  `total_matches − (excluded cps that actually match the query)` (excluding a cp
+  that does not match, or is absent, leaves it unchanged). Both are independent of
+  `top_k`.
+- `atom_counts` — one `{term, count}` per query **leaf** (the content terms: bare
+  words and `word*` markers; operators/`:tags` skipped, phrase words counted
+  individually, deduped). `term` is **as written** (`bear*`, never `porter:…`);
+  `count` is the total **occurrences** (collection frequency) of the feature it
+  resolves to, `0` when nothing matches (a dead atom). No `stream` field.
+- `exclude` — judged **cps** (the `cp` of each prior result) to skip. Exclusion is
+  a direct **cp post-filter** on the ranked results (doc-6 §4): ranking over-fetches
+  `depth = top_k + |exclude|`, drops hits whose `cp` is in the set, and returns up
+  to `top_k` survivors. Exact (integer set membership), stateless (per-request),
+  and never opens a `:docno`/map.
+- `window` — summary window size in tokens (default 75); affects only the
+  `summary` text, never `rank`/`score`.
+- `max_covers` — how many of the best (tightest, smallest-span) covers the
+  `summary` is built from (default `1` → a single focused snippet); affects only
+  the `summary` text, never `rank`/`score`.
+- `max_words` — cap the whole `summary` to this many tokens (default `150`, `0` =
+  uncapped). A cover wider than the cap is shown from its **start** (not centered)
+  and the cut extent ends with ` ...`; affects only the `summary` text.
+- `rank` — 1-based position within the returned (post-exclusion) results,
+  restarting at 1 each call, no gaps; NOT an absolute corpus position or the TREC
+  submission rank. `score` — `ssr` cover density (sum over the document's covers
+  of `1/(K+q−p)`), per-document and exclusion-invariant.
+- `summary` — a cover-biased extractive summary built from the best `max_covers`
+  (default 1, the single tightest) of the query's covers *within* that document: a
+  `window`-token window centered on each chosen cover, shifted inward at the body
+  edges, overlapping/touching windows merged, non-contiguous extents joined by
+  ` . . . `. It **replaces** `best_passage`.
+- Errors (exit `2`, `{error, where}`): a `word*` query against a non-stemmed
+  burrow; a non-trailing `*`; malformed GCL.
+
 ---
 
 ## 5. Why these choices (agent-usability rationale)
@@ -378,7 +490,8 @@ Pass `--gcl` expressions through unchanged. The operator tokens are:
 | `<<` | CONTAINED_IN | left operand contained in right |
 | `>>` | CONTAINING | left operand containing right |
 
-Useful patterns for this corpus (container tag `:item`, id tag `:docno`):
+Useful patterns for this corpus (container tag `:item`; the docid is no longer a
+GCL tag — it lives in the sidecar, see §3.4):
 
 - Documents containing both terms: `(>> :item (^ influenza vaccination))`
 - Documents with the terms in order/proximity: `(>> :item (... influenza vaccination))`
@@ -393,7 +506,7 @@ Useful patterns for this corpus (container tag `:item`, id tag `:docno`):
 This is the exact path proven to build and query a static `SimpleWarren` over the corpus
 (see §9 for measured behavior). Bind to the real API; names below are accurate.
 
-**Index build (per the `treccast21-build.cc` idiom):**
+**Index build (via the generic indexer; new-style, see §3.4 / `docs/indexing.md`):**
 
 ```cpp
 auto working    = Working::mkdir(burrow, &error);
@@ -401,13 +514,15 @@ auto featurizer = Featurizer::make("hashing", "", &error, working);
 auto tokenizer  = Tokenizer::make("ascii", "noxml", &error);
 auto builder    = SimpleBuilder::make(working, featurizer, tokenizer, &error,
                                       buffer_records, buffer_records);
-// for each row:
-//   add_text(docid)    -> p_id, q_id ; add_annotation(":docno", p_id, q_id, 0.0)
-//   add_text(contents) -> p_b,  q_b  ; add_annotation(":item",  p_id, q_b,  0.0)
-builder->finalize(&error);                 // writes idx/pst/txt + dna; this IS the only precompute
+auto indexer    = DocnoContentsIndexer::make(builder, working, &error);
+// for each row:  indexer->add_document(docid, contents, &error);
+//   -> add_text(contents) + one ":item" over the body; records (cp, docid).
+//      NO add_text(docid), NO ":docno".
+indexer->finalize(&error);  // builder->finalize() + writes the cp<->docno sidecar
 ```
 
-**Query (read-only):**
+**Query (read-only)** — *old-model, pending the cp/sidecar redo (see the §4 banner);
+the `:docno` recovery below does not work against a new-style burrow:*
 
 ```cpp
 auto warren = Warren::make("simple", burrow, &error);

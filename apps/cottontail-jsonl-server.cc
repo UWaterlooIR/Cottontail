@@ -23,6 +23,9 @@
 #include "src/nlohmann.h"
 
 namespace {
+using cottontail::jsonl::CoverHit;
+using cottontail::jsonl::CoverResponse;
+using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
@@ -95,6 +98,18 @@ QuerySpec spec_from(const json &b, bool is_gcl) {
   return s;
 }
 
+CoverSpec cover_spec_from(const json &b) {
+  CoverSpec s;
+  s.query = b.at("query").get<std::string>();
+  s.top_k = b.value("top_k", s.top_k);
+  s.window = b.value("window", s.window);
+  s.max_covers = b.value("max_covers", s.max_covers);
+  s.max_words = b.value("max_words", s.max_words);
+  if (b.contains("exclude"))
+    s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
+  return s;
+}
+
 void fail(httplib::Response &res, int code, const std::string &msg,
           const std::string &where) {
   json e;
@@ -102,6 +117,15 @@ void fail(httplib::Response &res, int code, const std::string &msg,
   e["where"] = where;
   res.status = code;
   res.set_content(e.dump(), "application/json");
+}
+
+// Access log. Writers may run concurrently (one per worker thread), so serialize
+// whole lines through one mutex to keep them from interleaving. To stderr, like
+// the startup/exception logging. The Authorization header is never logged.
+std::mutex log_mu;
+void log_line(const std::string &line) {
+  std::lock_guard<std::mutex> lock(log_mu);
+  std::cerr << line << "\n";
 }
 
 void usage(const char *prog) {
@@ -211,11 +235,37 @@ int main(int argc, char **argv) {
   svr.new_task_queue = [threads] { return new httplib::ThreadPool(threads); };
 
   svr.set_exception_handler(
-      [](const httplib::Request &, httplib::Response &res, std::exception_ptr) {
+      [](const httplib::Request &req, httplib::Response &res,
+         std::exception_ptr ep) {
+        // The client gets a generic 500, but log the real cause so internal
+        // errors aren't opaque (recovering the message otherwise means a crash).
+        std::string what = "unknown exception";
+        try {
+          if (ep)
+            std::rethrow_exception(ep);
+        } catch (const std::exception &e) {
+          what = e.what();
+        } catch (...) {
+        }
+        std::cerr << "internal error handling " << req.method << " " << req.path
+                  << ": " << what << "\n";
         fail(res, 500, "internal error", "server");
       });
 
-  // Auth: runs before every route except the public health check.
+  // Response summary, logged after each request is handled.
+  svr.set_logger([](const httplib::Request &req, const httplib::Response &res) {
+    log_line("[res] " + req.method + " " + req.path + " -> " +
+             std::to_string(res.status) + " (" +
+             std::to_string(res.body.size()) + " bytes)");
+  });
+  // The request body (the query/params) is only readable once a route handler
+  // runs -- the pre-routing handler fires before httplib reads the body -- so each
+  // request is logged AT HANDLER ENTRY (via log_req below), before the work that
+  // could crash the process. The pre-routing handler does auth only.
+  auto log_req = [](const httplib::Request &req) {
+    log_line("[req] " + req.method + " " + req.path +
+             (req.body.empty() ? "" : " body=" + req.body));
+  };
   svr.set_pre_routing_handler(
       [&](const httplib::Request &req, httplib::Response &res) {
         if (req.path == "/healthz" || !auth_required)
@@ -229,20 +279,23 @@ int main(int argc, char **argv) {
         return httplib::Server::HandlerResponse::Handled;
       });
 
-  svr.Get("/healthz", [&](const httplib::Request &, httplib::Response &res) {
+  svr.Get("/healthz", [&](const httplib::Request &req, httplib::Response &res) {
+    log_req(req);
     json o;
     o["status"] = "ok";
     o["burrow"] = burrow;
     res.set_content(o.dump(), "application/json");
   });
 
-  svr.Get("/describe", [&](const httplib::Request &, httplib::Response &res) {
+  svr.Get("/describe", [&](const httplib::Request &req, httplib::Response &res) {
+    log_req(req);
     res.set_content(cottontail::jsonl::describe_json().dump(),
                     "application/json");
   });
 
   auto search = [&](bool is_gcl) {
     return [&, is_gcl](const httplib::Request &req, httplib::Response &res) {
+      log_req(req);
       json b;
       try {
         b = json::parse(req.body);
@@ -272,8 +325,37 @@ int main(int argc, char **argv) {
   svr.Post("/tools/search_text", search(false));
   svr.Post("/tools/search_gcl", search(true));
 
+  svr.Post("/tools/cover_search",
+           [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
+             json b;
+             try {
+               b = json::parse(req.body);
+             } catch (...) {
+               return fail(res, 400, "bad JSON body", "request");
+             }
+             CoverSpec spec;
+             try {
+               spec = cover_spec_from(b);
+             } catch (...) {
+               return fail(res, 400, "missing/invalid 'query'", "request");
+             }
+             CoverResponse resp;
+             std::string e;
+             bool ok = provider.with(
+                 [&](std::shared_ptr<cottontail::Warren> &w) {
+                   return cottontail::jsonl::jsonl_cover_search(w, spec, &resp,
+                                                                &e);
+                 });
+             if (!ok)
+               return fail(res, 400, e, "cover_search");
+             res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
+                             "application/json");
+           });
+
   svr.Post("/tools/explain",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);
@@ -296,33 +378,34 @@ int main(int argc, char **argv) {
 
   svr.Post("/tools/get_document",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);
              } catch (...) {
                return fail(res, 400, "bad JSON body", "request");
              }
-             std::string docid;
+             cottontail::addr cp;
              try {
-               docid = b.at("docid").get<std::string>();
+               cp = b.at("cp").get<cottontail::addr>();
              } catch (...) {
-               return fail(res, 400, "missing/invalid 'docid'", "request");
+               return fail(res, 400, "missing/invalid 'cp'", "request");
              }
              std::string body, e;
              bool found = false;
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
-                   return cottontail::jsonl::jsonl_get(w, docid, &body, &found,
-                                                       &e);
+                   return cottontail::jsonl::jsonl_get(w, cp, &body, &found, &e);
                  });
              if (!ok)
                return fail(res, 400, e, "get");
-             res.set_content(cottontail::jsonl::get_json(docid, found, body).dump(),
+             res.set_content(cottontail::jsonl::get_json(cp, found, body).dump(),
                              "application/json");
            });
 
   svr.Post("/tools/count_matches",
            [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
              json b;
              try {
                b = json::parse(req.body);

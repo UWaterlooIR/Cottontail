@@ -2,6 +2,7 @@
 *.swp
 *.burrow
 *.meadow
+isj/runs/
 *temp*
 /*test*
 !/*test*/
@@ -15,3 +16,5 @@ MODULE.bazel.lock
 /bazel-out
 /bazel-testlogs
 /Scrapheap
+/isj/config.toml
+/build-all.log

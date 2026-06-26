@@ -129,6 +129,19 @@ Real binaries (build then run from `bazel-bin/apps/`):
   (`--convert` / `--merge`). **Hazel is a work in progress and not ready for use
   — don't build on this path (see the Warren table below).**
 
+**JSONL search stack (index → query → server → agent).** How to build and run
+these — with copy-paste commands — is in
+[docs/running-the-search-stack.md](docs/running-the-search-stack.md), the **single
+source** for running them (it links on to the design specs). Don't duplicate run
+instructions elsewhere; point at that guide.
+
+- `//apps:cottontail-jsonl-index` — build a burrow from `*.jsonl`/`*.jsonl.gz`.
+- `//apps:cottontail-jsonl-query` — ranked text / GCL search over a burrow.
+- `//apps:cottontail-jsonl-server` — HTTP/JSON server exposing the same tools.
+- `isj/` — the maintained **ISJ Searcher** agent (Analyst → per-intent Searcher
+  over the server's `cover_search` tool). The earlier proof-of-concept agent is
+  archived under `archive/example-agent/` (superseded; do not build on it).
+
 `*.burrow` and `*.meadow` directories are local working indexes and are gitignored.
 
 ## Architecture (orientation)
@@ -183,3 +196,26 @@ Directory map:
   bump the pin to silence it.
 - A C++20 ambiguous-`operator==` warning in `test/simple_posting.cc:226` /
   `src/simple_posting.h:27` (make `operator==` a `const` member).
+
+<!-- BACKLOG.MD GUIDELINES START -->
+<CRITICAL_INSTRUCTION>
+
+## Backlog.md Workflow
+
+This project uses Backlog.md for task and project management.
+
+**For every user request in this project, run `backlog instructions overview` before answering or taking action.**
+
+Use the overview to decide whether to search, read, create, or update Backlog tasks.
+
+Use the detailed guides when needed:
+- `backlog instructions task-creation` for creating or splitting tasks
+- `backlog instructions task-execution` for planning and implementation workflow
+- `backlog instructions task-finalization` for completion and handoff
+
+Use `backlog <command> --help` before running unfamiliar commands. Help shows options, fields, and examples.
+
+Do not edit Backlog task, draft, document, decision, or milestone markdown files directly. Use the `backlog` CLI so metadata, relationships, and history stay consistent.
+
+</CRITICAL_INSTRUCTION>
+<!-- BACKLOG.MD GUIDELINES END -->

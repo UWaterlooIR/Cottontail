@@ -99,7 +99,8 @@ TEST(JsonlServer, EndToEnd) {
     ASSERT_TRUE(r);
     EXPECT_EQ(r->status, 401);
   }
-  // search_text with the token -> ranked results.
+  // search_text with the token -> ranked results carrying cp (cp-native).
+  long cp = -1;
   {
     auto r = cli.Post("/tools/search_text", auth, R"({"query":"elephants"})",
                       "application/json");
@@ -107,21 +108,22 @@ TEST(JsonlServer, EndToEnd) {
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
     ASSERT_FALSE(j["results"].empty());
-    EXPECT_EQ(j["results"][0]["docid"], "doc-004");
+    cp = j["results"][0]["cp"].get<long>();
     EXPECT_TRUE(j.contains("result_count"));
     EXPECT_TRUE(j.contains("truncated"));
   }
-  // get_document round-trips; unknown docid is found:false (still 200).
+  // get_document round-trips by cp; an unknown cp is found:false (still 200).
   {
-    auto r = cli.Post("/tools/get_document", auth, R"({"docid":"doc-004"})",
-                      "application/json");
+    auto r = cli.Post("/tools/get_document", auth,
+                      "{\"cp\":" + std::to_string(cp) + "}", "application/json");
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
     EXPECT_EQ(j["found"], true);
+    EXPECT_EQ(j["cp"].get<long>(), cp);
     EXPECT_NE(j["text"].get<std::string>().find("elephants"), std::string::npos);
 
-    auto r2 = cli.Post("/tools/get_document", auth, R"({"docid":"nope"})",
+    auto r2 = cli.Post("/tools/get_document", auth, R"({"cp":999999999})",
                        "application/json");
     ASSERT_TRUE(r2);
     EXPECT_EQ(r2->status, 200);
@@ -156,6 +158,118 @@ TEST(JsonlServer, EndToEnd) {
     EXPECT_EQ(names.count("search_text"), 1u);
     EXPECT_EQ(names.count("get_document"), 1u);
     EXPECT_EQ(names.count("count_matches"), 1u);
+    EXPECT_EQ(names.count("cover_search"), 1u); // A1 tool advertised
+    // cover_search advertises its A2 request fields (AC#15).
+    for (const auto &t : j)
+      if (t["function"]["name"] == "cover_search") {
+        const auto &props = t["function"]["parameters"]["properties"];
+        EXPECT_TRUE(props.contains("query"));
+        EXPECT_TRUE(props.contains("top_k"));
+        EXPECT_TRUE(props.contains("exclude"));
+        EXPECT_TRUE(props.contains("window"));
+      }
+  }
+
+  ::kill(pid, SIGTERM);
+  int status = 0;
+  ::waitpid(pid, &status, 0);
+}
+
+// cover_search over a stemmed burrow: a word* query round-trips and returns
+// {rank,score,cp,summary}; a malformed cover query is a 400.
+TEST(JsonlServer, CoverSearch) {
+  std::string burrow = tmpdir() + "/server_cover.burrow";
+  std::string build = std::string(kIndexBin) +
+                      " --input test/jsonl/plain --burrow " + burrow +
+                      " --stem porter --overwrite >/dev/null 2>&1";
+  ASSERT_EQ(std::system(build.c_str()), 0);
+
+  int port = free_port();
+  pid_t pid = start_server(burrow, port);
+  ASSERT_GT(pid, 0);
+
+  httplib::Client cli("127.0.0.1", port);
+  cli.set_connection_timeout(2, 0);
+  bool up = false;
+  for (int i = 0; i < 100 && !up; ++i) {
+    if (auto r = cli.Get("/healthz"); r && r->status == 200)
+      up = true;
+    else
+      ::usleep(50 * 1000);
+  }
+  ASSERT_TRUE(up) << "server did not start";
+  const httplib::Headers auth = {
+      {"Authorization", std::string("Bearer ") + kToken}};
+
+  // run* reaches doc-002 ("runs") via the word* family marker; the A2 fields are
+  // present and there are NO legacy fields (B1's SearchResponse is extra=forbid).
+  long cp = -1;
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"run*"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["total_matches"], 1);
+    EXPECT_EQ(j["unjudged_matches"], 1);
+    ASSERT_TRUE(j.contains("atom_counts"));
+    for (const auto &a : j["atom_counts"]) {
+      EXPECT_TRUE(a.contains("term"));
+      EXPECT_TRUE(a.contains("count"));
+      EXPECT_FALSE(a.contains("stream")); // no stream field (A2 AC#3)
+    }
+    // exactly the four response keys -- no result_count/truncated/stemmed/query.
+    EXPECT_EQ(j.size(), 4u) << r->body;
+    EXPECT_FALSE(j.contains("result_count"));
+    EXPECT_FALSE(j.contains("truncated"));
+    EXPECT_FALSE(j.contains("stemmed"));
+    ASSERT_FALSE(j["results"].empty()) << r->body;
+    for (const auto &res : j["results"]) {
+      EXPECT_TRUE(res.contains("rank"));
+      EXPECT_TRUE(res.contains("score"));
+      EXPECT_TRUE(res.contains("cp"));
+      EXPECT_TRUE(res.contains("summary"));
+    }
+    cp = j["results"][0]["cp"].get<long>();
+    // The cp resolves to doc-002 ("runs") via get_document.
+    auto g = cli.Post("/tools/get_document", auth,
+                      "{\"cp\":" + std::to_string(cp) + "}", "application/json");
+    ASSERT_TRUE(g);
+    EXPECT_NE(json::parse(g->body)["text"].get<std::string>().find("runs"),
+              std::string::npos);
+  }
+  // exclude (the matched cp) carves doc-002 (the only run* match): unjudged 0,
+  // results empty, total unchanged.
+  {
+    auto r = cli.Post("/tools/cover_search", auth,
+                      "{\"query\":\"run*\",\"exclude\":[" + std::to_string(cp) +
+                          "]}",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["total_matches"], 1);
+    EXPECT_EQ(j["unjudged_matches"], 0);
+    EXPECT_TRUE(j["results"].empty()) << r->body;
+  }
+  // Statelessness: a follow-up request with no exclusion sees doc-002 again
+  // (the prior exclude_docids did not persist).
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"run*"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["unjudged_matches"], 1);
+    EXPECT_FALSE(j["results"].empty());
+  }
+  // A non-trailing '*' is a 400 with an error body.
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"ru*n"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->status, 400) << r->body;
+    EXPECT_TRUE(json::parse(r->body).contains("error"));
   }
 
   ::kill(pid, SIGTERM);
@@ -203,18 +317,21 @@ TEST(JsonlServer, ConcurrentRequests) {
           auto s = cli.Post("/tools/search_text", auth,
                             R"({"query":"elephants"})", "application/json");
           json js;
-          if (!s || s->status != 200 || (js = json::parse(s->body))["results"].empty() ||
-              js["results"][0]["docid"] != "doc-004") {
+          if (!s || s->status != 200 ||
+              (js = json::parse(s->body))["results"].empty() ||
+              !js["results"][0].contains("cp")) {
             failures++;
             continue;
           }
+          long cp = js["results"][0]["cp"].get<long>();
           auto c = cli.Post("/tools/count_matches", auth,
                             R"({"query":"quick fox"})", "application/json");
           if (!c || c->status != 200 || json::parse(c->body)["match_count"] != 2) {
             failures++;
             continue;
           }
-          auto g = cli.Post("/tools/get_document", auth, R"({"docid":"doc-004"})",
+          auto g = cli.Post("/tools/get_document", auth,
+                            "{\"cp\":" + std::to_string(cp) + "}",
                             "application/json");
           if (!g || g->status != 200 || json::parse(g->body)["found"] != true)
             failures++;
