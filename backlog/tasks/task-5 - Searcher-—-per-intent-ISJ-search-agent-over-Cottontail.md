@@ -1,10 +1,10 @@
 ---
 id: TASK-5
 title: Searcher — per-intent ISJ search agent over Cottontail
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-17 12:47'
-updated_date: '2026-06-25 21:23'
+updated_date: '2026-06-26 19:58'
 labels:
   - searcher
 dependencies: []
@@ -105,3 +105,9 @@ created: 2026-06-25 21:23
 NAMING convention recorded in doc-7: docno (identity) and text (body) are the canonical internal terms; the indexer maps the raw JSON keys via docno_field/text_field (defaults docid/contents). Applies across all Searcher subtasks; cp stays the on-the-wire working id (doc-6).
 ---
 <!-- COMMENTS:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+The per-intent ISJ Searcher is complete. Engine track: cover_search (A1/A1b/A2 — word* family stemming, CoverResponse aggregate, enrichment with counts/atom_counts/exclude=cp/window) and the cp-native query-path cutover (A3). isj track: the engine contract + SearchEngine Protocol + scripted FakeEngine (B1), and the Searcher agent + guardrailed loop controller (B2). Integration track: HttpSearchEngine (C1), the run-output writer (C2, cp->docno at persistence), and the CLI orchestrator Analyst -> per-intent Searcher -> write_run (C3, the real-LLM live gate). The proof-of-concept example agent was archived (5.4) and the run/usage docs updated to the isj path (5.10). All 11 subtasks Done; validated end-to-end against the 1M-doc burrow with a live vLLM.
+<!-- SECTION:FINAL_SUMMARY:END -->

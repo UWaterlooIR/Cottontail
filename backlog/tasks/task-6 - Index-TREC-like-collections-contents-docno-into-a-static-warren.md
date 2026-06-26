@@ -1,10 +1,10 @@
 ---
 id: TASK-6
 title: Index TREC-like collections (contents + docno) into a static warren
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-19 03:40'
-updated_date: '2026-06-21 18:46'
+updated_date: '2026-06-26 19:58'
 labels:
   - cpp
 dependencies: []
@@ -49,3 +49,9 @@ exclusion + counts inline, `get_document` / `read` on `cp`, and the Searcher key
 on `cp` — is **TASK-5 engine track** (A1/A2/A3) and the B/C tracks, not this
 umbrella.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+cp-native TREC-like indexing is complete. A generic content indexer in src/ (6.1: add_document(text) -> cp, no docno/sidecar in C++); the JSONL new-style index produced via the generic indexer (6.2); the cp-native index front door + cp<->docno SQLite map (6.3: jsonl-index dumps a flat docno<TAB>cp file, the Python CLI loads it into <burrow>/docno-cp.sqlite); and the human docno fetch helper (6.4: cottontail-fetch, docno->cp->text, plus the cp->docno+text reverse added in TASK-15). The C++ engine stays cp-only and never opens the map (doc-8). All 4 subtasks Done.
+<!-- SECTION:FINAL_SUMMARY:END -->
