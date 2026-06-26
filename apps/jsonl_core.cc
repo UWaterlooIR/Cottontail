@@ -826,6 +826,21 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
         if (p >= r.cp)
           covers.emplace_back(p, q);
     }
+    // Summarize only the BEST K covers (K = max_covers, >= 1): the K tightest
+    // (smallest span q-p; ties -> earlier position), then put them back in document
+    // order so the snippet reads left to right. K=1 gives a single focused window;
+    // K>1 reuses cover_summary's overlap-merge and " . . . " join over just those K.
+    size_t k = std::max<size_t>(1, spec.max_covers);
+    if (covers.size() > k) {
+      auto tighter = [](const std::pair<addr, addr> &a,
+                        const std::pair<addr, addr> &b) {
+        addr sa = a.second - a.first, sb = b.second - b.first;
+        return sa != sb ? sa < sb : a.first < b.first;
+      };
+      std::nth_element(covers.begin(), covers.begin() + k, covers.end(), tighter);
+      covers.resize(k);
+      std::sort(covers.begin(), covers.end()); // back to document order
+    }
     h.summary = cover_summary(warren, covers, r.cp, r.cq, (addr)spec.window);
     out->results.push_back(std::move(h));
   }

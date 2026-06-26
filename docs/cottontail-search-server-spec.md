@@ -75,7 +75,7 @@ URL. All bodies and responses are JSON; `Content-Type: application/json`.
 | `GET /describe` | yes | — | the tool schema array (`describe_json()`) |
 | `POST /tools/search_text` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "ranker"?, "snippet_chars"?}` | search results (`results_json`) |
 | `POST /tools/search_gcl` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "snippet_chars"?}` | search results |
-| `POST /tools/cover_search` | yes | `{"query", "top_k"?, "exclude"? : [cp,…], "window"?}` | cover results (`cover_results_json`): `{"total_matches","unjudged_matches","atom_counts":[{term,count}],"results":[{rank,score,cp,summary}]}` |
+| `POST /tools/cover_search` | yes | `{"query", "top_k"?, "exclude"? : [cp,…], "window"?, "max_covers"?}` | cover results (`cover_results_json`): `{"total_matches","unjudged_matches","atom_counts":[{term,count}],"results":[{rank,score,cp,summary}]}` |
 | `POST /tools/explain` | yes | `{"query", "is_gcl"?, "stem"?}` | explain (`explain_json`) |
 | `POST /tools/get_document` | yes | `{"docid"}` | `{"docid","found","text"}` |
 | `POST /tools/count_matches` | yes | `{"query", "is_gcl"?, "stem"?}` | `{"query","query_mode","stemmed","match_count"}` |
@@ -98,7 +98,10 @@ Notes:
   (`unjudged = total − excluded-cps-that-match`); `atom_counts` is per query leaf
   `{term, count}` (occurrences, term as written, no `stream`); `exclude` is a list
   of judged **cps** dropped by a direct **cp post-filter** on the ranked results
-  (over-fetch `top_k + |exclude|`), `window` sizes the summary. The server is
+  (over-fetch `top_k + |exclude|`), `window` sizes the summary. `max_covers`
+  (default `1`) selects how many of the **best (tightest) covers** the summary is
+  built from — `1` gives a single focused snippet; higher values include more
+  covers (windowed/merged/`" . . . "`-joined as before). The server is
   stateless and cp-only: `exclude` is per-request and never opens a `:docno`/map.
 - Unknown tool name under `/tools/...` → `404`.
 

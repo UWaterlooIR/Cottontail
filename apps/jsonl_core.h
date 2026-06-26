@@ -102,6 +102,7 @@ struct CoverSpec {
   size_t top_k = 10;
   std::vector<addr> exclude; // judged cp integers to skip (A2; direct cp post-filter)
   size_t window = 75;        // summary window in tokens (A2)
+  size_t max_covers = 1;     // summary is built from the best K=max_covers covers
 };
 
 struct CoverHit {

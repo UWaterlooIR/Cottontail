@@ -103,6 +103,7 @@ CoverSpec cover_spec_from(const json &b) {
   s.query = b.at("query").get<std::string>();
   s.top_k = b.value("top_k", s.top_k);
   s.window = b.value("window", s.window);
+  s.max_covers = b.value("max_covers", s.max_covers);
   if (b.contains("exclude"))
     s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
   return s;

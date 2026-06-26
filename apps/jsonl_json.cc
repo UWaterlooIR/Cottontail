@@ -205,6 +205,8 @@ json describe_json() {
   }
   cs["window"] = intp("Summary window size in tokens, centered on each cover "
                       "(default 75).");
+  cs["max_covers"] = intp("How many of the best (tightest) covers to include in "
+                          "the summary (default 1 -> a single focused snippet).");
   tools.push_back(tool(
       "cover_search",
       "Ranked cover-density search for the ISJ agent. Ranks documents by "

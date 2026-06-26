@@ -272,7 +272,9 @@ of the process.
   burrow; a `word*` query against a non-stemmed burrow, or a non-trailing `*`
   (e.g. `at*ack`), exits `2` with an error object. See `docs/stemming.md §6a`.
   `--exclude <docid>` (repeatable) carves judged documents out of the search;
-  `--window N` sets the summary window in tokens. The response also carries
+  `--window N` sets the summary window in tokens; `--max-covers N` (default `1`)
+  selects how many of the best (tightest) covers the summary is built from (`1` =
+  a single focused snippet). The response also carries
   `total_matches`/`unjudged_matches`/`atom_counts` (see §4.8).
 
 Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
@@ -286,6 +288,7 @@ Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 | `--ranker <name>` | `icover` | Cover-density ranker for `--text` (`icover`/`ssr`/`tiered`). |
 | `--top-k <n>` | 10 | Number of ranked rows to return. |
 | `--window <n>` | 75 | `--cover` only: summary window size in tokens, centered on each cover. |
+| `--max-covers <n>` | 1 | `--cover` only: build the summary from the best (tightest) `n` covers (`1` = a single focused snippet). |
 | `--exclude <docid>` | — | `--cover` only, repeatable: carve a judged document out of the search. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
 | `--snippet-chars <n>` | 240 | Max chars of the best-passage text when `--full-text` is off. |
@@ -414,14 +417,18 @@ is strict).
   and never opens a `:docno`/map.
 - `window` — summary window size in tokens (default 75); affects only the
   `summary` text, never `rank`/`score`.
+- `max_covers` — how many of the best (tightest, smallest-span) covers the
+  `summary` is built from (default `1` → a single focused snippet); affects only
+  the `summary` text, never `rank`/`score`.
 - `rank` — 1-based position within the returned (post-exclusion) results,
   restarting at 1 each call, no gaps; NOT an absolute corpus position or the TREC
   submission rank. `score` — `ssr` cover density (sum over the document's covers
   of `1/(K+q−p)`), per-document and exclusion-invariant.
-- `summary` — a cover-biased extractive summary built from the query's covers
-  *within* that document: a `window`-token window centered on each cover, shifted
-  inward at the body edges, overlapping/touching windows merged, non-contiguous
-  extents joined by ` . . . `. It **replaces** `best_passage`.
+- `summary` — a cover-biased extractive summary built from the best `max_covers`
+  (default 1, the single tightest) of the query's covers *within* that document: a
+  `window`-token window centered on each chosen cover, shifted inward at the body
+  edges, overlapping/touching windows merged, non-contiguous extents joined by
+  ` . . . `. It **replaces** `best_passage`.
 - Errors (exit `2`, `{error, where}`): a `word*` query against a non-stemmed
   burrow; a non-trailing `*`; malformed GCL.
 

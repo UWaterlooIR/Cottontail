@@ -648,9 +648,12 @@ TEST(JsonlCover, ResponseShape) {
   w->end();
 }
 
-// AC#13 / AC#14: with two well-separated covers the summary is two extents
-// joined by the spaced-dots separator; nearby covers merge into one extent (no
-// separator). Built in code to make the gap exceed the default 75-token window.
+// AC#13 / AC#14 + TASK-12: with max_covers >= 2, two well-separated covers give
+// two extents joined by the spaced-dots separator while nearby covers merge into
+// one extent (no separator). With the DEFAULT max_covers=1 only the single best
+// (tightest) cover is summarized, so a far-apart doc shows ONE extent (no gap) and
+// does not sprawl across the body. Built in code to make the gap exceed the
+// default 75-token window.
 TEST(JsonlCover, SummaryWindowingAndGap) {
   std::string filler;
   for (int i = 0; i < 200; i++)
@@ -666,23 +669,37 @@ TEST(JsonlCover, SummaryWindowingAndGap) {
   ASSERT_TRUE(build_rows("cover_gap", rows, "porter", &burrow, &error)) << error;
   auto w = open_burrow(burrow, &error);
   ASSERT_NE(w, nullptr) << error;
-  CoverResponse hits;
-  CoverSpec spec;
-  spec.query = "needle";
-  spec.top_k = 10;
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
-  std::string g1, g2;
-  for (const auto &h : hits.results) {
-    std::string body = body_at(w, h.cp);
-    if (body.find("tail words") != std::string::npos) // g-1
-      g1 = h.summary;
-    if (body.find("once more") != std::string::npos) // g-2
-      g2 = h.summary;
-  }
-  ASSERT_FALSE(g1.empty());
-  ASSERT_FALSE(g2.empty());
-  EXPECT_NE(g1.find(" . . . "), std::string::npos); // far apart -> gap shown
-  EXPECT_EQ(g2.find(" . . . "), std::string::npos); // adjacent -> merged
+  // Pull the g-1 (far-apart) and g-2 (adjacent) summaries from one run.
+  auto summaries = [&](size_t max_covers) {
+    CoverResponse hits;
+    CoverSpec spec;
+    spec.query = "needle";
+    spec.top_k = 10;
+    spec.max_covers = max_covers;
+    EXPECT_TRUE(jsonl_cover_search(w, spec, &hits, &error)) << error;
+    std::string g1, g2;
+    for (const auto &h : hits.results) {
+      std::string body = body_at(w, h.cp);
+      if (body.find("tail words") != std::string::npos) // g-1
+        g1 = h.summary;
+      if (body.find("once more") != std::string::npos) // g-2
+        g2 = h.summary;
+    }
+    return std::make_pair(g1, g2);
+  };
+  // K=2: both covers summarized -> g-1's far-apart windows show the gap; g-2's
+  // adjacent windows merge into one extent.
+  auto [g1_2, g2_2] = summaries(2);
+  ASSERT_FALSE(g1_2.empty());
+  ASSERT_FALSE(g2_2.empty());
+  EXPECT_NE(g1_2.find(" . . . "), std::string::npos); // far apart -> gap shown
+  EXPECT_EQ(g2_2.find(" . . . "), std::string::npos); // adjacent -> merged
+  // K=1 (default): only the single best cover -> g-1 is one extent (no gap) and
+  // stays near that cover instead of sprawling to the doc tail.
+  auto [g1_1, g2_1] = summaries(1);
+  ASSERT_FALSE(g1_1.empty());
+  EXPECT_EQ(g1_1.find(" . . . "), std::string::npos);   // single best cover -> no gap
+  EXPECT_EQ(g1_1.find("tail words"), std::string::npos); // does not reach the tail
   w->end();
 }
 
