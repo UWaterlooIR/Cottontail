@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 16:48'
+updated_date: '2026-06-27 16:58'
 labels:
   - python
   - isj
@@ -441,7 +441,7 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
   size), and `reasoning_effort` (DEFAULT **"high"**, gpt-oss-120b's top tier — the dominant
   throughput/cost lever; constrains only the final-channel output).
 - `[agents.searcher]` — `fetch_k` (the LARGE per-request batch size, default 200; see "Fetching
-  the ranked list"), `window`, `max_queries` (default 100), `max_query_retries`.
+  the ranked list"), `window`, `max_queries` (default 100).
 - Loop knobs (controller): `nonrelevant_streak` (default 5), `max_judgments` (default 1000 —
   the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into a per-intent
   `intent_budget`), `max_doc_chars` (DEFAULT **50000** — generous; the scout shows KV is NOT the
@@ -537,17 +537,21 @@ Detailed, reviewed implementation plan (grounded in the existing isj_agent code 
 
 SETTLED DECISIONS: (1) WAVE JUDGING — judge each fetched batch in rank-order waves sized to [agents.judger].concurrency (DEFAULT 15, the dev-GPU throughput peak per scout_judger.py; KV is NOT the constraint). (2) RETAIN ALL — every NEW doc judged is recorded/reported, even docs past the streak trip within the tripping wave (judged in parallel; never discarded); the streak only stops further descent. (3) STREAK non-relevant = grade 0 by default (relevant_grade_threshold=1, configurable). (4) reasoning_effort DEFAULT 'high' (gpt-oss-120b top tier; dominant throughput/cost lever; forwarded via extra_body; constrains only the final channel). (5) max_doc_chars DEFAULT 50000 (generous; bounds prefill not KV). (6) JUDGE FAILURE aborts the intent -> partial SearcherResult (.error set). (7) one PR, staged commits.
 
-INTERFACES: Searcher(client,model).propose(messages)->ProposeResult{query,...} with a single search tool, tool_choice='required'. Judger(client,model,*,concurrency=15,reasoning_effort='high').judge(intent,docs)->list[JudgeCall{verdict:Verdict|None,usage,duration_ms,error}] over a ThreadPoolExecutor; one doc per call; Verdict{reason,grade:Literal[0,1,2,3]} guided-decoded, final-channel only; cp never sent. Controller(searcher,judger,engine,*,fetch_k=200,window=75,nonrelevant_streak=5,relevant_grade_threshold=1,concurrency=15,max_doc_chars=50000,max_queries=100,max_list_depth=None).run(intent,intent_budget)->SearcherResult. Orchestrator(analyst,controller,*,max_judgments=1000) splits intent_budget=max_judgments//num_intents.
+CONCURRENCY IS ONE KNOB: [agents.judger].concurrency is the in-flight cap AND the wave width. The Controller derives the wave width from judger.concurrency (do NOT add a second knob).
+
+INTERFACES: Searcher(client,model).propose(messages)->ProposeResult{query,...} with a single search tool, tool_choice='required'. Judger(client,model,*,concurrency=15,reasoning_effort='high').judge(intent,docs)->list[JudgeCall{verdict:Verdict|None,usage,duration_ms,error}] over a ThreadPoolExecutor; one doc per call; Verdict{reason,grade:Literal[0,1,2,3]} guided-decoded, final-channel only; cp never sent. Controller(searcher,judger,engine,*,fetch_k=200,window=75,nonrelevant_streak=5,relevant_grade_threshold=1,max_doc_chars=50000,max_queries=100,max_list_depth=None).run(intent,intent_budget)->SearcherResult; wave width = judger.concurrency. Orchestrator(analyst,controller,*,max_judgments=1000) splits intent_budget=max_judgments//num_intents.
 
 PROTOCOL: replace Judgement with Verdict{reason,grade Literal[0,1,2,3]} in protocol/search.py; RankedEntry.grade -> Literal[0,1,2,3].
 
 STAGED COMMITS (one PR on searcher-judger):
 1. protocol — Verdict (replaces Judgement); RankedEntry.grade -> Literal[0,1,2,3].
-2. Judger — judger.py + judger.md (decomposed 0-3 trust prompt) + test_judger.py.
+2. Judger — judger.py + judger.md (decomposed 0-3 trust prompt); guided-decode scoped to the final channel only (LIVE-VERIFY on the vLLM/gpt-oss stack, per AC #3); reasoning_effort via extra_body; + test_judger.py.
 3. Searcher — rewrite searcher.py + searcher.md + reworked test_searcher.py.
-4. controller.py — wave-judging + retain-all + grade-0 streak + dedup + summarize + trace; test_controller.py (waves, retain-all, streak, continuation fetch, budget, self-correction, judge-failure partial).
-5. wiring — orchestrator.py (budget split), cli.py, config.example.toml/config.toml ([agents.judger] concurrency=15 + reasoning_effort='high'; [loop] knobs incl max_doc_chars=50000, relevant_grade_threshold=1), run_output.py event rewrites, test_orchestrator.py.
+4. controller.py — wave-judging (waves of judger.concurrency) + retain-all + grade-0 streak + dedup (per-query seen exclude, prior-judged counted) + summarize + trace; test_controller.py (waves, retain-all, streak, continuation fetch, budget, self-correction, judge-failure partial).
+5. wiring — orchestrator.py (budget split); cli.py (build searcher/judger/controller; pass max_judgments); config.example.toml/config.toml: [agents.judger] (concurrency=15, reasoning_effort='high'), [agents.searcher] (fetch_k=200, window, max_queries=100), [loop] (nonrelevant_streak=5, max_judgments=1000, max_doc_chars=50000, relevant_grade_threshold=1, optional max_list_depth); run_output.py cp->docno rewrites for judge/revisit/search/list_exhausted; test_orchestrator.py.
 6. docs — isj/README.md.
+
+RISKS (from the Description, not blocking the code shape): final-channel scoping is a serving-stack property (live-verify, step 2); Searcher conversation grows across many queries (v1 keeps full history; trimming is future).
 
 The scout harness isj/scouting/scout_judger.py is already committed; its findings (decode-bound, KV<=21%, peak ~16, chose 15) are recorded in the task Description under 'Judger serving scout — findings'.
 <!-- SECTION:PLAN:END -->
