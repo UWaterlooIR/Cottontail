@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 14:09'
+updated_date: '2026-06-27 15:13'
 labels:
   - python
   - isj
@@ -23,6 +23,7 @@ references:
   - isj/isj_agent/run_output.py
   - isj/README.md
   - docs/searcher-agent-lessons-June-16-2026.md
+  - docs/judger-agent-research-notes.md
   - isj/runs/croup
 priority: high
 ordinal: 30000
@@ -44,9 +45,11 @@ Touched/new files:
 - REWRITE `isj_agent/agents/searcher.py` + `searcher.md` — a thin GCL query proposer (no judging).
 - EDIT `isj_agent/orchestrator.py` — call the controller per intent instead of `Searcher.run`;
   split the run-total `max_judgments` into a per-intent `intent_budget` and pass it down.
-- EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry`; add trace event types.
+- EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry` (drop `RankedEntry.grade`
+  bound to `0-3`); add trace event types.
 - EDIT `isj_agent/protocol/search.py` — replace `Judgement{cp,grade,reason}` (for the removed
-  batch judge tool) with `Verdict{grade,reason}` (the Judger's guided output; cp is controller-side).
+  batch judge tool) with `Verdict{reason, grade}` (the Judger's guided output; `reason` BEFORE
+  `grade`; `grade: Literal[0,1,2,3]`; cp is controller-side — see the schema under "The prompts").
 - EDIT `isj_agent/run_output.py` — extend cp->docno rewriting to the new event shapes.
 - EDIT `config.example.toml` + `config.toml` — `[agents.judger]` role + new loop knobs.
 - EDIT `isj/README.md` — document the Searcher/Judger split.
@@ -101,7 +104,8 @@ turn after turn (see "De-duplication" below).
   (which facets/terms surfaced relevant vs. non-relevant material). REUSE the load-bearing GCL
   guidance from the current `searcher.md` (TASK-5.6 /
   `docs/searcher-agent-lessons-June-16-2026.md`), MINUS everything about judging, grades, and
-  the `judge` tool. There is NO 0-4 scale in the Searcher.
+  the `judge` tool. There is NO relevance scale in the Searcher (the 0-3 rubric lives only in
+  the Judger).
 - It keeps IMMEDIATE error self-correction: a malformed query (EngineError) or a zero-result
   query comes straight back as the next `search` tool result, in-thread, so it reformulates
   right away (same behavior as today's engine_error / dry feedback).
@@ -111,17 +115,31 @@ turn after turn (see "De-duplication" below).
   cover-biased summary (orientation) PLUS the FULL document text (`engine.read(cp)`), truncated
   to `max_doc_chars`. The cp is NOT sent to the model — it is only the controller's handle on
   which document it asked about. Already-judged docs are NEVER re-sent to the Judger.
-- OUTPUT: a `Verdict { grade (0-4), reason }` per candidate — **NO cp**. The controller already
+- OUTPUT: a `Verdict { reason, grade (0-3) }` per candidate — **NO cp**. The controller already
   knows which document each call was for, so it pairs the returned Verdict with that cp itself;
   burdening the model with the cp adds nothing and risks a transposed/hallucinated id. Guided-
   decoded via `Verdict.model_json_schema()` (the same json-schema pattern the Analyst uses), so
-  grades are constrained to 0-4. (`Verdict` replaces the old `Judgement{cp,grade,reason}`, which
-  existed only for the now-removed batch `judge` tool.)
+  the grade is constrained to the four levels 0-3. **Field order matters: `reason` is declared
+  BEFORE `grade`** — under guided JSON decoding the model fills properties in declaration order,
+  so the justification is generated before the grade is committed. (`Verdict` replaces the old
+  `Judgement{cp,grade,reason}`, which existed only for the now-removed batch `judge` tool; see
+  the schema under "The prompts" below.)
+- SCALE: the canonical UMBRELA / TREC **0-3** scale (NOT 0-4) — for calibration and direct
+  comparability with TREC DL qrels. `judger.md` decomposes the judgment into steps inside ONE
+  call (intent -> topical match -> **trust** -> scope -> grade) rather than a single holistic
+  leap, and — because ClimbMix is open-web, mixed-quality text — a TRUST step lets low
+  credibility (spam, fabrication, promotional filler, contradiction) CAP the grade. The `reason`
+  must cite a concrete span/detail, not just assert. No persona ("You are a relevance assessor"
+  framing is dropped — topicality + steps carry it).
 - ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
-  simultaneously via a `ThreadPoolExecutor`. `judger.md` carries the UMBRELA 0-4 umbrella
-  judging scheme (the 0-4 rubric currently inlined in `searcher.md` moves here and is expanded
-  into a proper umbrella prompt that frames the passage + full document against the intent);
-  the draft is under "The prompts" below.
+  simultaneously via a `ThreadPoolExecutor`; the draft prompt + schema are under "The prompts".
+- REASONING-MODEL serving (both candidate models — gpt-oss-120b, Gemma 4 — reason before
+  answering): guided decoding must constrain ONLY the post-thinking / `final`-channel output,
+  **never the thinking trace** (constraining the whole completion strangles the decomposition).
+  The four-step reasoning happens in the model's thinking; `reason` is only the surfaced
+  one-to-three-sentence justification — do NOT add a scratchpad/analysis field. `reasoning_effort`
+  (gpt-oss: medium/high) / thinking-mode (Gemma 4) is a quality<->throughput knob (it trades
+  against `judge_concurrency`).
 
 ### Controller (the per-intent loop) — `controller.py`
 Owns paging, the streak stop, the judgment budget, error self-correction routing, and the
@@ -134,7 +152,7 @@ These are the starting drafts for `searcher.md` and `judger.md`. The Searcher's 
 the LOAD-BEARING text from the current `searcher.md` (TASK-5.6 /
 `docs/searcher-agent-lessons-June-16-2026.md`) — keep it close to verbatim; the rest is
 reframed for query-only exploration. The Judger is an UMBRELA-style full-document assessor on
-the project's 0-4 scale.
+the canonical UMBRELA / TREC 0-3 scale, with a trust step for open-web (ClimbMix) text.
 
 ### `searcher.md` (Searcher — query author)
 
@@ -165,7 +183,7 @@ Build each query as a COVER: one facet per concept, AND-ed with ^. Example for
 Broaden a facet by SYNONYM, e.g. (+ attack* maul* encounter*) — never by adding plurals.
 
 Each turn, issue ONE query with the `search` tool. You then see the NEW documents your
-query surfaced — each already graded for you (0-4) with a short reason — plus a note of how
+query surfaced — each already graded for you (0-3) with a short reason — plus a note of how
 many results at those ranks had ALREADY been judged by your earlier queries.
 
 Use what you see to choose the next query:
@@ -181,30 +199,37 @@ Use what you see to choose the next query:
 Keep devising new, precise queries to cover the question's whole space of relevant documents.
 ```
 
-### `judger.md` (Judger — UMBRELA-style full-document assessor)
+### `judger.md` (Judger — UMBRELA-style full-document assessor, 0-3 + trust)
+
+Decomposed (intent -> topical -> trust -> scope -> grade), trust-capped, evidence-anchored, no
+persona. The "Return ONLY..." tail is intentionally absent — guided decoding owns the output
+format (the per-field rubric/reason guidance lives in the `Verdict` schema below).
 
 ```
-You are a relevance assessor. Given a QUESTION and a DOCUMENT, decide how well the document
-satisfies the information need behind the question, and assign an integer grade on this scale:
-  0 — Irrelevant: does not address the question.
-  1 — Marginal: an on-topic mention, but no information that helps answer it.
-  2 — Related: some useful information, but partial or tangential.
-  3 — Relevant: directly answers the question with useful, on-topic information.
-  4 — Highly relevant: a focused, complete answer to the question.
+You are assessing how well a DOCUMENT satisfies the information need behind a search
+query, on a 0–3 relevance scale:
+  0 — Irrelevant: the document has nothing to do with the query.
+  1 — Related: on the query's topic, but does not answer it.
+  2 — Partial: some of the answer, but incomplete, unclear, or buried among unrelated material.
+  3 — Perfectly relevant: dedicated to the query, with a complete and direct answer.
 
-Work in steps:
-1. Infer the underlying intent of the question — what would actually satisfy the searcher.
-2. Read the DOCUMENT and measure how well its content meets that intent — coverage,
-   directness, specificity. Judge it on the information it ACTUALLY contains, not on keyword
-   overlap or topical vibe.
-3. Choose the single best-fitting grade above.
+Reason through these steps before grading:
+1. Intent — what would actually satisfy the searcher: the need behind the query, not its
+   surface words.
+2. Topical match — how well the content the document ACTUALLY contains meets that need
+   (coverage, directness, specificity). Grade on substance, never on keyword overlap or
+   topical resemblance; a document can repeat the query's terms and answer nothing.
+3. Trust — whether the content is credible enough to rely on (watch for spam, fabrication,
+   promotional filler, internal contradiction, unsupported claims). Untrustworthy content
+   does not satisfy the need however on-topic it appears; let low trust cap the grade.
+4. Scope — judge the FULL document text below (it may be truncated). The representative
+   passage is cover-biased orientation only; do not let one strong passage lift the grade if
+   the rest of the document is thin.
 
-Return ONLY the structured result: an integer `grade` (0-4) and a one-sentence `reason`
-that justifies it.
+QUESTION / INTENT:
+{intent}
 
-QUESTION: {intent}
-
-A representative matching passage (to orient you — judge the FULL document, not just this):
+REPRESENTATIVE PASSAGE (orientation only — judge the full document, not just this):
 {summary}
 
 DOCUMENT:
@@ -213,8 +238,41 @@ DOCUMENT:
 
 `{intent}`, `{summary}` (the surfaced cover-biased summary), and `{document}` (the full body
 via `engine.read(cp)`, truncated to `max_doc_chars`) are filled by the controller per
-candidate; the `grade`/`reason` are guided-decoded from `Verdict.model_json_schema()` (no cp —
-the prompt never mentions one).
+candidate; no `cp` appears in the prompt. The `reason`/`grade` are guided-decoded from the
+`Verdict` schema (next), which carries the per-field rubric.
+
+### `Verdict` (Judger output schema — `protocol/search.py`)
+
+`reason` BEFORE `grade` (guided decoding fills properties in declaration order, so the
+justification is generated before the grade is committed); grade constrained to 0-3.
+
+```python
+from typing import Literal
+from pydantic import BaseModel, Field
+
+class Verdict(BaseModel):
+    reason: str = Field(
+        description=(
+            "One to three sentences. Name the searcher's intent, how well the document's "
+            "ACTUAL content meets it (coverage, directness, specificity), and trust if it "
+            "affected the grade. Cite a specific span or concrete detail from the document; "
+            "judge on substance, not keyword overlap."
+        )
+    )
+    grade: Literal[0, 1, 2, 3] = Field(
+        description=(
+            "0 = irrelevant; 1 = related but does not answer; 2 = partial (some answer, "
+            "incomplete/unclear/buried); 3 = perfectly relevant (dedicated, complete, direct). "
+            "Low trust caps the grade."
+        )
+    )
+```
+
+> Decoder note: this relies on the backend preserving DECLARATION order (vLLM / Outlines
+> `guided_json` does). If a layer canonicalizes keys alphabetically, `grade` (g) sorts before
+> `reason` (r) and you silently get grade-first again — confirm on the deployed stack. And the
+> guided constraint must scope to the model's post-thinking / `final`-channel output only, NOT
+> the thinking trace.
 
 ## The per-intent loop (pseudocode)
 
@@ -343,8 +401,11 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
 
 ## Config knobs (config.example.toml + config.toml)
 
-- `[agents.judger]` — `class`, `llm` (a `[llm.*]` profile; may differ from the Searcher's),
-  and `concurrency`.
+- `[agents.judger]` — `class`, `llm` (a `[llm.*]` profile; may differ from the Searcher's —
+  recommend a STRONG judge, default gpt-oss-120b; treat small edge models e.g. Gemma 4 E2B/E4B
+  as a validate-first tier, not a drop-in swap), and `concurrency`. NOTE: `reasoning_effort`
+  (gpt-oss medium/high) / thinking-mode (Gemma 4) is a quality<->throughput knob — higher
+  reasoning improves judging but trades against `judge_concurrency`.
 - `[agents.searcher]` — `fetch_k` (the LARGE per-request batch size, default 200; see "Fetching
   the ranked list"), `window`, `max_queries` (default 100), `max_query_retries`.
 - Loop knobs (controller): `nonrelevant_streak` (default 5), `max_judgments` (default 1000 —
@@ -352,9 +413,11 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
   `intent_budget`), `judge_concurrency`, `max_doc_chars` (truncate large ClimbMix docs for judging),
   `relevant_grade_threshold`, and an optional `max_list_depth` (per-query descent safety cap;
   default None/off).
-- **OPEN DECISION — `relevant_grade_threshold` has NO agreed default.** Wire it as an explicit,
-  configurable knob with a clearly-marked PROVISIONAL value and a `# TODO: decide` flag (do NOT
-  silently bake in a default); the streak rule's "non-relevant" definition depends on it.
+- **OPEN DECISION — `relevant_grade_threshold` stays a flagged `# TODO: decide` knob.** Wire it
+  as an explicit, configurable knob; the streak rule's "non-relevant" definition depends on it.
+  PROVISIONAL value `2` on the 0-3 scale (grades 2-3 "carry an answer" and count as relevant;
+  0-1 do not — the standard TREC DL / MS MARCO binarization). This is a placeholder for eval to
+  confirm, NOT a bake-in.
 
 ## Trace (research artifact — stays heavy/detailed)
 
@@ -375,30 +438,49 @@ The controller returns the existing `SearcherResult`; `RankedEntry` already carr
 (`intents.json`, `intent-NN.json`, `intent-NN.trace.jsonl`, `errors.log`) and the cp-native /
 docno-on-disk boundary are UNCHANGED. The Analyst is unchanged.
 
+## Judging design — keep / future (from the LLM-judgment literature)
+
+KEEP (deliberate — do not "improve"): **pointwise graded** judging (one doc per call ->
+`Verdict.grade`) — it aligns best with SYSTEM-ranking correlation (Arabzadeh & Clarke), which
+is exactly this system's use (grades drive the rank-order streak + the per-intent ranked list);
+pairwise would also break the parallel one-doc-per-call design. **No cp in the Judger output.**
+**Controller-owns-control-flow.**
+
+FUTURE (out of scope here, candidates for later tasks): a calibration pass before trusting
+labels (Cohen's κ vs TREC DL qrels + system-ranking Kendall τ; the Waterloo
+`Narabzad/llm-relevance-judgement-comparison` harness is near drop-in); a strict-comparability
+mode that drops the trust step (step 3) for clean apples-to-apples vs TREC DL qrels;
+ensembling (JudgeBlender-style, e.g. across `reasoning_effort`) if label stability becomes the
+bottleneck; full per-query criteria-generation (TRUE / Farzi-Dietz) if the inline 4-step
+decomposition underperforms. Evidence basis: Thomas et al. 2024 (arXiv:2309.10621), UMBRELA
+(2406.06519), Arabzadeh & Clarke 2025 (2504.12558), Farzi & Dietz 2025 (2507.09488), LLMJudge
+(2408.08896).
+
 ## Out of scope
 
 C++ engine/server changes; the `SearchEngine` Protocol; `FakeEngine`; the Analyst; the
 run-output directory layout; RRF/fusion (still dropped); deciding the final
-`relevant_grade_threshold` value (left as a flagged config knob for eval).
+`relevant_grade_threshold` value (provisional `2` on 0-3, left as a flagged config knob for eval).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 Searcher keeps the EXISTING single `search{query}` tool (no new tool; the `judge` tool is REMOVED; tool use FORCED so it always searches) and has NO 0-4 scale; given an intent plus its running history it emits one precise GCL boolean query per turn
-- [ ] #2 Judger judges ONE document per LLM call from the cover-biased summary + FULL document text, returning a Verdict{grade 0-4, reason} guided-decoded to 0-4 — NO cp (the controller pairs the verdict with the cp it asked about); up to judge_concurrency calls run in parallel via a thread pool; deterministic under a stub client in tests
-- [ ] #3 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary; the cp is never sent to the Judger model
-- [ ] #4 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side; only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
-- [ ] #5 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs, which contribute via their STORED grade — even though parallel judging of the NEW docs completes out of order
-- [ ] #6 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
-- [ ] #7 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the search tool result, and the Searcher reformulates within the same conversation
-- [ ] #8 What the Searcher sees back is the NEW docs only (cover-biased SUMMARIES + grade + reason; NEVER full text), PLUS an aggregate for the prior-judged docs at those ranks: judged to depth K, of which J were already judged (X relevant, Y non-relevant) and are NOT relisted
-- [ ] #9 An intent stops ONLY when its recorded judgments reach its per-intent intent_budget or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (the search tool is forced)
-- [ ] #10 max_judgments (default 1000) is the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into intent_budget = max_judgments // num_intents (>=1) and passes it to each controller (1000 over 2 intents = 500 each); budget unused by an intent that ends early is NOT reallocated
-- [ ] #11 Config adds [agents.judger] (class, llm, concurrency) and loop knobs fetch_k (large per-request batch, default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (RUN-TOTAL budget, default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL value, flagged # TODO: decide — no silent default)
-- [ ] #12 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
-- [ ] #13 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
-- [ ] #14 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging returning cp-less Verdicts paired by the controller; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split evenly across intents and the per-intent intent_budget stop; and malformed-query + zero-result self-correction
-- [ ] #15 isj/README.md documents the Searcher/Judger split, the de-duplication rule, the run-total judgment budget split across intents, and the new loop
+- [ ] #1 Searcher keeps the EXISTING single `search{query}` tool (no new tool; the `judge` tool is REMOVED; tool use FORCED so it always searches) and has NO relevance scale (the 0-3 rubric lives only in the Judger); given an intent plus its running history it emits one precise GCL boolean query per turn
+- [ ] #2 Judger judges ONE document per LLM call from the cover-biased summary + FULL document text, returning a Verdict{reason, grade} guided-decoded to the canonical UMBRELA/TREC 0-3 scale — reason declared BEFORE grade, grade Literal[0,1,2,3], NO cp (the controller pairs the verdict with the cp it asked about); up to judge_concurrency calls run in parallel; deterministic under a stub client in tests
+- [ ] #3 judger.md is a decomposed UMBRELA-style 0-3 prompt: steps intent -> topical match -> trust -> scope -> grade, with low TRUST capping the grade (open-web ClimbMix text), a reason that cites a concrete span/detail, and NO persona; guided decoding constrains ONLY the post-thinking / final-channel output, never the thinking trace
+- [ ] #4 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary; the cp is never sent to the Judger model
+- [ ] #5 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side; only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
+- [ ] #6 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs, which contribute via their STORED grade — even though parallel judging of the NEW docs completes out of order
+- [ ] #7 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
+- [ ] #8 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the search tool result, and the Searcher reformulates within the same conversation
+- [ ] #9 What the Searcher sees back is the NEW docs only (cover-biased SUMMARIES + grade + reason; NEVER full text), PLUS an aggregate for the prior-judged docs at those ranks: judged to depth K, of which J were already judged (X relevant, Y non-relevant) and are NOT relisted
+- [ ] #10 An intent stops ONLY when its recorded judgments reach its per-intent intent_budget or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (the search tool is forced)
+- [ ] #11 max_judgments (default 1000) is the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into intent_budget = max_judgments // num_intents (>=1) and passes it to each controller (1000 over 2 intents = 500 each); budget unused by an intent that ends early is NOT reallocated
+- [ ] #12 Config adds [agents.judger] (class; llm — recommend a strong judge, default gpt-oss-120b, with small edge models e.g. Gemma 4 E2B/E4B as a validate-first tier; a reasoning_effort/thinking-mode quality<->throughput note; concurrency) and loop knobs fetch_k (default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (RUN-TOTAL, default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL 2 on the 0-3 scale, flagged # TODO: decide)
+- [ ] #13 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
+- [ ] #14 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
+- [ ] #15 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging returning cp-less 0-3 Verdicts paired by the controller; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split evenly across intents and the per-intent intent_budget stop; and malformed-query + zero-result self-correction
+- [ ] #16 isj/README.md documents the Searcher/Judger split, the 0-3 trust-aware Judger, the de-duplication rule, the run-total judgment budget split across intents, and the new loop
 <!-- AC:END -->
 
 
@@ -406,11 +488,11 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA prompt), parallel ThreadPoolExecutor, guided-decoded Judgement; tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin query author over the EXISTING search tool (remove the judge tool) + searcher.md (GCL guidance minus judging; job = devise precise boolean queries to explore relevant docs). 4. controller.py: per-intent loop (paging via exclude, full-doc fetch, parallel judge, rank-order streak, max_judgments budget, error self-correction, trace; Searcher sees summaries+grades+reasons only); tests/test_controller.py. 5. Wire orchestrator.py to the controller; add trace event types in protocol/results.py; extend run_output._event_dict. 6. Config: [agents.judger] + loop knobs in config.example.toml and config.toml (relevant_grade_threshold flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
+1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA-style 0-3 prompt: decomposed intent->topical->trust->scope->grade, evidence-anchored reason, no persona), Verdict{reason,grade: Literal[0,1,2,3]} in protocol/search.py (reason BEFORE grade), parallel ThreadPoolExecutor, guided-decode scoped to the post-thinking/final output only; tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin query author over the EXISTING search tool (remove the judge tool) + searcher.md (GCL guidance minus judging; job = devise precise boolean queries to explore relevant docs). 4. controller.py: per-intent loop (large fetch_k batch + exclude=seen continuation, full-doc fetch, parallel judge, rank-order streak over the true list, intent_budget, error self-correction, trace; Searcher sees summaries+grades+reasons only); tests/test_controller.py. 5. Wire orchestrator.py to the controller (split run-total max_judgments into intent_budget); add trace event types in protocol/results.py (RankedEntry.grade 0-3); extend run_output._event_dict. 6. Config: [agents.judger] (+ reasoning_effort/thinking note) + loop knobs in config.example.toml and config.toml (relevant_grade_threshold provisional 2, flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
 <!-- SECTION:PLAN:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [ ] #1 uv run --project isj pytest tests/ passes
-- [ ] #2 relevant_grade_threshold is present as a configurable knob with a # TODO: decide marker (default not baked in)
+- [ ] #2 relevant_grade_threshold is a configurable knob flagged # TODO: decide (provisional 2 on the 0-3 scale, not a committed final value)
 <!-- DOD:END -->
