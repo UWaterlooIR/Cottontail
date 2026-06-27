@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 15:47'
+updated_date: '2026-06-27 16:48'
 labels:
   - python
   - isj
@@ -145,15 +145,16 @@ turn after turn (see "De-duplication" below).
   on-topic-but-spammy docs reads back to the Searcher as a weak facet. DEFAULT: accept the
   collapse (the per-doc reasons retain the detail). Distinguishing off-topic from trust-capped in
   the aggregate/streak is a future option (see Keep/Future).
-- ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
-  simultaneously via a `ThreadPoolExecutor`; the draft prompt + schema are under "The prompts".
-- REASONING-MODEL serving (both candidate models — gpt-oss-120b, Gemma 4 — reason before
-  answering): guided decoding must constrain ONLY the post-thinking / `final`-channel output,
-  **never the thinking trace** (constraining the whole completion strangles the decomposition).
-  The four-step reasoning happens in the model's thinking; `reason` is only the surfaced
-  one-to-three-sentence justification — do NOT add a scratchpad/analysis field. `reasoning_effort`
-  (gpt-oss: medium/high) / thinking-mode (Gemma 4) is a quality<->throughput knob (it trades
-  against `judge_concurrency`).
+- ONE LLM call judges ONE document. The Judger runs up to `[agents.judger].concurrency` calls
+  simultaneously via a `ThreadPoolExecutor` (DEFAULT 15, the dev-GPU throughput peak — see
+  "Judger serving scout"); the draft prompt + schema are under "The prompts".
+- REASONING-MODEL serving (gpt-oss-120b reasons before answering): guided decoding must
+  constrain ONLY the post-thinking / `final`-channel output, **never the thinking trace**
+  (constraining the whole completion strangles the decomposition). The four-step reasoning
+  happens in the model's thinking; `reason` is only the surfaced one-to-three-sentence
+  justification — do NOT add a scratchpad/analysis field. `reasoning_effort` DEFAULTS to **"high"**
+  (gpt-oss-120b's top tier) — it is the dominant throughput/cost lever (decode is the bottleneck;
+  see the scout), configurable, and forwarded via `extra_body`.
 
 ### Controller (the per-intent loop) — `controller.py`
 Owns paging, the streak stop, the judgment budget, error self-correction routing, and the
@@ -319,44 +320,61 @@ def page_and_judge(query, judged, recorded, events, intent_budget):
     depth = 0                   # K: ranks descended this query
     again = []                  # prior-judged cps re-encountered this query (count only)
     fresh = []                  # NEW (hit, verdict) judged this query -> returned to the Searcher
-    while len(recorded) < intent_budget:
-        try:
-            # Fetch a LARGE batch (fetch_k). exclude = only what we've consumed THIS query:
-            # EMPTY on the first request; on a CONTINUATION it returns the NEXT unseen batch
-            # without re-shipping the first. (Every request re-ranks ALL matches regardless --
-            # no early termination -- so a big batch keeps the request count low; exclude saves
-            # the summary-build + transfer of the prior batch, not the re-rank.) Prior-judged
-            # docs are NOT excluded, so they still appear at their ranks and we count them.
-            resp = engine.search(query, top_k=cfg.fetch_k, exclude=sorted(seen), window=cfg.window)
-        except EngineError as e:                 # malformed query: bounce back to the Searcher
-            emit("bounce", kind="engine_error", query=query, message=str(e))
-            return {"error": str(e)}             # <- Searcher reformulates immediately
-        emit("search", query=query, total=resp.total_matches, returned=len(resp.results), ...)
-        if not resp.results:                     # list exhausted / dry
-            break
-        new_hits = [h for h in resp.results if h.cp not in judged]   # only NEW docs go to the Judger
-        docs = [(h.summary, engine.read(h.cp)) for h in new_hits]    # the Judger sees summary + full doc, NOT cp
-        verdicts = { h.cp: v for h, v in zip(new_hits, judger.judge(intent, docs)) }  # parallel Verdict{reason,grade}
+    buffer = []                 # ranked hits fetched but not yet processed
+    exhausted = False
+    while not exhausted and len(recorded) < intent_budget:
+        if not buffer:                           # REFILL: fetch the NEXT batch
+            try:
+                # Fetch a LARGE batch (fetch_k). exclude = only what we've consumed THIS query:
+                # EMPTY on the first request; on a CONTINUATION it returns the NEXT unseen batch
+                # without re-shipping the first. (Every request re-ranks ALL matches regardless --
+                # no early termination -- so a big batch keeps the request count low; exclude saves
+                # the summary-build + transfer of the prior batch, not the re-rank.) Prior-judged
+                # docs are NOT excluded, so they still appear at their ranks and we count them.
+                resp = engine.search(query, top_k=cfg.fetch_k, exclude=sorted(seen), window=cfg.window)
+            except EngineError as e:             # malformed query: bounce back to the Searcher
+                emit("bounce", kind="engine_error", query=query, message=str(e))
+                return {"error": str(e)}         # <- Searcher reformulates immediately
+            emit("search", query=query, total=resp.total_matches, returned=len(resp.results), ...)
+            if not resp.results:                 # list exhausted / dry
+                break
+            buffer = list(resp.results)
+        # ONE WAVE in rank order, judge_concurrency wide -> the judges run IN PARALLEL.
+        wave = buffer[:cfg.judge_concurrency]; buffer = buffer[cfg.judge_concurrency:]
+        new = [h for h in wave if h.cp not in judged]            # only NEW docs go to the Judger
+        docs = [(h.summary, engine.read(h.cp)) for h in new]     # full doc + summary, NOT cp
+        verdicts = { h.cp: v for h, v in zip(new, judger.judge(intent, docs)) }  # Verdict{reason,grade}
         # judger.judge returns one Verdict per item IN INPUT ORDER; the MODEL emits NO cp -- the
         # controller pairs each verdict with the cp it asked about (the zip above).
-        for h in resp.results:                    # SCAN IN RANK ORDER (new-doc judging finished out of order)
+        for h in wave:                            # SCAN IN RANK ORDER (judging finished out of order)
             seen.add(h.cp); depth += 1
             if h.cp in judged:                    # PRIOR judgment: count only -- no re-read, no Judger, no record
                 g = judged[h.cp].grade; again.append((h.cp, g)); emit("revisit", cp=h.cp, grade=g)
-            else:                                 # NEW: judge + record
+            else:                                 # NEW: judge + RECORD -- ALWAYS, never discarded (see below)
                 j = verdicts[h.cp]; judged[h.cp] = j
                 recorded.append(record(h, j, query)); fresh.append((h, j))
                 emit("judge", cp=h.cp, grade=j.grade, reason=j.reason); g = j.grade
-            streak = 0 if relevant(g) else streak + 1
-            if streak >= cfg.nonrelevant_streak:
-                emit("list_exhausted", query=query, depth=depth, streak=streak)
-                return summarize(query, depth, again, fresh)
-        if len(recorded) >= intent_budget: break
+            if relevant(g):
+                streak = 0
+            else:
+                streak += 1
+                if streak >= cfg.nonrelevant_streak and not exhausted:
+                    exhausted = True              # stop AFTER this wave; KEEP recording its remaining docs
+                    emit("list_exhausted", query=query, depth=depth, streak=streak)
+        if cfg.max_list_depth and depth >= cfg.max_list_depth:
+            break
     return summarize(query, depth, again, fresh)
 ```
 
-`relevant(grade)` := `grade >= cfg.relevant_grade_threshold`. The streak runs over the TRUE
-list (new AND prior-judged docs, in rank order); a prior-judged doc uses its STORED grade.
+`relevant(grade)` := `grade >= cfg.relevant_grade_threshold`; DEFAULT threshold `1`, so only a
+grade-0 (Irrelevant) doc extends the streak and any grade >= 1 resets it (i.e. "non-relevant for
+the streak" = grade 0). It is a knob, but no longer a `# TODO`. **RETAIN ALL JUDGED DOCS:** the
+streak only decides WHEN TO STOP descending (no further waves/fetches) -- it NEVER discards a
+verdict. Every NEW doc the Judger graded is recorded and reported, even the docs that sit past
+the streak trip within the wave that tripped it (they were judged in parallel; throwing their
+verdicts away would waste real work). Over-judging is therefore bounded to < one wave and is
+fully kept. The streak runs over the TRUE list (new AND prior-judged docs, in rank order); a
+prior-judged doc uses its STORED grade.
 Descent is finite (bounded by the streak, the list going dry, or `intent_budget`; an optional
 `max_list_depth` is an extra safety cap). `summarize(query, depth, again, fresh)` is the
 payload the Searcher sees as history:
@@ -403,9 +421,10 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
 ## Stopping rules
 
 - **A single ranked list is exhausted** when `nonrelevant_streak` consecutive non-relevant
-  docs occur in RANK ORDER over the TRUE list (new + prior-judged), or the list goes dry (a
-  page returns no results). Descent is finite (bounded by the streak, dry, or `intent_budget`;
-  optional `max_list_depth` safety cap).
+  docs (DEFAULT: grade 0 only) occur in RANK ORDER over the TRUE list (new + prior-judged), or
+  the list goes dry (a page returns no results). The streak only STOPS further descent; the
+  wave that trips it is recorded in full (retain-all). Descent is finite (bounded by the streak,
+  dry, or `intent_budget`; optional `max_list_depth` safety cap).
 - **The intent is done** when its recorded judgments reach `intent_budget` (= `max_judgments
   // num_intents`; e.g. 1000 total over 2 intents = 500 each) — this is the "we no longer need
   the Searcher" condition. A `max_queries` backstop (DEFAULT 100) is the ONLY other stop.
@@ -417,21 +436,31 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
 
 - `[agents.judger]` — `class`, `llm` (a `[llm.*]` profile; may differ from the Searcher's —
   recommend a STRONG judge, default gpt-oss-120b; treat small edge models e.g. Gemma 4 E2B/E4B
-  as a validate-first tier, not a drop-in swap), and `concurrency`. NOTE: `reasoning_effort`
-  (gpt-oss medium/high) / thinking-mode (Gemma 4) is a quality<->throughput knob — higher
-  reasoning improves judging but trades against `judge_concurrency`.
+  as a validate-first tier, not a drop-in swap), `concurrency` (DEFAULT **15** — the throughput
+  peak on the dev GPU per the serving scout below; this is BOTH the in-flight cap AND the wave
+  size), and `reasoning_effort` (DEFAULT **"high"**, gpt-oss-120b's top tier — the dominant
+  throughput/cost lever; constrains only the final-channel output).
 - `[agents.searcher]` — `fetch_k` (the LARGE per-request batch size, default 200; see "Fetching
   the ranked list"), `window`, `max_queries` (default 100), `max_query_retries`.
 - Loop knobs (controller): `nonrelevant_streak` (default 5), `max_judgments` (default 1000 —
   the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into a per-intent
-  `intent_budget`), `judge_concurrency`, `max_doc_chars` (truncate large ClimbMix docs for judging),
-  `relevant_grade_threshold`, and an optional `max_list_depth` (per-query descent safety cap;
-  default None/off).
-- **OPEN DECISION — `relevant_grade_threshold` stays a flagged `# TODO: decide` knob.** Wire it
-  as an explicit, configurable knob; the streak rule's "non-relevant" definition depends on it.
-  PROVISIONAL value `2` on the 0-3 scale (grades 2-3 "carry an answer" and count as relevant;
-  0-1 do not — the standard TREC DL / MS MARCO binarization). This is a placeholder for eval to
-  confirm, NOT a bake-in.
+  `intent_budget`), `max_doc_chars` (DEFAULT **50000** — generous; the scout shows KV is NOT the
+  constraint, so this just bounds the worst-case prefill, not KV), `relevant_grade_threshold`
+  (DEFAULT **1**: non-relevant-for-the-streak = grade 0; grade >= 1 resets it), and an optional
+  `max_list_depth` (per-query descent safety cap; default None/off). The wave width is
+  `[agents.judger].concurrency` (no separate `judge_concurrency` knob — they were unified).
+
+## Judger serving scout — findings (TASK-16, dev GPU)
+
+`isj/scouting/scout_judger.py` swept concurrency over real ClimbMix docs (from `runs/bear-e2e3`)
+at `reasoning_effort=high`, `max_doc_chars=50000`, measuring client throughput/latency paired
+with vLLM KV/queue metrics. Generation throughput by concurrency: **C=1 ~180, C=8 ~580, C=16
+~900, C=20 ~770 tok/s** (peak ~16, regresses by 20). At every level `Running` reached the target
+with `Waiting=0` and `GPU KV cache <= ~21%` (no preemptions, no OOM). CONCLUSIONS: the binding
+constraint is **decode bandwidth, not KV** (KV is never near full at these doc sizes on this
+GPU); past ~16 concurrent sequences aggregate throughput DROPS and latency climbs. We therefore
+set `concurrency = 15` (a clean number just under the peak) and keep `max_doc_chars = 50000`
+generous (it bounds prefill, not KV).
 
 ## Trace (research artifact — stays heavy/detailed)
 
@@ -476,143 +505,55 @@ decomposition underperforms. Evidence basis: Thomas et al. 2024 (arXiv:2309.1062
 ## Out of scope
 
 C++ engine/server changes; the `SearchEngine` Protocol; `FakeEngine`; the Analyst; the
-run-output directory layout; RRF/fusion (still dropped); deciding the final
-`relevant_grade_threshold` value (provisional `2` on 0-3, left as a flagged config knob for eval).
+run-output directory layout; RRF/fusion (still dropped). (`relevant_grade_threshold` default is
+now decided — `1`, non-relevant-for-the-streak = grade 0; still a configurable knob.)
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Searcher keeps the EXISTING single `search{query}` tool (no new tool; the `judge` tool is REMOVED; tool use FORCED so it always searches) and has NO relevance scale (the 0-3 rubric lives only in the Judger); given an intent plus its running history it emits one precise GCL boolean query per turn
-- [ ] #2 Judger judges ONE document per LLM call from the cover-biased summary + FULL document text, returning a Verdict{reason, grade} guided-decoded to the canonical UMBRELA/TREC 0-3 scale — reason declared BEFORE grade, grade Literal[0,1,2,3], NO cp (the controller pairs the verdict with the cp it asked about); up to judge_concurrency calls run in parallel; deterministic under a stub client in tests
+- [ ] #2 Judger judges ONE document per LLM call from the cover-biased summary + FULL document text, returning a Verdict{reason, grade} guided-decoded to the canonical UMBRELA/TREC 0-3 scale — reason declared BEFORE grade, grade Literal[0,1,2,3], NO cp (the controller pairs the verdict with the cp it asked about); up to [agents.judger].concurrency calls run in parallel; deterministic under a stub client in tests
 - [ ] #3 judger.md is a decomposed UMBRELA-style 0-3 prompt: steps intent -> topical match -> trust -> scope -> grade, with low TRUST capping the grade (open-web ClimbMix text), a reason that cites a concrete span/detail, and NO persona; guided decoding constrains ONLY the post-thinking / final-channel output, never the thinking trace
-- [ ] #4 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary; the cp is never sent to the Judger model
-- [ ] #5 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side; only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
-- [ ] #6 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs, which contribute via their STORED grade — even though parallel judging of the NEW docs completes out of order
-- [ ] #7 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
-- [ ] #8 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the search tool result, and the Searcher reformulates within the same conversation
-- [ ] #9 What the Searcher sees back is the NEW docs only (cover-biased SUMMARIES + grade + reason; NEVER full text), PLUS an aggregate for the prior-judged docs at those ranks: judged to depth K, of which J were already judged (X relevant, Y non-relevant) and are NOT relisted
-- [ ] #10 An intent stops ONLY when its recorded judgments reach its per-intent intent_budget or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (the search tool is forced)
-- [ ] #11 max_judgments (default 1000) is the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into intent_budget = max_judgments // num_intents (>=1) and passes it to each controller (1000 over 2 intents = 500 each); budget unused by an intent that ends early is NOT reallocated
-- [ ] #12 Config adds [agents.judger] (class; llm — recommend a strong judge, default gpt-oss-120b, with small edge models e.g. Gemma 4 E2B/E4B as a validate-first tier; a reasoning_effort/thinking-mode quality<->throughput note; concurrency) and loop knobs fetch_k (default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (RUN-TOTAL, default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL 2 on the 0-3 scale, flagged # TODO: decide)
-- [ ] #13 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
-- [ ] #14 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
-- [ ] #15 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging returning cp-less 0-3 Verdicts paired by the controller; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split evenly across intents and the per-intent intent_budget stop; and malformed-query + zero-result self-correction
-- [ ] #16 isj/README.md documents the Searcher/Judger split, the 0-3 trust-aware Judger, the de-duplication rule, the run-total judgment budget split across intents, and the new loop
+- [ ] #4 Judging input is the FULL document text (truncated to max_doc_chars, default 50000), not the cover summary; the cp is never sent to the Judger model
+- [ ] #5 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side in WAVES of [agents.judger].concurrency (default 15, judged in parallel); only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops further descent on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth)
+- [ ] #6 RETAIN ALL JUDGED DOCS: every NEW document the Judger graded is recorded and reported — including docs past the streak trip within the wave that tripped it (judged in parallel; never discarded). The streak only decides WHEN TO STOP descending, never which verdicts to keep; over-judging is bounded to < one wave and fully kept
+- [ ] #7 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs (via their STORED grade) — even though parallel judging completes out of order; a doc is non-relevant for the streak when grade < relevant_grade_threshold (DEFAULT 1, i.e. only grade 0 extends the streak; grade >= 1 resets it)
+- [ ] #8 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
+- [ ] #9 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the search tool result, and the Searcher reformulates within the same conversation
+- [ ] #10 What the Searcher sees back is the NEW docs only (cover-biased SUMMARIES + grade + reason; NEVER full text), PLUS an aggregate for the prior-judged docs at those ranks: judged to depth K, of which J were already judged (X relevant, Y non-relevant) and are NOT relisted
+- [ ] #11 An intent stops ONLY when its recorded judgments reach its per-intent intent_budget or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (the search tool is forced)
+- [ ] #12 max_judgments (default 1000) is the RUN-TOTAL judgment budget; the Orchestrator splits it evenly into intent_budget = max_judgments // num_intents (>=1) and passes it to each controller (1000 over 2 intents = 500 each); budget unused by an intent that ends early is NOT reallocated
+- [ ] #13 Config adds [agents.judger] (class; llm — recommend a strong judge, default gpt-oss-120b, Gemma 4 edge as validate-first; concurrency DEFAULT 15 = in-flight cap AND wave width; reasoning_effort DEFAULT 'high') and loop knobs fetch_k (default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (RUN-TOTAL, default 1000), max_doc_chars (default 50000), relevant_grade_threshold (DEFAULT 1 = non-relevant streak is grade 0; configurable, no longer TODO), and optional max_list_depth
+- [ ] #14 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
+- [ ] #15 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
+- [ ] #16 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging returning cp-less 0-3 Verdicts; wave-judging in batches of concurrency with RETAIN-ALL (the tripping wave fully recorded); a large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak (grade-0 default) over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split and per-intent intent_budget stop; malformed-query + zero-result self-correction; and a judge failure yielding a partial result
+- [ ] #17 isj/README.md documents the Searcher/Judger split, the 0-3 trust-aware Judger, retain-all + grade-0 streak, the de-duplication rule, the run-total budget split, and the serving-scout-derived defaults (concurrency 15, reasoning_effort high, max_doc_chars 50000)
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Detailed, reviewed implementation plan (grounded in the existing isj_agent code). Implement as
-ONE PR on `searcher-judger` in the staged commit order at the end. NO C++ changes.
+Detailed, reviewed implementation plan (grounded in the existing isj_agent code + the Judger serving scout). Implement as ONE PR on searcher-judger in staged commits. NO C++ changes.
 
-## Settled decisions (from plan review)
-- WAVE JUDGING: judge each fetched batch in rank-order WAVES sized to `judge_concurrency`,
-  checking the streak after each wave — NOT the whole fetch_k batch at once. Keeps parallelism
-  but bounds over-judging to < 1 wave past the streak (judging is the expensive LLM call).
-- JUDGE FAILURE: a failed judge call (LLM error or Verdict validation failure; no retry) ABORTS
-  the intent — emit an `error` event, return a PARTIAL SearcherResult (`.error` set, ranked_list
-  = what was recorded so far). The Orchestrator isolates it per-intent and continues; matches the
-  existing persist-on-failure path.
-- DELIVERY: one PR, staged reviewable commits (order below).
-- reasoning_effort: PASS-THROUGH if set in `[agents.judger]` (via `extra_body`), else omitted
-  (behaves like the Analyst call). No live dependency added.
+SETTLED DECISIONS: (1) WAVE JUDGING — judge each fetched batch in rank-order waves sized to [agents.judger].concurrency (DEFAULT 15, the dev-GPU throughput peak per scout_judger.py; KV is NOT the constraint). (2) RETAIN ALL — every NEW doc judged is recorded/reported, even docs past the streak trip within the tripping wave (judged in parallel; never discarded); the streak only stops further descent. (3) STREAK non-relevant = grade 0 by default (relevant_grade_threshold=1, configurable). (4) reasoning_effort DEFAULT 'high' (gpt-oss-120b top tier; dominant throughput/cost lever; forwarded via extra_body; constrains only the final channel). (5) max_doc_chars DEFAULT 50000 (generous; bounds prefill not KV). (6) JUDGE FAILURE aborts the intent -> partial SearcherResult (.error set). (7) one PR, staged commits.
 
-## Object graph & interfaces
-- `Searcher` (REWRITE `agents/searcher.py`, thin like `Analyst`): `Searcher(client, model)`;
-  `propose(messages) -> ProposeResult{query, content, tool_call_id, usage, assistant_message}`.
-  One LLM round-trip offering a single `search` tool with `tool_choice="required"` (only one tool
-  => forced; avoids relying on named-function tool_choice on gpt-oss/vLLM). The CONTROLLER owns
-  the message list + trace; the Searcher just returns the chosen query.
-- `Judger` (NEW `agents/judger.py`, thin): `Judger(client, model, *, concurrency, reasoning_effort=None)`;
-  `judge(intent, docs) -> list[JudgeCall]` where docs = `[(summary, document_text), ...]` and
-  `JudgeCall{verdict: Verdict|None, usage, duration_ms, request, content, error}`. Uses
-  `concurrent.futures.ThreadPoolExecutor(concurrency)` (stdlib; openai client is thread-safe).
-  Each worker: fill `judger.md` via `str.replace` on `{intent}`/`{summary}`/`{document}` (NOT
-  str.format — doc text may contain `{`), `create(response_format=Verdict json_schema,
-  extra_body={"reasoning_effort":...} if set)`, read `message.content`, `Verdict.model_validate_json`.
-  Returns results ALIGNED to input order so the controller emits ordered trace. NO cp in/out.
-- `Controller` (NEW `controller.py`): owns the per-intent loop, paging, wave-judging, streak,
-  budget, trace, summarize payload. `Controller(searcher, judger, engine, *, fetch_k=200,
-  window=75, nonrelevant_streak=5, relevant_grade_threshold=2, judge_concurrency=8, max_doc_chars,
-  max_queries=100, max_list_depth=None)`; `run(intent, intent_budget) -> SearcherResult`.
-- `Orchestrator` (EDIT `orchestrator.py`): `Orchestrator(analyst, controller, *, max_judgments=1000)`;
-  `intent_budget = max_judgments // num_intents` (>=1); calls `controller.run(intent, intent_budget)`
-  per interpretation. Keeps `on_intent` callback + per-intent error isolation.
-- CLI (EDIT `cli.py`): build `analyst`, `searcher`, `judger` via `_build_agent`, the `engine`, then
-  `Controller(...)` from a new `[loop]` config table, then `Orchestrator(analyst, controller,
-  max_judgments=...)`.
+INTERFACES: Searcher(client,model).propose(messages)->ProposeResult{query,...} with a single search tool, tool_choice='required'. Judger(client,model,*,concurrency=15,reasoning_effort='high').judge(intent,docs)->list[JudgeCall{verdict:Verdict|None,usage,duration_ms,error}] over a ThreadPoolExecutor; one doc per call; Verdict{reason,grade:Literal[0,1,2,3]} guided-decoded, final-channel only; cp never sent. Controller(searcher,judger,engine,*,fetch_k=200,window=75,nonrelevant_streak=5,relevant_grade_threshold=1,concurrency=15,max_doc_chars=50000,max_queries=100,max_list_depth=None).run(intent,intent_budget)->SearcherResult. Orchestrator(analyst,controller,*,max_judgments=1000) splits intent_budget=max_judgments//num_intents.
 
-## Protocol (`protocol/search.py`, `protocol/results.py`)
-- Replace `Judgement{cp,grade,reason}` with `Verdict`: `reason: str = Field(description=...)` FIRST,
-  then `grade: Literal[0,1,2,3] = Field(description=...)` (rubric in the descriptions). No other
-  importers (test_searcher imports only AtomCount/Hit/SearchResponse).
-- `RankedEntry.grade`: `Field(ge=0,le=4)` -> `Literal[0,1,2,3]` (matches `Verdict.grade`).
+PROTOCOL: replace Judgement with Verdict{reason,grade Literal[0,1,2,3]} in protocol/search.py; RankedEntry.grade -> Literal[0,1,2,3].
 
-## Searcher prompt + Judger prompt
-- `searcher.md`: the drafted query-author prompt (GCL block intact; no judging/grades/judge tool).
-- `judger.md`: the drafted decomposed 0-3 trust-aware prompt (intent->topical->trust->scope->grade,
-  evidence-anchored reason, no persona, no "Return ONLY" tail). Document truncated to
-  `max_doc_chars` controller-side before the Judger sees it.
+STAGED COMMITS (one PR on searcher-judger):
+1. protocol — Verdict (replaces Judgement); RankedEntry.grade -> Literal[0,1,2,3].
+2. Judger — judger.py + judger.md (decomposed 0-3 trust prompt) + test_judger.py.
+3. Searcher — rewrite searcher.py + searcher.md + reworked test_searcher.py.
+4. controller.py — wave-judging + retain-all + grade-0 streak + dedup + summarize + trace; test_controller.py (waves, retain-all, streak, continuation fetch, budget, self-correction, judge-failure partial).
+5. wiring — orchestrator.py (budget split), cli.py, config.example.toml/config.toml ([agents.judger] concurrency=15 + reasoning_effort='high'; [loop] knobs incl max_doc_chars=50000, relevant_grade_threshold=1), run_output.py event rewrites, test_orchestrator.py.
+6. docs — isj/README.md.
 
-## Controller loop (the wave refinement)
-Per query: `propose` -> fetch a LARGE batch `cover_search(query, top_k=fetch_k, exclude=seen)` ->
-descend in rank-order WAVES of `judge_concurrency`: judge the NEW hits in the wave in parallel,
-then scan the wave in rank order — prior-judged (cp in global `judged` map) are COUNTED not
-re-judged (stored grade drives the streak, rolls into J/X/Y); new hits are judged + recorded;
-`streak = 0 if grade>=relevant_grade_threshold else streak+1`; stop the list on streak,
-`max_list_depth`, dry, or `intent_budget`. Continue-fetch (`exclude=seen`) only when a whole batch
-is consumed without a streak. Feed the `summarize` payload back as the `search` tool result =
-`{query, total_matches, depth_judged:K, already_judged:{count:J,relevant:X,non_relevant:Y},
-new_results:[{rank,score,grade,reason,summary}]}` (NEW docs only; SUMMARIES, never full text);
-engine error -> `{error}`; empty first page -> `{empty:true,...}`. Intent stops at `intent_budget`
-or `max_queries`. A judge failure aborts the intent with a partial result (decision above).
-
-## Trace + run_output
-- Controller emits: `llm_call` (purpose `searcher_turn`, and one per judge call), `propose`{query},
-  `search`{query,counts,atom_counts,results,latency}, `judge`{cp,grade,reason}, `revisit`{cp,grade},
-  `list_exhausted`{query,depth,streak}, `bounce`{engine_error|zero_result}, `stop`{reason:
-  intent_budget|max_queries}, `error`.
-- `run_output._event_dict`: add cp->docno rewrite for the new single-cp `judge` and `revisit`
-  shapes; `search` results already handled; drop the obsolete `judge_before_search` bounce-cps branch.
-
-## Config
-- `[agents.judger]` = `class`, `llm` (default a strong judge, e.g. gpt-oss-120b), `concurrency`,
-  optional `reasoning_effort`.
-- `[agents.searcher]` = `fetch_k` (200), `window`, `max_queries` (100).
-- NEW `[loop]` table = `nonrelevant_streak` (5), `max_judgments` (1000, RUN-TOTAL),
-  `judge_concurrency`, `max_doc_chars`, `relevant_grade_threshold` (PROVISIONAL 2, `# TODO: decide`),
-  optional `max_list_depth`. Update both `config.example.toml` and `config.toml`.
-
-## Tests (FakeEngine + stub LLMs, no network)
-- `test_judger.py`: stub client returns Verdict JSON; assert parallelism, input-aligned order,
-  cp-less output, 0-3 validation, str.replace fill, reasoning_effort pass-through.
-- `test_controller.py`: wave-judging; streak in rank order over the TRUE list (incl. prior-judged
-  via stored grade); revisit counted-not-rejudged; continue-fetch with `exclude=seen`; the
-  K/J/X/Y aggregate; `intent_budget` stop; `max_queries`; engine-error + zero-result self-correction;
-  a judge failure -> partial result.
-- Rewrite `test_searcher.py` (query author: forced tool, returns query, no judging).
-- Update `test_orchestrator.py` (stub Controller; budget split // num_intents).
-- Keep `test_run_output.py` green; extend for the new judge/revisit event rewrites.
-
-## Risks / live-verify (not blocking the code shape)
-- Final-channel scoping of guided decoding (AC #3) is a serving-stack property — Judger reads
-  `message.content` + validates; VERIFY on the deployed vLLM/gpt-oss stack.
-- Searcher conversation growth across many queries (summaries accumulate toward `intent_budget`);
-  v1 keeps full history; trimming is a future option.
-
-## Staged commit order (one PR on `searcher-judger`)
-1. protocol — `Verdict` (replaces `Judgement`); `RankedEntry.grade` -> `Literal[0,1,2,3]`.
-2. Judger — `judger.py` + `judger.md` + `test_judger.py`.
-3. Searcher — rewrite `searcher.py` + `searcher.md` + reworked `test_searcher.py`.
-4. Controller — `controller.py` (loop, wave-judging, trace, summarize) + `test_controller.py`.
-5. Wiring — `orchestrator.py` (budget split), `cli.py`, `config.example.toml`/`config.toml`
-   (`[agents.judger]`, `[loop]`), `run_output.py` event rewrites, `test_orchestrator.py`.
-6. Docs — `isj/README.md` (Searcher/Judger split, 0-3 trust Judger, de-dup, budget, the loop).
+The scout harness isj/scouting/scout_judger.py is already committed; its findings (decode-bound, KV<=21%, peak ~16, chose 15) are recorded in the task Description under 'Judger serving scout — findings'.
 <!-- SECTION:PLAN:END -->
 
 ## Definition of Done
 <!-- DOD:BEGIN -->
 - [ ] #1 uv run --project isj pytest tests/ passes
-- [ ] #2 relevant_grade_threshold is a configurable knob flagged # TODO: decide (provisional 2 on the 0-3 scale, not a committed final value)
+- [ ] #2 relevant_grade_threshold defaults to 1 (non-relevant streak = grade 0) and is configurable; judge defaults from the serving scout are wired: [agents.judger].concurrency=15, reasoning_effort='high', max_doc_chars=50000
 <!-- DOD:END -->
