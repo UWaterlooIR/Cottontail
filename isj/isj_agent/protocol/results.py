@@ -7,6 +7,8 @@ CLI orchestrator). cp-native (doc-6): identifiers are integer cps; docno never
 enters the agent.
 """
 
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -15,7 +17,7 @@ class RankedEntry(BaseModel):
 
     rank: int  # the COMPILED per-intent rank (distinct from a Hit's per-search rank)
     cp: int
-    grade: int = Field(ge=0, le=4)  # 0-4 UMBRELA-aligned
+    grade: Literal[0, 1, 2, 3]  # canonical UMBRELA / TREC 0-3 scale (matches Verdict.grade)
     score: float  # the engine ssr cover-density score of the surfacing search
     summary: str  # the cover-biased summary the agent read
     reason: str  # the model's justification for the grade
