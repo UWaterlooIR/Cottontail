@@ -1,0 +1,236 @@
+---
+id: TASK-16
+title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
+status: To Do
+assignee: []
+created_date: '2026-06-27 01:53'
+updated_date: '2026-06-27 01:59'
+labels:
+  - python
+  - isj
+  - searcher
+  - judger
+dependencies: []
+references:
+  - isj/isj_agent/agents/searcher.py
+  - isj/isj_agent/agents/searcher.md
+  - isj/isj_agent/agents/analyst.py
+  - isj/isj_agent/orchestrator.py
+  - isj/isj_agent/protocol/search.py
+  - isj/isj_agent/protocol/results.py
+  - isj/isj_agent/engine/base.py
+  - isj/isj_agent/engine/fake.py
+  - isj/isj_agent/run_output.py
+  - isj/README.md
+  - docs/searcher-agent-lessons-June-16-2026.md
+  - isj/runs/croup
+priority: high
+ordinal: 30000
+---
+
+## Description
+
+<!-- SECTION:DESCRIPTION:BEGIN -->
+## Where this lives
+
+Python, in the `isj/` uv project (package `isj_agent`; run `uv sync --project isj` after
+dependency changes). NO C++ changes — the C++ engine/server, the `SearchEngine` Protocol,
+and `FakeEngine` are reused as-is. Automated tests use a STUB LLM + the B1 `FakeEngine`
+(which already implements `read(cp)` and applies `exclude`) — no network, no real model.
+
+Touched/new files:
+- NEW `isj_agent/agents/judger.py` + `judger.md` — the Judger agent + its UMBRELA prompt.
+- NEW `isj_agent/controller.py` — the per-intent search/judge loop (paging + streak + budget).
+- REWRITE `isj_agent/agents/searcher.py` + `searcher.md` — a thin GCL query proposer (no judging).
+- EDIT `isj_agent/orchestrator.py` — call the controller per intent instead of `Searcher.run`.
+- EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry`; add trace event types.
+- EDIT `isj_agent/run_output.py` — extend cp->docno rewriting to the new event shapes.
+- EDIT `config.example.toml` + `config.toml` — `[agents.judger]` role + new loop knobs.
+- EDIT `isj/README.md` — document the Searcher/Judger split.
+- NEW `tests/test_judger.py`, `tests/test_controller.py`; update/retire the combined-searcher tests.
+
+## Why (motivation)
+
+The current `Searcher` (TASK-5.6) is ONE LLM loop that both searches and judges, and it
+judges the cover-biased **summary**, not the document. Two problems observed in practice
+(see `isj/runs/croup`): the agent judges weakly because it never reads the full document,
+and it does not reliably "work down a ranked list" — it judges the top page and reformulates,
+leaving the tail of each ranked list unexplored. This task SEPARATES the two responsibilities:
+
+- a **Searcher** whose ONLY job is to author a GCL query, and
+- a **Judger** that judges the **full document** behind each result, in **parallel**.
+
+The controller (not the model) owns paging down the ranked list, the stop rules, the judgment
+budget, and the trace — consistent with the hard lesson from TASK-5.6 that model behavior is
+not portable for control flow.
+
+## Architecture
+
+Per question, the Orchestrator runs the Analyst (unchanged) -> per interpretation, the new
+controller. Per intent the controller drives a single coherent LLM conversation with the
+Searcher; the Searcher's one tool is `propose_query`, and the controller fills that tool's
+RESULT with the judged outcome of running the query. So the conversation history the Searcher
+sees IS its own past queries and what they yielded.
+
+### Searcher (query proposer) — `agents/searcher.py` + `searcher.md`
+- INPUT: one intent (an Analyst interpretation) + the running conversation (its prior
+  queries and their judged outcomes).
+- OUTPUT: exactly ONE GCL cover query per turn, via a single tool `propose_query { query: string }`.
+  Tool use is FORCED (`tool_choice` pins `propose_query`) so the Searcher ALWAYS emits a query —
+  there is NO decline / finish / no-tool-call path.
+- It is told HOW to write GCL (prefix-only, `^`/`+`, `word*` family marker, exact phrases,
+  one facet per concept) — REUSE the load-bearing GCL guidance from the current `searcher.md`
+  (TASK-5.6 / `docs/searcher-agent-lessons-June-16-2026.md`), MINUS everything about judging,
+  grades, and the `judge` tool. There is NO judge tool and NO 0-4 scale in the Searcher.
+- It keeps IMMEDIATE error self-correction: a malformed query (EngineError) or a zero-result
+  query comes straight back as the next `propose_query` tool result, in-thread, so it
+  reformulates right away (same behavior as today's engine_error / dry feedback).
+
+### Judger (parallel, full-document) — `agents/judger.py` + `judger.md`
+- INPUT: the intent, and for each candidate the surfaced Hit (summary, score, cp) PLUS the
+  FULL document text (`engine.read(cp)`), truncated to `max_doc_chars`.
+- OUTPUT: a `Judgement { cp, grade (0-4), reason }` per candidate, guided-decoded via
+  `Judgement.model_json_schema()` (the same json-schema pattern the Analyst uses), so grades
+  are constrained to 0-4.
+- ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
+  simultaneously via a `ThreadPoolExecutor`. `judger.md` carries the UMBRELA 0-4 umbrella
+  judging scheme (the 0-4 rubric currently inlined in `searcher.md` moves here and is expanded
+  into a proper umbrella prompt that frames the passage + full document against the intent).
+
+### Controller (the per-intent loop) — `controller.py`
+Owns paging, the streak stop, the judgment budget, error self-correction routing, and the
+trace. Returns the EXISTING `SearcherResult { ranked_list, events, error }` so C2/C3 and the
+run-output layout are unchanged.
+
+## The per-intent loop (pseudocode)
+
+```
+def run(intent) -> SearcherResult:
+    msgs = [system(searcher.md), user(f"Question: {intent}")]
+    judged: set[int] = set()              # cps already judged (the global exclude set)
+    recorded: list[RankedEntry] = []      # all judgments across all queries this intent
+    events = []
+    queries = 0
+    while len(recorded) < cfg.max_judgments and queries < cfg.max_queries:
+        # 1) ask the Searcher for ONE query (records an llm_call + "propose" event).
+        #    tool use is FORCED -> the Searcher always emits a query (no decline path).
+        m = llm(msgs, tools=[propose_query], tool_choice=force(propose_query)); append assistant(m)
+        query = m.tool_calls[0].query; queries += 1
+
+        # 2) page DOWN the ranked list for this query, judging full docs in parallel,
+        #    until a consecutive non-relevant streak or the query goes dry.
+        outcome = page_and_judge(query, judged, recorded, events)   # see below
+
+        # 3) feed the outcome back as the tool RESULT -> becomes the Searcher's history
+        append tool_result(m.tool_calls[0], outcome)   # malformed/zero-result -> error/empty payload
+    else:
+        emit("stop", reason="max_judgments" if len(recorded) >= cfg.max_judgments else "max_queries")
+    return SearcherResult(ranked_list=compile(intent, recorded), events=events)
+
+def page_and_judge(query, judged, recorded, events):
+    streak = 0                                   # consecutive non-relevant, in rank order
+    page_results = []
+    while len(recorded) < cfg.max_judgments:
+        try:
+            resp = engine.search(query, top_k=cfg.page_size, exclude=sorted(judged), window=cfg.window)
+        except EngineError as e:                 # malformed query: bounce back to the Searcher
+            emit("bounce", kind="engine_error", query=query, message=str(e))
+            return {"error": str(e)}             # <- Searcher reformulates immediately
+        emit("search", query=query, total=resp.total_matches, returned=len(resp.results), ...)
+        if not resp.results:                     # dry (first page empty -> zero results signal)
+            return {"empty": True, ...} if not page_results else summarize(page_results)
+        # fetch full docs + judge IN PARALLEL (1 doc per call, up to judge_concurrency)
+        items = [(h, engine.read(h.cp)) for h in resp.results]
+        verdicts = judger.judge(intent, items)   # ThreadPoolExecutor; order-preserving by cp
+        for h in resp.results:                    # SCAN IN RANK ORDER (judging finished out of order)
+            j = verdicts[h.cp]; judged.add(h.cp)
+            recorded.append(record(h, j, query))  # RankedEntry: cp, grade, score, summary, reason, surfacing_query
+            page_results.append((h, j))
+            emit("judge", cp=h.cp, grade=j.grade, reason=j.reason)
+            streak = 0 if relevant(j.grade) else streak + 1
+            if streak >= cfg.nonrelevant_streak:
+                emit("list_exhausted", query=query, streak=streak)
+                return summarize(page_results)
+    return summarize(page_results)
+```
+
+`relevant(grade)` := `grade >= cfg.relevant_grade_threshold`. The `summarize(...)` payload the
+Searcher sees as history contains: the query, total_matches, count judged, the grade
+distribution, and the judged docs (rank, score, grade, reason, and the best-passage summary) —
+i.e. "you ran X; here are the best passages and our recorded judgments + reasons."
+
+## Stopping rules
+
+- **A single ranked list is exhausted** when `nonrelevant_streak` consecutive non-relevant
+  judgments occur in RANK ORDER, or the query goes dry (a page returns no new results).
+- **The intent is done** when total recorded judgments reach `max_judgments` (DEFAULT 1000) —
+  this is the "we no longer need the Searcher" condition. A `max_queries` backstop (DEFAULT 100)
+  is the ONLY other stop. (There is no Searcher-decline stop — tool use is forced.)
+
+## Config knobs (config.example.toml + config.toml)
+
+- `[agents.judger]` — `class`, `llm` (a `[llm.*]` profile; may differ from the Searcher's),
+  and `concurrency`.
+- `[agents.searcher]` — `page_size`, `window`, `max_queries` (default 100), `max_query_retries`.
+- Loop knobs (controller): `nonrelevant_streak` (default 5), `max_judgments` (default 1000),
+  `judge_concurrency`, `max_doc_chars` (truncate large ClimbMix docs for judging), and
+  `relevant_grade_threshold`.
+- **OPEN DECISION — `relevant_grade_threshold` has NO agreed default.** Wire it as an explicit,
+  configurable knob with a clearly-marked PROVISIONAL value and a `# TODO: decide` flag (do NOT
+  silently bake in a default); the streak rule's "non-relevant" definition depends on it.
+
+## Trace (research artifact — stays heavy/detailed)
+
+Reuse the `TraceEvent` (`extra="allow"`) machinery. Event types: `llm_call` (every LLM
+round-trip — Searcher proposals AND each Judger call — with `purpose`, verbatim request,
+usage), `propose` (the query the Searcher chose), `search` (each engine page: query, counts,
+atom_counts, returned hits, latency), `judge` (each per-doc `{cp, grade, reason}`),
+`list_exhausted` (streak hit), `bounce` (`engine_error` / zero-result), `stop`
+(`max_judgments` / `max_queries`), `error` (caught mid-loop LLM failure
+-> partial result, never drop the trace). `run_output._event_dict` must rewrite `cp -> docno`
+for the new `judge`/`search`/`list_exhausted` shapes (mirroring the current handling).
+
+## Downstream compatibility
+
+The controller returns the existing `SearcherResult`; `RankedEntry` already carries
+`cp, grade, score, summary, reason, surfacing_query`. The run-output directory layout
+(`intents.json`, `intent-NN.json`, `intent-NN.trace.jsonl`, `errors.log`) and the cp-native /
+docno-on-disk boundary are UNCHANGED. The Analyst is unchanged.
+
+## Out of scope
+
+C++ engine/server changes; the `SearchEngine` Protocol; `FakeEngine`; the Analyst; the
+run-output directory layout; RRF/fusion (still dropped); deciding the final
+`relevant_grade_threshold` value (left as a flagged config knob for eval).
+<!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 Searcher exposes a single `propose_query{query}` tool (tool use FORCED so it always emits a query) and has NO judge tool and NO 0-4 scale; given an intent plus its running history it emits exactly one GCL cover query per turn
+- [ ] #2 Judger judges ONE (surfaced passage + full document via engine.read(cp)) per LLM call, returning Judgement{cp,grade 0-4,reason} guided-decoded to 0-4; up to judge_concurrency calls run in parallel via a thread pool; deterministic under a stub client in tests
+- [ ] #3 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary
+- [ ] #4 Controller pages down each query's ranked list using exclude=judged, fetching full docs and judging each, and stops that list when nonrelevant_streak consecutive non-relevant judgments occur IN RANK ORDER, or the query goes dry
+- [ ] #5 The consecutive-non-relevant streak is computed in rank order even though parallel judging completes out of order
+- [ ] #6 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the propose_query tool result, and the Searcher reformulates within the same conversation
+- [ ] #7 After a ranked list is exhausted, the Searcher receives history (the query it ran, best-passage summaries, and each recorded grade+reason) and proposes a new query
+- [ ] #8 The intent stops ONLY when total recorded judgments reach max_judgments (default 1000) or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (propose_query is forced)
+- [ ] #9 Config adds [agents.judger] (class, llm, concurrency) and loop knobs page_size, window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (default 1000), judge_concurrency, max_doc_chars, and relevant_grade_threshold (PROVISIONAL value, flagged # TODO: decide — no silent default)
+- [ ] #10 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/search/list_exhausted event shapes
+- [ ] #11 Trace stays heavy/detailed: per-query propose, per-page search, per-doc judge (cp+grade+reason), list_exhausted, bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
+- [ ] #12 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging; controller paging down a list; streak stop in rank order; max_judgments stop; and malformed-query + zero-result self-correction
+- [ ] #13 isj/README.md documents the Searcher/Judger split and the new loop
+<!-- AC:END -->
+
+
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA prompt), parallel ThreadPoolExecutor, guided-decoded Judgement; tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin propose_query proposer + searcher.md (GCL guidance minus judging). 4. controller.py: per-intent loop (paging via exclude, full-doc fetch, parallel judge, rank-order streak, max_judgments budget, error self-correction, trace); tests/test_controller.py. 5. Wire orchestrator.py to the controller; add trace event types in protocol/results.py; extend run_output._event_dict. 6. Config: [agents.judger] + loop knobs in config.example.toml and config.toml (relevant_grade_threshold flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
+<!-- SECTION:PLAN:END -->
+
+## Definition of Done
+<!-- DOD:BEGIN -->
+- [ ] #1 uv run --project isj pytest tests/ passes
+- [ ] #2 relevant_grade_threshold is present as a configurable knob with a # TODO: decide marker (default not baked in)
+<!-- DOD:END -->
