@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 15:27'
+updated_date: '2026-06-27 15:47'
 labels:
   - python
   - isj
@@ -503,7 +503,112 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA-style 0-3 prompt: decomposed intent->topical->trust->scope->grade, evidence-anchored reason, no persona), Verdict{reason,grade: Literal[0,1,2,3]} in protocol/search.py (reason BEFORE grade), parallel ThreadPoolExecutor, guided-decode scoped to the post-thinking/final output ONLY (not the thinking trace); tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin query author over the EXISTING search tool (remove the judge tool) + searcher.md (GCL guidance minus judging; job = devise precise boolean queries to explore relevant docs). 4. controller.py: per-intent loop (large fetch_k batch + exclude=seen continuation, full-doc fetch, parallel judge, rank-order streak over the true list, intent_budget, error self-correction, trace; Searcher sees summaries+grades+reasons only); tests/test_controller.py. 5. Wire orchestrator.py to the controller (split run-total max_judgments into intent_budget); add trace event types in protocol/results.py and re-bind RankedEntry.grade to Literal[0,1,2,3] (matches Verdict.grade); extend run_output._event_dict. 6. Config: [agents.judger] (+ reasoning_effort/thinking note, strong-judge default) + loop knobs in config.example.toml and config.toml (relevant_grade_threshold provisional 2 on 0-3, flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
+Detailed, reviewed implementation plan (grounded in the existing isj_agent code). Implement as
+ONE PR on `searcher-judger` in the staged commit order at the end. NO C++ changes.
+
+## Settled decisions (from plan review)
+- WAVE JUDGING: judge each fetched batch in rank-order WAVES sized to `judge_concurrency`,
+  checking the streak after each wave — NOT the whole fetch_k batch at once. Keeps parallelism
+  but bounds over-judging to < 1 wave past the streak (judging is the expensive LLM call).
+- JUDGE FAILURE: a failed judge call (LLM error or Verdict validation failure; no retry) ABORTS
+  the intent — emit an `error` event, return a PARTIAL SearcherResult (`.error` set, ranked_list
+  = what was recorded so far). The Orchestrator isolates it per-intent and continues; matches the
+  existing persist-on-failure path.
+- DELIVERY: one PR, staged reviewable commits (order below).
+- reasoning_effort: PASS-THROUGH if set in `[agents.judger]` (via `extra_body`), else omitted
+  (behaves like the Analyst call). No live dependency added.
+
+## Object graph & interfaces
+- `Searcher` (REWRITE `agents/searcher.py`, thin like `Analyst`): `Searcher(client, model)`;
+  `propose(messages) -> ProposeResult{query, content, tool_call_id, usage, assistant_message}`.
+  One LLM round-trip offering a single `search` tool with `tool_choice="required"` (only one tool
+  => forced; avoids relying on named-function tool_choice on gpt-oss/vLLM). The CONTROLLER owns
+  the message list + trace; the Searcher just returns the chosen query.
+- `Judger` (NEW `agents/judger.py`, thin): `Judger(client, model, *, concurrency, reasoning_effort=None)`;
+  `judge(intent, docs) -> list[JudgeCall]` where docs = `[(summary, document_text), ...]` and
+  `JudgeCall{verdict: Verdict|None, usage, duration_ms, request, content, error}`. Uses
+  `concurrent.futures.ThreadPoolExecutor(concurrency)` (stdlib; openai client is thread-safe).
+  Each worker: fill `judger.md` via `str.replace` on `{intent}`/`{summary}`/`{document}` (NOT
+  str.format — doc text may contain `{`), `create(response_format=Verdict json_schema,
+  extra_body={"reasoning_effort":...} if set)`, read `message.content`, `Verdict.model_validate_json`.
+  Returns results ALIGNED to input order so the controller emits ordered trace. NO cp in/out.
+- `Controller` (NEW `controller.py`): owns the per-intent loop, paging, wave-judging, streak,
+  budget, trace, summarize payload. `Controller(searcher, judger, engine, *, fetch_k=200,
+  window=75, nonrelevant_streak=5, relevant_grade_threshold=2, judge_concurrency=8, max_doc_chars,
+  max_queries=100, max_list_depth=None)`; `run(intent, intent_budget) -> SearcherResult`.
+- `Orchestrator` (EDIT `orchestrator.py`): `Orchestrator(analyst, controller, *, max_judgments=1000)`;
+  `intent_budget = max_judgments // num_intents` (>=1); calls `controller.run(intent, intent_budget)`
+  per interpretation. Keeps `on_intent` callback + per-intent error isolation.
+- CLI (EDIT `cli.py`): build `analyst`, `searcher`, `judger` via `_build_agent`, the `engine`, then
+  `Controller(...)` from a new `[loop]` config table, then `Orchestrator(analyst, controller,
+  max_judgments=...)`.
+
+## Protocol (`protocol/search.py`, `protocol/results.py`)
+- Replace `Judgement{cp,grade,reason}` with `Verdict`: `reason: str = Field(description=...)` FIRST,
+  then `grade: Literal[0,1,2,3] = Field(description=...)` (rubric in the descriptions). No other
+  importers (test_searcher imports only AtomCount/Hit/SearchResponse).
+- `RankedEntry.grade`: `Field(ge=0,le=4)` -> `Literal[0,1,2,3]` (matches `Verdict.grade`).
+
+## Searcher prompt + Judger prompt
+- `searcher.md`: the drafted query-author prompt (GCL block intact; no judging/grades/judge tool).
+- `judger.md`: the drafted decomposed 0-3 trust-aware prompt (intent->topical->trust->scope->grade,
+  evidence-anchored reason, no persona, no "Return ONLY" tail). Document truncated to
+  `max_doc_chars` controller-side before the Judger sees it.
+
+## Controller loop (the wave refinement)
+Per query: `propose` -> fetch a LARGE batch `cover_search(query, top_k=fetch_k, exclude=seen)` ->
+descend in rank-order WAVES of `judge_concurrency`: judge the NEW hits in the wave in parallel,
+then scan the wave in rank order — prior-judged (cp in global `judged` map) are COUNTED not
+re-judged (stored grade drives the streak, rolls into J/X/Y); new hits are judged + recorded;
+`streak = 0 if grade>=relevant_grade_threshold else streak+1`; stop the list on streak,
+`max_list_depth`, dry, or `intent_budget`. Continue-fetch (`exclude=seen`) only when a whole batch
+is consumed without a streak. Feed the `summarize` payload back as the `search` tool result =
+`{query, total_matches, depth_judged:K, already_judged:{count:J,relevant:X,non_relevant:Y},
+new_results:[{rank,score,grade,reason,summary}]}` (NEW docs only; SUMMARIES, never full text);
+engine error -> `{error}`; empty first page -> `{empty:true,...}`. Intent stops at `intent_budget`
+or `max_queries`. A judge failure aborts the intent with a partial result (decision above).
+
+## Trace + run_output
+- Controller emits: `llm_call` (purpose `searcher_turn`, and one per judge call), `propose`{query},
+  `search`{query,counts,atom_counts,results,latency}, `judge`{cp,grade,reason}, `revisit`{cp,grade},
+  `list_exhausted`{query,depth,streak}, `bounce`{engine_error|zero_result}, `stop`{reason:
+  intent_budget|max_queries}, `error`.
+- `run_output._event_dict`: add cp->docno rewrite for the new single-cp `judge` and `revisit`
+  shapes; `search` results already handled; drop the obsolete `judge_before_search` bounce-cps branch.
+
+## Config
+- `[agents.judger]` = `class`, `llm` (default a strong judge, e.g. gpt-oss-120b), `concurrency`,
+  optional `reasoning_effort`.
+- `[agents.searcher]` = `fetch_k` (200), `window`, `max_queries` (100).
+- NEW `[loop]` table = `nonrelevant_streak` (5), `max_judgments` (1000, RUN-TOTAL),
+  `judge_concurrency`, `max_doc_chars`, `relevant_grade_threshold` (PROVISIONAL 2, `# TODO: decide`),
+  optional `max_list_depth`. Update both `config.example.toml` and `config.toml`.
+
+## Tests (FakeEngine + stub LLMs, no network)
+- `test_judger.py`: stub client returns Verdict JSON; assert parallelism, input-aligned order,
+  cp-less output, 0-3 validation, str.replace fill, reasoning_effort pass-through.
+- `test_controller.py`: wave-judging; streak in rank order over the TRUE list (incl. prior-judged
+  via stored grade); revisit counted-not-rejudged; continue-fetch with `exclude=seen`; the
+  K/J/X/Y aggregate; `intent_budget` stop; `max_queries`; engine-error + zero-result self-correction;
+  a judge failure -> partial result.
+- Rewrite `test_searcher.py` (query author: forced tool, returns query, no judging).
+- Update `test_orchestrator.py` (stub Controller; budget split // num_intents).
+- Keep `test_run_output.py` green; extend for the new judge/revisit event rewrites.
+
+## Risks / live-verify (not blocking the code shape)
+- Final-channel scoping of guided decoding (AC #3) is a serving-stack property — Judger reads
+  `message.content` + validates; VERIFY on the deployed vLLM/gpt-oss stack.
+- Searcher conversation growth across many queries (summaries accumulate toward `intent_budget`);
+  v1 keeps full history; trimming is a future option.
+
+## Staged commit order (one PR on `searcher-judger`)
+1. protocol — `Verdict` (replaces `Judgement`); `RankedEntry.grade` -> `Literal[0,1,2,3]`.
+2. Judger — `judger.py` + `judger.md` + `test_judger.py`.
+3. Searcher — rewrite `searcher.py` + `searcher.md` + reworked `test_searcher.py`.
+4. Controller — `controller.py` (loop, wave-judging, trace, summarize) + `test_controller.py`.
+5. Wiring — `orchestrator.py` (budget split), `cli.py`, `config.example.toml`/`config.toml`
+   (`[agents.judger]`, `[loop]`), `run_output.py` event rewrites, `test_orchestrator.py`.
+6. Docs — `isj/README.md` (Searcher/Judger split, 0-3 trust Judger, de-dup, budget, the loop).
 <!-- SECTION:PLAN:END -->
 
 ## Definition of Done
