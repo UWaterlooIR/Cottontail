@@ -112,10 +112,15 @@ PART 2 — WHAT THE `search` TOOL RETURNS
 ================================================================================
 
 Each `search` call returns a JSON object describing what your query found and how the
-assessor graded it. A normal result looks like (the comments explain each field):
+assessor graded it. The fields appear in this exact order; read it top-to-bottom:
 
 {
   "query": "(^ black bear* attack*)",     // the query you ran, echoed back
+  "atom_counts": [                         // one entry PER term in your query, with how many
+    {"term": "black",   "count": 1840},    //   times it occurs in the WHOLE collection.
+    {"term": "bear*",   "count": 9004},    //   A "count": 0 means that term matched NOTHING
+    {"term": "attack*", "count": 5200}     //   (a typo / shortened stem / dead expansion) and
+  ],                                       //   silently killed the cover — FIX it.
   "total_matches": 673,                    // documents in the WHOLE collection matching this
                                            //   query (ignores what's been judged) — your
                                            //   breadth gauge: huge = very broad, 0 = dry
@@ -125,26 +130,28 @@ assessor graded it. A normal result looks like (the comments explain each field)
     "relevant": 4,                         //   how many of those were relevant (grade >= 1)
     "non_relevant": 5                      //   how many were not
   },
-  "new_results": [                         // the NEW documents this query surfaced:
-    {
+  "new_results": [                         // the NEW documents this query surfaced. For each,
+    {                                      //   read them in this order — summary BEFORE grade:
       "rank": 1,                           //   position in this query's ranked list
       "score": 0.048,                      //   cover-density / proximity score; higher = tighter,
                                            //     denser cover — the strongest matches rank first
-      "grade": 3,                          //   the assessor's relevance grade, 0–3
+      "summary": "…bear spray, back away…",//   a short extract from the document — read THIS first:
+                                           //     your window into what it says and the words to mine
       "reason": "directly answers …",      //   the assessor's justification for the grade
-      "summary": "…bear spray, back away…" //   a short extract from the document — your window
-    }                                      //     into what it says and the vocabulary to mine
+      "grade": 3                           //   the assessor's relevance grade, 0–3
+    }
   ]
 }
 
 How to read it:
-- new_results is your signal. Read the grades, the reasons, and especially the SUMMARIES
-  — mine their language for sharper terms and synonyms.
-- already_judged large while new_results is small ⇒ you are RETREADING ground you've
-  already covered; switch to a different facet, sense, or register.
+- Check atom_counts first: any term with count 0 is dead — rewrite it before anything else.
+- new_results is your signal. For each, read the SUMMARY first to form your own sense of the
+  document, then the reason and grade — and mine the summaries' language for sharper terms.
+- already_judged large while new_results is small ⇒ you are RETREADING ground you've already
+  covered; switch to a different facet, sense, or register.
 - new_results empty AND total_matches 0 ⇒ the query is DRY (matched nothing) — broaden.
-- new_results empty but total_matches > 0 ⇒ everything it matched was already judged —
-  again a retread; change direction.
+- new_results empty but total_matches > 0 ⇒ everything it matched was already judged — again a
+  retread; change direction.
 - high total_matches but few relevant new_results ⇒ too broad / noisy — narrow.
 
 If your query is malformed or rejected, you instead receive:
@@ -203,8 +210,9 @@ tapped — do NOT just re-order the same words. Broaden along one of these axes:
     and words from a DIFFERENT REGISTER — see 3.4.
   • GENERALIZE a term (a specific instance → its category), or SPLIT the question into
     sub-questions and search each facet on its own.
-Make sure every term is a real word in its FULL form: a typo or a shortened stem (e.g.
-`hik*` instead of `hike*`) silently matches nothing and quietly kills the whole cover.
+Watch `atom_counts`: a term showing `"count": 0` matched nothing — a typo or a shortened
+stem (e.g. `hik*` instead of `hike*`) — and silently kills the whole cover (since a cover
+needs ALL its terms). Rewrite that term in its FULL form.
 
 --------------------------------------------------------------------------------
 3.4  Diversify your VOCABULARY and REGISTER (this is where recall is won or lost)

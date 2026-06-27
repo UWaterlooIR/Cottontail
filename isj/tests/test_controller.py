@@ -198,6 +198,20 @@ def test_judge_failure_yields_partial_result():
     assert 10 in {e.cp for e in result.ranked_list.entries}
 
 
+def test_result_payload_has_atom_counts_and_ordered_fields():
+    resp, docs = build([(10, 2), (20, 1)])  # build() gives atom_counts=[{term:x,count:1}]
+    ctl = _ctl(["(^ q1)"], [resp], docs, nonrelevant_streak=9, max_queries=2)
+    ctl.run("intent", intent_budget=100)
+    payload = ctl.searcher.tool_results[-1]  # query 1's history, captured at query 2's propose
+    assert payload["atom_counts"] == [{"term": "x", "count": 1}]
+    # top-level order: diagnostics first, content last
+    assert list(payload) == [
+        "query", "atom_counts", "total_matches", "depth_judged", "already_judged", "new_results"
+    ]
+    # per-result order: rank, score, summary, reason, grade (summary BEFORE reason/grade)
+    assert list(payload["new_results"][0]) == ["rank", "score", "summary", "reason", "grade"]
+
+
 def test_judge_llm_call_keeps_verbatim_request():
     resp, docs = build([(10, 2)])
     ctl = _ctl(["(^ q1)"], [resp], docs, max_queries=1)

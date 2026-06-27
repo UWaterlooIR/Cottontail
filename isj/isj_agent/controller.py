@@ -151,6 +151,7 @@ class Controller:
         fresh: list[tuple] = []  # (Hit, Verdict) NEW judgments this query -> returned to Searcher
         buffer: list = []
         total_matches = 0
+        atom_counts: list = []   # per query-leaf corpus counts; identical across this query's fetches
         exhausted = False
 
         while not exhausted and len(recorded) < intent_budget:
@@ -167,9 +168,12 @@ class Controller:
                     return {"error": str(e)}
                 eng_ms = (time.time() - ts) * 1000.0
                 total_matches = resp.total_matches
+                fetch_atoms = [a.model_dump() for a in resp.atom_counts]
+                if not atom_counts:  # representative = the query's first fetch (atoms are identical across fetches)
+                    atom_counts = fetch_atoms
                 emit("search", ts, eng_ms, query=query, total_matches=resp.total_matches,
                      unjudged_matches=resp.unjudged_matches,
-                     atom_counts=[a.model_dump() for a in resp.atom_counts],
+                     atom_counts=fetch_atoms,
                      returned=len(resp.results),
                      results=[h.model_dump() for h in resp.results])
                 if not resp.results:  # dry / list exhausted
@@ -216,18 +220,23 @@ class Controller:
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        return self._summarize(query, total_matches, depth, again, fresh)
+        return self._summarize(query, atom_counts, total_matches, depth, again, fresh)
 
-    def _summarize(self, query, total_matches, depth, again, fresh) -> dict:
+    def _summarize(self, query, atom_counts, total_matches, depth, again, fresh) -> dict:
+        # Field order is deliberate -- it is what the Searcher reads top-to-bottom:
+        # diagnostics first (atom_counts up top so a count-0 dead atom is caught early),
+        # the content last; and per result rank/score then summary BEFORE reason BEFORE
+        # grade, so the agent reads the passage before it sees the assessor's verdict.
         x = sum(1 for _, g in again if self._relevant(g))
         return {
             "query": query,
+            "atom_counts": atom_counts,
             "total_matches": total_matches,
             "depth_judged": depth,
             "already_judged": {"count": len(again), "relevant": x, "non_relevant": len(again) - x},
             "new_results": [
-                {"rank": h.rank, "score": h.score, "grade": v.grade,
-                 "reason": v.reason, "summary": h.summary}
+                {"rank": h.rank, "score": h.score, "summary": h.summary,
+                 "reason": v.reason, "grade": v.grade}
                 for h, v in fresh
             ],
         }
