@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 15:13'
+updated_date: '2026-06-27 15:27'
 labels:
   - python
   - isj
@@ -45,8 +45,9 @@ Touched/new files:
 - REWRITE `isj_agent/agents/searcher.py` + `searcher.md` — a thin GCL query proposer (no judging).
 - EDIT `isj_agent/orchestrator.py` — call the controller per intent instead of `Searcher.run`;
   split the run-total `max_judgments` into a per-intent `intent_budget` and pass it down.
-- EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry` (drop `RankedEntry.grade`
-  bound to `0-3`); add trace event types.
+- EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry`, re-binding
+  `RankedEntry.grade` to the 0-3 range (was 0-4) as `Literal[0,1,2,3]` (consistent with
+  `Verdict.grade`); add trace event types.
 - EDIT `isj_agent/protocol/search.py` — replace `Judgement{cp,grade,reason}` (for the removed
   batch judge tool) with `Verdict{reason, grade}` (the Judger's guided output; `reason` BEFORE
   `grade`; `grade: Literal[0,1,2,3]`; cp is controller-side — see the schema under "The prompts").
@@ -118,8 +119,14 @@ turn after turn (see "De-duplication" below).
 - OUTPUT: a `Verdict { reason, grade (0-3) }` per candidate — **NO cp**. The controller already
   knows which document each call was for, so it pairs the returned Verdict with that cp itself;
   burdening the model with the cp adds nothing and risks a transposed/hallucinated id. Guided-
-  decoded via `Verdict.model_json_schema()` (the same json-schema pattern the Analyst uses), so
-  the grade is constrained to the four levels 0-3. **Field order matters: `reason` is declared
+  decoded via `Verdict.model_json_schema()` — the same Pydantic->`model_json_schema()` approach
+  the Analyst uses, but scoped to the model's post-thinking / `final`-channel output ONLY (never
+  the whole completion), so the grade is constrained to the four levels 0-3 without strangling
+  the decomposition. (Code check: `analyst.py` sets `response_format={"type":"json_schema",...}`
+  and reads `choices[0].message.content` — it does NOT itself separate channels, so it relies on
+  the serving stack to scope guided decoding to the final channel of a harmony/reasoning model.
+  The Judger must NOT assume that holds — VERIFY final-channel scoping on the deployed
+  vLLM/gpt-oss stack, per AC #3.) **Field order matters: `reason` is declared
   BEFORE `grade`** — under guided JSON decoding the model fills properties in declaration order,
   so the justification is generated before the grade is committed. (`Verdict` replaces the old
   `Judgement{cp,grade,reason}`, which existed only for the now-removed batch `judge` tool; see
@@ -131,6 +138,13 @@ turn after turn (see "De-duplication" below).
   credibility (spam, fabrication, promotional filler, contradiction) CAP the grade. The `reason`
   must cite a concrete span/detail, not just assert. No persona ("You are a relevance assessor"
   framing is dropped — topicality + steps carry it).
+- TRUST SEMANTICS (an eval-conscious choice, not an accident): with trust in the rubric a LOW
+  grade can mean off-topic OR on-topic-but-untrustworthy. The per-doc `reason` keeps that nuance,
+  but the J/X/Y aggregate AND `nonrelevant_streak` collapse it to relevant/non-relevant — so a
+  spam-dense region can trip the streak and end descent early, and a facet that surfaces
+  on-topic-but-spammy docs reads back to the Searcher as a weak facet. DEFAULT: accept the
+  collapse (the per-doc reasons retain the detail). Distinguishing off-topic from trust-capped in
+  the aggregate/streak is a future option (see Keep/Future).
 - ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
   simultaneously via a `ThreadPoolExecutor`; the draft prompt + schema are under "The prompts".
 - REASONING-MODEL serving (both candidate models — gpt-oss-120b, Gemma 4 — reason before
@@ -279,7 +293,7 @@ class Verdict(BaseModel):
 ```
 def run(intent, intent_budget) -> SearcherResult:   # intent_budget = max_judgments // num_intents
     msgs = [system(searcher.md), user(f"Question: {intent}")]
-    judged: dict[int, Verdict] = {}       # GLOBAL: cp -> {grade, reason} judged in ANY prior query
+    judged: dict[int, Verdict] = {}       # GLOBAL: cp -> {reason, grade} judged in ANY prior query
     recorded: list[RankedEntry] = []      # one entry per NEW judgment, across all queries this intent
     events = []
     queries = 0
@@ -322,7 +336,7 @@ def page_and_judge(query, judged, recorded, events, intent_budget):
             break
         new_hits = [h for h in resp.results if h.cp not in judged]   # only NEW docs go to the Judger
         docs = [(h.summary, engine.read(h.cp)) for h in new_hits]    # the Judger sees summary + full doc, NOT cp
-        verdicts = { h.cp: v for h, v in zip(new_hits, judger.judge(intent, docs)) }  # parallel Verdict{grade,reason}
+        verdicts = { h.cp: v for h, v in zip(new_hits, judger.judge(intent, docs)) }  # parallel Verdict{reason,grade}
         # judger.judge returns one Verdict per item IN INPUT ORDER; the MODEL emits NO cp -- the
         # controller pairs each verdict with the cp it asked about (the zip above).
         for h in resp.results:                    # SCAN IN RANK ORDER (new-doc judging finished out of order)
@@ -448,8 +462,11 @@ pairwise would also break the parallel one-doc-per-call design. **No cp in the J
 
 FUTURE (out of scope here, candidates for later tasks): a calibration pass before trusting
 labels (Cohen's κ vs TREC DL qrels + system-ranking Kendall τ; the Waterloo
-`Narabzad/llm-relevance-judgement-comparison` harness is near drop-in); a strict-comparability
-mode that drops the trust step (step 3) for clean apples-to-apples vs TREC DL qrels;
+`Narabzad/llm-relevance-judgement-comparison` harness is near drop-in) — the calibration pass
+must be run in the strict-comparability (trust-OFF) configuration, because TREC DL qrels are
+topical-only and calibrating the trust-ON judge against them would conflate miscalibration with
+the deliberately-added trust step; a strict-comparability mode that drops the trust step
+(step 3) for clean apples-to-apples vs TREC DL qrels;
 ensembling (JudgeBlender-style, e.g. across `reasoning_effort`) if label stability becomes the
 bottleneck; full per-query criteria-generation (TRUE / Farzi-Dietz) if the inline 4-step
 decomposition underperforms. Evidence basis: Thomas et al. 2024 (arXiv:2309.10621), UMBRELA
@@ -483,12 +500,10 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 - [ ] #16 isj/README.md documents the Searcher/Judger split, the 0-3 trust-aware Judger, the de-duplication rule, the run-total judgment budget split across intents, and the new loop
 <!-- AC:END -->
 
-
-
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA-style 0-3 prompt: decomposed intent->topical->trust->scope->grade, evidence-anchored reason, no persona), Verdict{reason,grade: Literal[0,1,2,3]} in protocol/search.py (reason BEFORE grade), parallel ThreadPoolExecutor, guided-decode scoped to the post-thinking/final output only; tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin query author over the EXISTING search tool (remove the judge tool) + searcher.md (GCL guidance minus judging; job = devise precise boolean queries to explore relevant docs). 4. controller.py: per-intent loop (large fetch_k batch + exclude=seen continuation, full-doc fetch, parallel judge, rank-order streak over the true list, intent_budget, error self-correction, trace; Searcher sees summaries+grades+reasons only); tests/test_controller.py. 5. Wire orchestrator.py to the controller (split run-total max_judgments into intent_budget); add trace event types in protocol/results.py (RankedEntry.grade 0-3); extend run_output._event_dict. 6. Config: [agents.judger] (+ reasoning_effort/thinking note) + loop knobs in config.example.toml and config.toml (relevant_grade_threshold provisional 2, flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
+1. Create this Backlog task (done). 2. Judger: agents/judger.py + judger.md (UMBRELA-style 0-3 prompt: decomposed intent->topical->trust->scope->grade, evidence-anchored reason, no persona), Verdict{reason,grade: Literal[0,1,2,3]} in protocol/search.py (reason BEFORE grade), parallel ThreadPoolExecutor, guided-decode scoped to the post-thinking/final output ONLY (not the thinking trace); tests/test_judger.py. 3. Rewrite Searcher: searcher.py thin query author over the EXISTING search tool (remove the judge tool) + searcher.md (GCL guidance minus judging; job = devise precise boolean queries to explore relevant docs). 4. controller.py: per-intent loop (large fetch_k batch + exclude=seen continuation, full-doc fetch, parallel judge, rank-order streak over the true list, intent_budget, error self-correction, trace; Searcher sees summaries+grades+reasons only); tests/test_controller.py. 5. Wire orchestrator.py to the controller (split run-total max_judgments into intent_budget); add trace event types in protocol/results.py and re-bind RankedEntry.grade to Literal[0,1,2,3] (matches Verdict.grade); extend run_output._event_dict. 6. Config: [agents.judger] (+ reasoning_effort/thinking note, strong-judge default) + loop knobs in config.example.toml and config.toml (relevant_grade_threshold provisional 2 on 0-3, flagged TODO). 7. Update/retire combined-searcher tests; run uv run --project isj pytest tests/. 8. Update isj/README.md. 9. Open PR off the searcher-judger branch.
 <!-- SECTION:PLAN:END -->
 
 ## Definition of Done
