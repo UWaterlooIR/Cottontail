@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 13:55'
+updated_date: '2026-06-27 14:09'
 labels:
   - python
   - isj
@@ -45,6 +45,8 @@ Touched/new files:
 - EDIT `isj_agent/orchestrator.py` — call the controller per intent instead of `Searcher.run`;
   split the run-total `max_judgments` into a per-intent `intent_budget` and pass it down.
 - EDIT `isj_agent/protocol/results.py` — keep `SearcherResult`/`RankedEntry`; add trace event types.
+- EDIT `isj_agent/protocol/search.py` — replace `Judgement{cp,grade,reason}` (for the removed
+  batch judge tool) with `Verdict{grade,reason}` (the Judger's guided output; cp is controller-side).
 - EDIT `isj_agent/run_output.py` — extend cp->docno rewriting to the new event shapes.
 - EDIT `config.example.toml` + `config.toml` — `[agents.judger]` role + new loop knobs.
 - EDIT `isj/README.md` — document the Searcher/Judger split.
@@ -106,11 +108,15 @@ turn after turn (see "De-duplication" below).
 
 ### Judger (parallel, full-document) — `agents/judger.py` + `judger.md`
 - INPUT: the intent, and for each **NEW** candidate (NOT judged by any prior query) the
-  surfaced Hit (summary, score, cp) PLUS the FULL document text (`engine.read(cp)`), truncated
-  to `max_doc_chars`. Already-judged docs are NEVER re-sent to the Judger.
-- OUTPUT: a `Judgement { cp, grade (0-4), reason }` per candidate, guided-decoded via
-  `Judgement.model_json_schema()` (the same json-schema pattern the Analyst uses), so grades
-  are constrained to 0-4.
+  cover-biased summary (orientation) PLUS the FULL document text (`engine.read(cp)`), truncated
+  to `max_doc_chars`. The cp is NOT sent to the model — it is only the controller's handle on
+  which document it asked about. Already-judged docs are NEVER re-sent to the Judger.
+- OUTPUT: a `Verdict { grade (0-4), reason }` per candidate — **NO cp**. The controller already
+  knows which document each call was for, so it pairs the returned Verdict with that cp itself;
+  burdening the model with the cp adds nothing and risks a transposed/hallucinated id. Guided-
+  decoded via `Verdict.model_json_schema()` (the same json-schema pattern the Analyst uses), so
+  grades are constrained to 0-4. (`Verdict` replaces the old `Judgement{cp,grade,reason}`, which
+  existed only for the now-removed batch `judge` tool.)
 - ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
   simultaneously via a `ThreadPoolExecutor`. `judger.md` carries the UMBRELA 0-4 umbrella
   judging scheme (the 0-4 rubric currently inlined in `searcher.md` moves here and is expanded
@@ -207,7 +213,8 @@ DOCUMENT:
 
 `{intent}`, `{summary}` (the surfaced cover-biased summary), and `{document}` (the full body
 via `engine.read(cp)`, truncated to `max_doc_chars`) are filled by the controller per
-candidate; the `grade`/`reason` are guided-decoded from `Judgement.model_json_schema()`.
+candidate; the `grade`/`reason` are guided-decoded from `Verdict.model_json_schema()` (no cp —
+the prompt never mentions one).
 
 ## The per-intent loop (pseudocode)
 
@@ -256,7 +263,10 @@ def page_and_judge(query, judged, recorded, events, intent_budget):
         if not resp.results:                     # list exhausted / dry
             break
         new_hits = [h for h in resp.results if h.cp not in judged]   # only NEW docs go to the Judger
-        verdicts = judger.judge(intent, [(h, engine.read(h.cp)) for h in new_hits])  # parallel; keyed by cp
+        docs = [(h.summary, engine.read(h.cp)) for h in new_hits]    # the Judger sees summary + full doc, NOT cp
+        verdicts = { h.cp: v for h, v in zip(new_hits, judger.judge(intent, docs)) }  # parallel Verdict{grade,reason}
+        # judger.judge returns one Verdict per item IN INPUT ORDER; the MODEL emits NO cp -- the
+        # controller pairs each verdict with the cp it asked about (the zip above).
         for h in resp.results:                    # SCAN IN RANK ORDER (new-doc judging finished out of order)
             seen.add(h.cp); depth += 1
             if h.cp in judged:                    # PRIOR judgment: count only -- no re-read, no Judger, no record
@@ -375,8 +385,8 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 Searcher keeps the EXISTING single `search{query}` tool (no new tool; the `judge` tool is REMOVED; tool use FORCED so it always searches) and has NO 0-4 scale; given an intent plus its running history it emits one precise GCL boolean query per turn
-- [ ] #2 Judger judges ONE (surfaced passage + full document via engine.read(cp)) per LLM call, returning Judgement{cp,grade 0-4,reason} guided-decoded to 0-4; up to judge_concurrency calls run in parallel via a thread pool; deterministic under a stub client in tests
-- [ ] #3 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary
+- [ ] #2 Judger judges ONE document per LLM call from the cover-biased summary + FULL document text, returning a Verdict{grade 0-4, reason} guided-decoded to 0-4 — NO cp (the controller pairs the verdict with the cp it asked about); up to judge_concurrency calls run in parallel via a thread pool; deterministic under a stub client in tests
+- [ ] #3 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary; the cp is never sent to the Judger model
 - [ ] #4 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side; only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
 - [ ] #5 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs, which contribute via their STORED grade — even though parallel judging of the NEW docs completes out of order
 - [ ] #6 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
@@ -387,7 +397,7 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 - [ ] #11 Config adds [agents.judger] (class, llm, concurrency) and loop knobs fetch_k (large per-request batch, default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (RUN-TOTAL budget, default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL value, flagged # TODO: decide — no silent default)
 - [ ] #12 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
 - [ ] #13 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
-- [ ] #14 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split evenly across intents and the per-intent intent_budget stop; and malformed-query + zero-result self-correction
+- [ ] #14 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging returning cp-less Verdicts paired by the controller; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; the run-total budget split evenly across intents and the per-intent intent_budget stop; and malformed-query + zero-result self-correction
 - [ ] #15 isj/README.md documents the Searcher/Judger split, the de-duplication rule, the run-total judgment budget split across intents, and the new loop
 <!-- AC:END -->
 
