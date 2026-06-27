@@ -21,6 +21,7 @@ from isj_agent.config import (
     build_search_engine,
     load_class,
 )
+from isj_agent.controller import Controller
 from isj_agent.orchestrator import Orchestrator
 from isj_agent.run_output import Outcome, RunError, write_run
 
@@ -31,11 +32,10 @@ def _render_event(ev) -> None:
     if t == "llm_call":
         pt, ct = d.get("prompt_tokens"), d.get("completion_tokens")
         toks = f" tokens={pt}+{ct}" if pt is not None else ""
-        print(
-            f"    turn {d['turn']}: tool={d['tool']} finish={d.get('finish_reason')}"
-            f"{toks} ({d['duration_ms']:.0f} ms)"
-        )
-        if d.get("content") and d["content"].strip():
+        purpose = d.get("purpose")
+        head = f"turn {d['turn']}" if purpose == "searcher_turn" else purpose
+        print(f"    llm[{head}]{toks} ({d['duration_ms']:.0f} ms)")
+        if purpose == "searcher_turn" and d.get("content") and d["content"].strip():
             print(f"      reasoning: {d['content'].strip()}")
         for c in d.get("calls", []):
             print(f"      -> {c['name']}({c['arguments']})")
@@ -43,18 +43,23 @@ def _render_event(ev) -> None:
         pt = d.get("prompt_tokens")
         size = f" (prompt_tokens={pt})" if pt is not None else ""
         print(f"    ERROR turn {d.get('turn')}: {d.get('error_type')}: {d.get('message')}{size}")
+    elif t == "propose":
+        print(f"    -> query: {d['query']!r}")
     elif t == "search_request":
         print(f"    -> request: {d['query']!r} (exclude={len(d.get('exclude', []))})")
     elif t == "search":
         print(
             f"    search {d['query']!r}: total={d['total_matches']} "
-            f"returned={len(d.get('results', []))} exclude={len(d.get('exclude', []))} "
-            f"({d['duration_ms']:.0f} ms)"
+            f"returned={len(d.get('results', []))} ({d['duration_ms']:.0f} ms)"
         )
     elif t == "judge":
-        print(f"    judge: recorded={d['recorded']} grades={[j['grade'] for j in d.get('judgements', [])]}")
+        print(f"    judge {d.get('docno', d.get('cp'))}: grade={d['grade']}")
+    elif t == "revisit":
+        print(f"    revisit {d.get('docno', d.get('cp'))}: grade={d['grade']} (already judged)")
+    elif t == "list_exhausted":
+        print(f"    list exhausted at depth {d['depth']} (streak {d['streak']})")
     elif t == "bounce":
-        print(f"    bounce[{d['kind']}]: {d['message']}")
+        print(f"    bounce[{d['kind']}]: {d.get('message')}")
     elif t == "stop":
         print(f"    stop: {d['reason']}")
 
@@ -112,16 +117,36 @@ def main(argv: list[str] | None = None) -> None:
         return cls(client=clients[cfg["llm"]], model=llm_configs[cfg["llm"]]["model"], **extra)
 
     analyst = _build_agent("analyst")
-    engine = build_search_engine(config["cottontail_http_json_server"])
     searcher_cfg = agent_configs["searcher"]
-    knobs = {k: searcher_cfg[k] for k in ("top_k", "window", "max_turns") if k in searcher_cfg}
-    searcher = _build_agent("searcher", engine=engine, **knobs)
+    judger_cfg = agent_configs["judger"]
+    searcher = _build_agent(
+        "searcher",
+        **{k: searcher_cfg[k] for k in ("reasoning_effort", "temperature") if k in searcher_cfg},
+    )
+    judger = _build_agent(
+        "judger",
+        **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature") if k in judger_cfg},
+    )
+    engine = build_search_engine(config["cottontail_http_json_server"])
+    loop_cfg = config.get("loop", {})
+    controller = Controller(
+        searcher, judger, engine,
+        fetch_k=searcher_cfg.get("fetch_k", 200),
+        window=searcher_cfg.get("window", 75),
+        max_queries=searcher_cfg.get("max_queries", 100),
+        nonrelevant_streak=loop_cfg.get("nonrelevant_streak", 5),
+        relevant_grade_threshold=loop_cfg.get("relevant_grade_threshold", 1),
+        max_doc_chars=loop_cfg.get("max_doc_chars", 50000),
+        max_list_depth=loop_cfg.get("max_list_depth"),
+    )
 
     docno_map = build_docno_map(
         config["cottontail_http_json_server"], burrow_override=args.burrow
     )
 
-    orchestrator = Orchestrator(analyst=analyst, searcher=searcher)
+    orchestrator = Orchestrator(
+        analyst, controller, max_judgments=loop_cfg.get("max_judgments", 1000)
+    )
     intents, outcomes, run_error = orchestrator.run_question(
         args.question, on_intent=_make_on_intent(args.verbose)
     )
