@@ -11,7 +11,7 @@
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
 - [Dev burrow (climbmix-100k-porter)](dev-burrow-climbmix-100k.md) — new-style porter dev index for Searcher cp/sidecar work
 - [Backlog AC editing](backlog-acceptance-criteria-editing.md) — CLI gotchas (--acceptance-criteria dups!) + the safe AC-replace recipe
-- [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design takes ALL open backlog work (no new branches); gh-https push now wired
+- [PR: JSONL CLI](pr-jsonl-cli.md) — #1/#3/#4/#5 all merged; design branch deleted; new work goes on fresh feature branches (now: searcher-judger / TASK-16); gh-https push wired
 - [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
 - [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace
