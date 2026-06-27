@@ -4,7 +4,7 @@ title: 'Split the Searcher: query-only Searcher + parallel full-document Judger'
 status: To Do
 assignee: []
 created_date: '2026-06-27 01:53'
-updated_date: '2026-06-27 02:55'
+updated_date: '2026-06-27 03:55'
 labels:
   - python
   - isj
@@ -88,8 +88,8 @@ turn after turn (see "De-duplication" below).
   already judged; X relevant / Y non-relevant) — the already-judged docs are NOT re-listed.
   The Searcher NEVER receives full document text — full docs go ONLY to the Judger. From the
   Searcher's point of view it simply searches and, next turn, sees those results already judged.
-- PROMPT (`searcher.md`): its job is to **devise precise boolean (GCL) queries to explore the
-  space of relevant documents** — formulating different, precise covers to find relevant
+- PROMPT (`searcher.md`, drafted under "The prompts" below): its job is to **devise precise
+  boolean (GCL) queries to explore the space of relevant documents** — formulating different, precise covers to find relevant
   material, paying close attention to what the previous queries' judged results revealed
   (which facets/terms surfaced relevant vs. non-relevant material). REUSE the load-bearing GCL
   guidance from the current `searcher.md` (TASK-5.6 /
@@ -109,12 +109,100 @@ turn after turn (see "De-duplication" below).
 - ONE LLM call judges ONE document. The Judger runs up to `judge_concurrency` calls
   simultaneously via a `ThreadPoolExecutor`. `judger.md` carries the UMBRELA 0-4 umbrella
   judging scheme (the 0-4 rubric currently inlined in `searcher.md` moves here and is expanded
-  into a proper umbrella prompt that frames the passage + full document against the intent).
+  into a proper umbrella prompt that frames the passage + full document against the intent);
+  the draft is under "The prompts" below.
 
 ### Controller (the per-intent loop) — `controller.py`
 Owns paging, the streak stop, the judgment budget, error self-correction routing, and the
 trace. Returns the EXISTING `SearcherResult { ranked_list, events, error }` so C2/C3 and the
 run-output layout are unchanged.
+
+## The prompts (drafts to embed)
+
+These are the starting drafts for `searcher.md` and `judger.md`. The Searcher's GCL block is
+the LOAD-BEARING text from the current `searcher.md` (TASK-5.6 /
+`docs/searcher-agent-lessons-June-16-2026.md`) — keep it close to verbatim; the rest is
+reframed for query-only exploration. The Judger is an UMBRELA-style full-document assessor on
+the project's 0-4 scale.
+
+### `searcher.md` (Searcher — query author)
+
+```
+You are a search analyst exploring a large text collection to find every document
+relevant to ONE question. You do NOT judge documents — a separate assessor grades them.
+Your job is to DEVISE PRECISE BOOLEAN QUERIES that uncover the relevant material.
+
+Write queries in GCL, a Boolean cover language. Use PREFIX form ONLY — never infix,
+never the words AND/OR/NOT.
+  (^ A B C)  all of A,B,C appear together
+  (+ A B C)  any of A,B,C
+  "a b c"    the exact phrase
+  (!> A B)   an A that does NOT contain B  (carve out a wrong sense of a word)
+
+Three ways to write a term:
+  black      a bare word matches EXACTLY — use for proper nouns and the question's
+             defining words.
+  bear*      a word followed by * matches that word AND its whole family (bear/bears,
+             attack/attacked/attacking). Write the FULL ordinary word then * — e.g.
+             statistics*, injury* — NEVER a shortened stem. The system expands it.
+             Use it for ordinary content words (not proper nouns/defining terms).
+  (+ X Y Z)  is for SYNONYMS — distinct words for one concept — NOT inflections of one word.
+
+Build each query as a COVER: one facet per concept, AND-ed with ^. Example for
+'Do I need to worry about black bear attacks while hiking in the woods?':
+  (^ black bear* attack*)
+Broaden a facet by SYNONYM, e.g. (+ attack* maul* encounter*) — never by adding plurals.
+
+Each turn, issue ONE query with the `search` tool. You then see the NEW documents your
+query surfaced — each already graded for you (0-4) with a short reason — plus a note of how
+many results at those ranks had ALREADY been judged by your earlier queries.
+
+Use what you see to choose the next query:
+- Notice which facets/terms produced RELEVANT vs non-relevant documents, and mine the
+  language of the relevant passages for sharper terms.
+- Aim each new query at relevant material you have NOT yet found — vary the facets, senses,
+  and synonyms of the question.
+- If a query mostly retreads already-judged documents, it overlaps your earlier queries;
+  switch to a different facet or sense.
+- If a query returns nothing, or your GCL is malformed, you are told immediately — fix it
+  and try again.
+
+Keep devising new, precise queries to cover the question's whole space of relevant documents.
+```
+
+### `judger.md` (Judger — UMBRELA-style full-document assessor)
+
+```
+You are a relevance assessor. Given a QUESTION and a DOCUMENT, decide how well the document
+satisfies the information need behind the question, and assign an integer grade on this scale:
+  0 — Irrelevant: does not address the question.
+  1 — Marginal: an on-topic mention, but no information that helps answer it.
+  2 — Related: some useful information, but partial or tangential.
+  3 — Relevant: directly answers the question with useful, on-topic information.
+  4 — Highly relevant: a focused, complete answer to the question.
+
+Work in steps:
+1. Infer the underlying intent of the question — what would actually satisfy the searcher.
+2. Read the DOCUMENT and measure how well its content meets that intent — coverage,
+   directness, specificity. Judge it on the information it ACTUALLY contains, not on keyword
+   overlap or topical vibe.
+3. Choose the single best-fitting grade above.
+
+Return ONLY the structured result: an integer `grade` (0-4) and a one-sentence `reason`
+that justifies it.
+
+QUESTION: {intent}
+
+A representative matching passage (to orient you — judge the FULL document, not just this):
+{summary}
+
+DOCUMENT:
+{document}
+```
+
+`{intent}`, `{summary}` (the surfaced cover-biased summary), and `{document}` (the full body
+via `engine.read(cp)`, truncated to `max_doc_chars`) are filled by the controller per
+candidate; the `grade`/`reason` are guided-decoded from `Judgement.model_json_schema()`.
 
 ## The per-intent loop (pseudocode)
 
@@ -149,9 +237,13 @@ def page_and_judge(query, judged, recorded, events):
     fresh = []                  # NEW (hit, verdict) judged this query -> returned to the Searcher
     while len(recorded) < cfg.max_judgments:
         try:
-            # exclude only what we've ALREADY consumed THIS query, so prior-judged docs still
-            # appear at their true ranks (we count them) and paging keeps advancing.
-            resp = engine.search(query, top_k=cfg.page_size, exclude=sorted(seen), window=cfg.window)
+            # Fetch a LARGE batch (fetch_k). exclude = only what we've consumed THIS query:
+            # EMPTY on the first request; on a CONTINUATION it returns the NEXT unseen batch
+            # without re-shipping the first. (Every request re-ranks ALL matches regardless --
+            # no early termination -- so a big batch keeps the request count low; exclude saves
+            # the summary-build + transfer of the prior batch, not the re-rank.) Prior-judged
+            # docs are NOT excluded, so they still appear at their ranks and we count them.
+            resp = engine.search(query, top_k=cfg.fetch_k, exclude=sorted(seen), window=cfg.window)
         except EngineError as e:                 # malformed query: bounce back to the Searcher
             emit("bounce", kind="engine_error", query=query, message=str(e))
             return {"error": str(e)}             # <- Searcher reformulates immediately
@@ -192,6 +284,20 @@ i.e. "you ran X; we judged this list to depth K; J of those we'd already judged 
 grades + reasons." This keeps already-judged docs from being repeated to the Searcher (and
 to the Judger) turn after turn, while still telling it how relevant-dense the list was.
 
+## Fetching the ranked list (one large batch; exclude only to continue)
+
+Cottontail's ssr ranking has **NO early termination** — every `cover_search` request
+re-scores ALL matching containers regardless of `top_k` or `exclude` (confirmed in
+`apps/jsonl_core.cc`: the ranking pass visits every match to score it and count
+`total_matches`). So the cost to minimize is the **number of requests**, not the size of
+each. The controller therefore fetches a **large batch** (`fetch_k`, e.g. default 200) in ONE
+request and descends it client-side. Only when a query stays relevant-dense **past rank
+`fetch_k`** (no streak by the end of the batch) does it request again — and then
+`exclude = seen` returns the NEXT batch without re-building/re-shipping the docs already
+received. `exclude` does NOT save the re-rank (unavoidable here); it saves the summary-build +
+transfer of the prior batch and hands back exactly the next unseen slice. The first request
+uses an EMPTY exclude.
+
 ## De-duplication (don't repeat judged docs)
 
 A document judged in any prior query is judged ONCE per intent. The global `judged` map
@@ -221,7 +327,8 @@ A document judged in any prior query is judged ONCE per intent. The global `judg
 
 - `[agents.judger]` — `class`, `llm` (a `[llm.*]` profile; may differ from the Searcher's),
   and `concurrency`.
-- `[agents.searcher]` — `page_size`, `window`, `max_queries` (default 100), `max_query_retries`.
+- `[agents.searcher]` — `fetch_k` (the LARGE per-request batch size, default 200; see "Fetching
+  the ranked list"), `window`, `max_queries` (default 100), `max_query_retries`.
 - Loop knobs (controller): `nonrelevant_streak` (default 5), `max_judgments` (default 1000),
   `judge_concurrency`, `max_doc_chars` (truncate large ClimbMix docs for judging),
   `relevant_grade_threshold`, and an optional `max_list_depth` (per-query descent safety cap;
@@ -261,20 +368,18 @@ run-output directory layout; RRF/fusion (still dropped); deciding the final
 - [ ] #1 Searcher keeps the EXISTING single `search{query}` tool (no new tool; the `judge` tool is REMOVED; tool use FORCED so it always searches) and has NO 0-4 scale; given an intent plus its running history it emits one precise GCL boolean query per turn
 - [ ] #2 Judger judges ONE (surfaced passage + full document via engine.read(cp)) per LLM call, returning Judgement{cp,grade 0-4,reason} guided-decoded to 0-4; up to judge_concurrency calls run in parallel via a thread pool; deterministic under a stub client in tests
 - [ ] #3 Judging input is the FULL document text (truncated to max_doc_chars), not the cover summary
-- [ ] #4 Controller descends each query's TRUE ranked list: the engine exclude is only the cps consumed during THIS query's descent (NOT the global judged set), so prior-judged docs still appear at their ranks; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
+- [ ] #4 Controller fetches a LARGE batch per query (top_k=fetch_k, default 200) in ONE cover_search request and descends that TRUE ranked list client-side; only if the streak is not reached by the end of the batch does it continue with exclude=seen (this query's already-received cps, NOT the global judged set) to pull the NEXT batch; prior-judged docs still appear at their ranks and are counted; it stops the list on nonrelevant_streak in rank order or when the list goes dry (optional max_list_depth safety cap)
 - [ ] #5 The non-relevant streak is computed in rank order over the TRUE list — including prior-judged docs, which contribute via their STORED grade — even though parallel judging of the NEW docs completes out of order
 - [ ] #6 A document judged in a prior query is never re-sent to the Judger, never re-read, and never re-recorded; on re-encounter it is only COUNTED (it drives the streak via its stored grade and rolls into the query's already-judged aggregate)
 - [ ] #7 A malformed query (EngineError) or a zero-result query is fed back to the Searcher immediately as the search tool result, and the Searcher reformulates within the same conversation
 - [ ] #8 What the Searcher sees back is the NEW docs only (cover-biased SUMMARIES + grade + reason; NEVER full text), PLUS an aggregate for the prior-judged docs at those ranks: judged to depth K, of which J were already judged (X relevant, Y non-relevant) and are NOT relisted
 - [ ] #9 The intent stops ONLY when total recorded judgments reach max_judgments (default 1000) or the max_queries backstop (default 100) trips; there is no Searcher-decline/no-tool-call stop (the search tool is forced)
-- [ ] #10 Config adds [agents.judger] (class, llm, concurrency) and loop knobs page_size, window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL value, flagged # TODO: decide — no silent default)
+- [ ] #10 Config adds [agents.judger] (class, llm, concurrency) and loop knobs fetch_k (large per-request batch, default 200), window, max_queries (default 100), nonrelevant_streak (default 5), max_judgments (default 1000), judge_concurrency, max_doc_chars, optional max_list_depth, and relevant_grade_threshold (PROVISIONAL value, flagged # TODO: decide — no silent default)
 - [ ] #11 Controller returns the existing SearcherResult{ranked_list,events,error}; the run-output directory layout and cp-native/docno-on-disk boundary are unchanged; run_output rewrites cp->docno for the new judge/revisit/search/list_exhausted event shapes
 - [ ] #12 Trace stays heavy/detailed: per-query propose, per-page search, per-NEW-doc judge (cp+grade+reason), per-revisit revisit (cp+grade), list_exhausted (with depth K), bounce (engine_error/zero-result), and stop(reason) events, plus llm_call per round-trip; a caught mid-loop LLM failure yields a partial result and is never dropped
-- [ ] #13 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging; descending a TRUE list with prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; max_judgments stop; and malformed-query + zero-result self-correction
+- [ ] #13 Tests (FakeEngine + stub LLMs, no network) cover: Judger parallel/stub judging; one large fetch descended client-side with a continuation fetch (exclude=seen) when the streak is not reached; prior-judged docs counted-not-rejudged; streak over the true list in rank order; the depth-K / J / X / Y aggregate; max_judgments stop; and malformed-query + zero-result self-correction
 - [ ] #14 isj/README.md documents the Searcher/Judger split, the de-duplication rule, and the new loop
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
