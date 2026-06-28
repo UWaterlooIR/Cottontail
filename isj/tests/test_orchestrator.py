@@ -31,13 +31,15 @@ class StubAnalyst:
         return self._intents
 
 
-class StubSearcher:
+class StubController:
     def __init__(self, behavior):
         self.behavior = behavior  # interp -> SearcherResult | Exception
         self.calls = []
+        self.budgets = []
 
-    def run(self, interp):
+    def run(self, interp, intent_budget):
         self.calls.append(interp)
+        self.budgets.append(intent_budget)
         b = self.behavior[interp]
         if isinstance(b, Exception):
             raise b
@@ -46,38 +48,54 @@ class StubSearcher:
 
 def test_one_outcome_per_interp_in_order():
     intents = Intents(question="Q?", interpretations=["alpha", "beta"])
-    searcher = StubSearcher({"alpha": _result("alpha"), "beta": _result("beta")})
-    orch = Orchestrator(analyst=StubAnalyst(intents=intents), searcher=searcher)
+    controller = StubController({"alpha": _result("alpha"), "beta": _result("beta")})
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller)
 
     got_intents, outcomes, run_error = orch.run_question("Q?")
     assert got_intents is intents
     assert run_error is None
-    assert searcher.calls == ["alpha", "beta"]  # in order
+    assert controller.calls == ["alpha", "beta"]  # in order
     assert [o.ranked_list.intent for o in outcomes] == ["alpha", "beta"]
 
 
 def test_failed_intent_becomes_runerror_and_continues():
     intents = Intents(question="Q?", interpretations=["good", "bad", "good2"])
-    searcher = StubSearcher({
+    controller = StubController({
         "good": _result("good"),
         "bad": RuntimeError("engine exploded"),
         "good2": _result("good2"),
     })
-    orch = Orchestrator(analyst=StubAnalyst(intents=intents), searcher=searcher)
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller)
 
     _, outcomes, run_error = orch.run_question("Q?")
     assert run_error is None
-    assert searcher.calls == ["good", "bad", "good2"]  # one failure didn't abort the rest
+    assert controller.calls == ["good", "bad", "good2"]  # one failure didn't abort the rest
     assert isinstance(outcomes[0], SearcherResult)
     assert isinstance(outcomes[1], RunError)
     assert "engine exploded" in outcomes[1].message
     assert isinstance(outcomes[2], SearcherResult)
 
 
+def test_run_total_budget_split_evenly_across_intents():
+    intents = Intents(question="Q?", interpretations=["a", "b"])
+    controller = StubController({"a": _result("a"), "b": _result("b")})
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller, max_judgments=1000)
+    orch.run_question("Q?")
+    assert controller.budgets == [500, 500]  # 1000 // 2
+
+
+def test_budget_floor_division_and_min_one():
+    intents = Intents(question="Q?", interpretations=["a", "b", "c"])
+    controller = StubController({"a": _result("a"), "b": _result("b"), "c": _result("c")})
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller, max_judgments=1000)
+    orch.run_question("Q?")
+    assert controller.budgets == [333, 333, 333]  # floor(1000/3); remainder not reallocated
+
+
 def test_analysis_failure_returns_none():
     orch = Orchestrator(
         analyst=StubAnalyst(raises=ValueError("bad question")),
-        searcher=StubSearcher({}),
+        controller=StubController({}),
     )
     intents, outcomes, run_error = orch.run_question("Q?")
     assert intents is None
@@ -87,8 +105,8 @@ def test_analysis_failure_returns_none():
 
 def test_on_intent_called_per_interp():
     intents = Intents(question="Q?", interpretations=["alpha", "beta"])
-    searcher = StubSearcher({"alpha": _result("alpha"), "beta": RuntimeError("x")})
-    orch = Orchestrator(analyst=StubAnalyst(intents=intents), searcher=searcher)
+    controller = StubController({"alpha": _result("alpha"), "beta": RuntimeError("x")})
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller)
 
     seen = []
     orch.run_question("Q?", on_intent=lambda i, interp, outcome: seen.append((i, interp, type(outcome).__name__)))
@@ -97,8 +115,8 @@ def test_on_intent_called_per_interp():
 
 def test_outputs_plug_into_write_run(tmp_path):
     intents = Intents(question="Q?", interpretations=["good", "bad"])
-    searcher = StubSearcher({"good": _result("good"), "bad": RuntimeError("boom")})
-    orch = Orchestrator(analyst=StubAnalyst(intents=intents), searcher=searcher)
+    controller = StubController({"good": _result("good"), "bad": RuntimeError("boom")})
+    orch = Orchestrator(analyst=StubAnalyst(intents=intents), controller=controller)
 
     got_intents, outcomes, run_error = orch.run_question("Q?")
     out = tmp_path / "run"
@@ -114,7 +132,7 @@ def test_outputs_plug_into_write_run(tmp_path):
 def test_analysis_failure_plugs_into_write_run(tmp_path):
     orch = Orchestrator(
         analyst=StubAnalyst(raises=ValueError("nope")),
-        searcher=StubSearcher({}),
+        controller=StubController({}),
     )
     intents, outcomes, run_error = orch.run_question("Q?")
     out = tmp_path / "run"

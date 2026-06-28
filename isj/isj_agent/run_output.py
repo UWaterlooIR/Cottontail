@@ -146,21 +146,17 @@ def _ranked_list_dict(ranked_list, resolve: _Resolve, rename: bool) -> dict:
 def _event_dict(event, resolve: _Resolve, rename: bool) -> dict:
     d = event.model_dump()
     t = d.get("type")
-    if t == "search_request":  # the request, logged going out: only an exclude cp-list
+    if t == "search_request":  # the request, logged going out: an exclude cp-list
         if "exclude" in d:
             d["exclude"] = [resolve(cp) for cp in d["exclude"]]
-    elif t == "search":
+    elif t == "search":  # the response: every returned hit carries a cp
         if "exclude" in d:
             d["exclude"] = [resolve(cp) for cp in d["exclude"]]
         for hit in d.get("results", []):
             _rewrite_cp(hit, resolve, rename)
-    elif t == "judge":
-        for verdict in d.get("judgements", []):
-            _rewrite_cp(verdict, resolve, rename)
-    elif t == "bounce":
-        if "cps" in d:
-            d["cps"] = [resolve(cp) for cp in d["cps"]]
-    # An llm_call's `request` (the verbatim messages sent) and the `error` event are
-    # left as-is: the request is what the cp-native agent actually sent the model
-    # (cps), not a portable view; only the structured fields above are docno-rewritten.
+    elif t in ("judge", "revisit"):  # a per-doc verdict / re-encounter: a single cp
+        _rewrite_cp(d, resolve, rename)
+    # llm_call.request (the verbatim messages -- for judge calls, the full document),
+    # propose/list_exhausted/bounce/stop/error carry no portable cp field and are left
+    # as-is. Only the structured fields above are docno-rewritten.
     return d

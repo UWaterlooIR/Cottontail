@@ -14,14 +14,15 @@ isj/
   config.example.toml   Reference config — copy to config.toml and edit
   config.toml           Your local config (git-ignored)
   isj_agent/            Importable Python package
-    agents/             LLM-role wrappers (Analyst, …) with bundled prompts
+    agents/             LLM-role wrappers (Analyst, Searcher, Judger) with prompts
     protocol/           Typed artifacts (Intents; search/engine contract types)
     engine/             The SearchEngine contract (Protocol + EngineError) and
                         the scripted FakeEngine; docno_map / fetch helpers
     config.py           load_class / build_client / build_search_engine /
                         build_docno_map utilities
+    controller.py       Per-intent search/judge loop (Searcher + Judger)
     cli.py              CLI entry point (one question -> a run-output dir)
-    orchestrator.py     Orchestrator: Analyst -> per-intent Searcher
+    orchestrator.py     Orchestrator: Analyst -> per-intent Controller
   tests/                pytest suite
 ```
 
@@ -67,8 +68,8 @@ which works for unauthenticated local vLLM instances.
 
 The CLI (`isj_agent/cli.py`) runs the whole pipeline on **one question** and
 writes a run-output directory: it analyzes the question into interpretations
-(Analyst), runs the Searcher per interpretation over the live
-`HttpSearchEngine`, and persists the result with `write_run` (C2). A single
+(Analyst), runs the per-intent Controller (Searcher + parallel Judger) over the
+live `HttpSearchEngine`, and persists the result with `write_run`. A single
 flag-based entry, no subcommands:
 
 ```sh
@@ -113,45 +114,44 @@ uv run pytest tests/ -v
 
 ## Engine contract (the Searcher's boundary)
 
-The Searcher (B2) talks to "an engine" through a small typed contract, defined in
+The controller talks to "an engine" through a small typed contract, defined in
 `isj_agent/engine/base.py` and `isj_agent/protocol/search.py`. It is **cp-native**
 (decision doc-6): a document's working identity is its integer `cp` (the `:item`
-container start address); `docno` never enters the agent.
+container start address); `docno` never enters the agents.
 
 - **`SearchEngine` (a `runtime_checkable` `typing.Protocol`)** — two methods that
   mirror the C++ server's tools:
   - `search(query, *, top_k=10, exclude=(), window=75) -> SearchResponse`
-    (`cover_search`); `exclude` is the judged set as **cp integers** (the engine
-    is stateless — the agent passes its whole judged set each call).
-  - `read(cp) -> str | None` (`get_document`). It is **intentionally part of the
-    contract for future use** — a possible agent read-tool and the downstream RAG
-    grounding / Writer step — even though the B2 MVP does not call it; do not
-    remove it as unused.
-  - There is **no `judge` method**: judging is the controller's job in B2; the
-    engine only searches and reads.
+    (`cover_search`); `exclude` is the per-query *seen* set as **cp integers** (the
+    engine is stateless — the controller passes the set each call).
+  - `read(cp) -> str | None` (`get_document`) — the controller calls this to fetch
+    each candidate's **full document** for the Judger (truncated to `max_doc_chars`).
+  - There is **no `judge` method**: the **Judger** judges by reading the full
+    document (`read(cp)`); the engine only searches and reads.
 - **`EngineError`** — `search()`/`read()` MAY raise it on any engine-side failure
   (an invalid query the engine rejects is one cause). There is **no Python-side
-  query validation** — the engine is the source of truth; B2's controller feeds
-  `str(error)` back to the model so it can self-correct.
+  query validation** — the engine is the source of truth; the controller feeds
+  `str(error)` back to the Searcher so it can self-correct.
 - **Types** (`protocol/search.py`, pydantic v2, mirroring the enriched
   `cover_search` response): `SearchResponse{total_matches, unjudged_matches,
-  atom_counts:[{term,count}], results:[{rank,score,cp,summary}]}` and
-  `Judgement{cp, grade, reason}` with **grade on the 0–4 UMBRELA scale**
-  (out-of-range raises `ValidationError`). `SearchResponse` is
-  `ConfigDict(extra="forbid")` so an unexpected server field fails loudly (catches
-  contract drift). The models round-trip losslessly
-  (`model_validate(x.model_dump()) == x`) and emit JSON Schema for the LLM
-  boundary (`Judgement.model_json_schema()`), the same single-source-of-truth
-  pattern as `Intents`.
+  atom_counts:[{term,count}], results:[{rank,score,cp,summary}]}` and the Judger's
+  output `Verdict{reason, grade}` — **grade on the canonical UMBRELA/TREC 0–3 scale**
+  (`Literal[0,1,2,3]`; out-of-range raises `ValidationError`), `reason` declared
+  **before** `grade` (guided decoding fills properties in declaration order), and
+  **no `cp`** (the controller pairs each verdict with the cp it asked about).
+  `SearchResponse` is `ConfigDict(extra="forbid")` so an unexpected server field
+  fails loudly (catches contract drift). The models round-trip losslessly and emit
+  JSON Schema for the LLM boundary (`Verdict.model_json_schema()`), the same
+  single-source-of-truth pattern as `Intents`.
 - **`FakeEngine`** (`engine/fake.py`) — a deterministic, scripted `SearchEngine`
-  driven by an ordered list of `SearchResponse | EngineError`. **B2's tests run
-  against `FakeEngine`** (no network, no LLM, no C++).
+  driven by an ordered list of `SearchResponse | EngineError`. **The controller/judger
+  tests run against `FakeEngine`** (no network, no LLM, no C++).
 - **`HttpSearchEngine`** (`engine/http.py`, C1) — the live engine: an `httpx`
   client that implements the same Protocol against a running
   `cottontail-jsonl-server`, POSTing `/tools/cover_search` and `/tools/get_document`
   and parsing the JSON into `SearchResponse`. Every failure (a non-2xx response —
   carrying the server's error message — or an httpx transport error) maps to
-  `EngineError`, so the B2 controller can bounce a bad query back to the model.
+  `EngineError`, so the controller can bounce a bad query back to the Searcher.
   Configured by `[cottontail_http_json_server]` (`base_url`; optional `api_key_env`
   naming the bearer-token env var, read but never logged) and built by
   `config.build_search_engine(cfg)`. C3 wires it into the Searcher for live runs.
@@ -168,56 +168,62 @@ container start address); `docno` never enters the agent.
   (a `word*` query needs a `--stem porter` burrow; a loopback server runs without
   auth). The full real-LLM Searcher-loop run is C3's CLI, not C1.
 
-## The Searcher (B2)
+## The Searcher / Judger split (TASK-16)
 
-`isj_agent/agents/searcher.py` plays one human "interactive searcher" as a
-guardrailed LLM loop. `Searcher(client, model, engine).run(intent)` returns a
-`SearcherResult` = a per-intent `RankedList` (judged, graded passages, best-first)
-plus a structured event **trace**. Its prompt is bundled in `searcher.md` (mirroring
-the `Analyst`).
+Searching and judging are **two agents** driven by a **controller**. The Searcher
+authors queries; the Judger reads full documents and grades them, in parallel; the
+controller (not the model) owns paging, the stop rules, the budget, de-duplication,
+and the trace. The motivation and full spec are in TASK-16 (`backlog/tasks/`).
 
-- **Two LLM tools, one tool call per turn:** `search` (the model writes only a GCL
-  cover `query`; the controller injects `exclude` = the accumulated judged set plus
-  `top_k`/`window`) and `judge` (a batch of `{cp, grade 0-4, reason}`; its argument
-  schema is derived from the B1 `Judgement` model so grades are guided to 0-4).
-  There is **no `read` and no `finish` tool**; `read()` stays on the engine Protocol
-  as documented future-proofing (RAG grounding), not exposed to the model.
-- **The controller owns the guardrails and termination** (model behavior is not
-  portable — see `docs/searcher-agent-lessons-June-16-2026.md`): judge-before-search
-  (a search with unjudged passages is refused), engine-delegated errors
-  (`EngineError` is bounced back as `str(error)`; there is no Python GCL validator),
-  and judge-argument validation through `Judgement` (an out-of-range grade is bounced
-  with the pydantic error). Only **surfaced + unjudged** cps are recorded
-  (hallucinated cps ignored), each pulling its summary/score from the surfaced hit.
-- **Recall-first stopping:** there is **no hard search budget**. The agent keeps
-  reformulating until it exhausts new material — the model stops (no tool call), or
-  ≥3 consecutive dry searches, or ≥3 consecutive no-progress turns — with a generous
-  `max_turns` cap (default 150) as the only runaway backstop (every turn, including
-  bounces, counts toward it). All of these are constructor knobs the eval harness /
-  C3 can tune.
-- **The trace is a research artifact** (`SearcherResult.events`, a `list[TraceEvent]`):
-  detailed, timestamped events — `llm_call` (one per LLM round-trip: a `purpose`
-  label, the **actual `request` messages sent** verbatim, the assistant `content`,
-  the emitted `calls` with raw arguments, `finish_reason`, and `prompt`/`completion`/
-  `total` token `usage` — captured per call so the trace stays faithful under future
-  compaction or side-prompts, with no append-only assumption), `search_request`
-  (**the query logged going out**, before the engine call: query + top_k + window +
-  excluded cps — on record even if the engine/server dies mid-call), `search`
-  (**the response**: counts + atom_counts + every returned hit with its
-  cp/score/summary + engine latency), `judge` (each recorded `{cp, grade, reason}`),
-  `bounce` (kind + message; an `engine_error` bounce also carries the failing
-  `query`), `stop` (reason), and `error` (a caught mid-loop LLM failure: type +
-  message + turn + the failing request + last-known usage). C2 rewrites cps to
-  docnos in the structured fields; the `llm_call.request` snapshot is left verbatim
-  (it is what the cp-native agent actually sent the model).
-- **Persist on failure:** a mid-loop LLM error (e.g. a context-length 400) is
-  caught inside `run()` — it emits the `error` event and returns a **partial**
-  `SearcherResult` (`.error` set; `ranked_list` holds what was judged before the
-  failure) rather than discarding the trace. C2 still writes that intent's
-  `.json` + `.trace.jsonl`, and also lists it in `errors.log`.
+### Searcher — `agents/searcher.py` + `searcher.md`
+A thin query author (like the `Analyst`). `Searcher(client, model).propose(messages)`
+makes one LLM round-trip offering a **single `search` tool** with
+`tool_choice="required"`, and returns the chosen GCL `query` plus the assistant
+message to append. There is **no judge tool and no relevance scale** — the Searcher
+only writes queries. `reasoning_effort` defaults to `"high"` (forwarded via
+`extra_body`). It sees each query's judged outcome as the `search` tool result, so
+its conversation *is* its history.
 
-Tested with a stub LLM (scripted tool-call turns) + the B1 `FakeEngine` — no network,
-no real model. A live real-model run is the C3 integration gate.
+### Judger — `agents/judger.py` + `judger.md`
+Pointwise full-document judging. `Judger(client, model, *, concurrency=15,
+reasoning_effort="high").judge(intent, docs)` grades each `(summary, full document)`
+in its own LLM call — guided-decoded to `Verdict{reason, grade 0-3}` — running a wave
+of up to `concurrency` calls in parallel over a `ThreadPoolExecutor`. The **cp is
+never sent to the model**; the controller pairs each verdict (returned in input
+order) with the cp it asked about. `judger.md` is a decomposed, trust-aware UMBRELA
+prompt (intent → topical match → trust → scope → grade) for open-web ClimbMix text.
+A failed call surfaces as data (`JudgeCall.error`, `verdict=None`).
+
+### Controller — `controller.py`
+`Controller(searcher, judger, engine, …).run(intent, intent_budget)` returns the
+existing `SearcherResult` = per-intent `RankedList` + a `TraceEvent` trace. Per query:
+
+- **Descend the true ranked list in waves** of `judger.concurrency`. Fetch a large
+  batch (`fetch_k`, default 200) with `exclude=seen` (this query's consumed cps, so
+  prior-judged docs still appear); judge the **new** docs in each wave in parallel.
+- **De-duplication.** A doc judged in any prior query is **counted, not re-judged**
+  (no re-read, no Judger call, no new record); its stored grade still drives the
+  streak and it rolls into a J/X/Y aggregate. The Searcher sees the **new** docs'
+  summaries+grades+reasons plus that aggregate — never the already-judged docs again.
+- **Streak + retain-all.** Stop descending after `nonrelevant_streak` (default 5)
+  non-relevant docs in rank order — **non-relevant = grade 0** by default
+  (`relevant_grade_threshold=1`). The streak only stops *descent*; every judged doc is
+  **recorded and reported**, even those past the streak trip within the tripping wave.
+- **Budget & backstops.** The intent stops at `intent_budget` (the Orchestrator's even
+  split of the run-total `max_judgments`) or the `max_queries` backstop (default 100).
+- **Error routing.** A malformed query (`EngineError`) or a zero-result query bounces
+  straight back to the Searcher as the tool result. A **judge failure aborts the
+  intent** with a partial `SearcherResult` (`.error` set; docs judged before the
+  failure are retained). A caught mid-loop Searcher LLM failure does the same.
+- **Heavy trace** (`list[TraceEvent]`): `llm_call` (per Searcher turn AND per judge
+  call — verbatim `request`, incl. the full document for judges, plus usage), `propose`
+  (the chosen query), `search_request` / `search` (the page + counts + atom_counts +
+  hits), `judge` (`{cp, grade, reason}`), `revisit` (`{cp, grade}`, counted not
+  re-judged), `list_exhausted` (`{query, depth, streak}`), `bounce`
+  (`engine_error` / `no_query`), `stop` (`intent_budget` / `max_queries`), and `error`.
+
+All three are tested with stub LLMs + the `FakeEngine` (no network, no real model);
+the CLI is the live real-model gate.
 
 ## Run output (C2)
 
@@ -240,8 +246,8 @@ C3 produces the data and catches errors; C2 only writes:
 - **The absence of `errors.log` means the whole run succeeded.** Its presence lists each
   failure, tagged with the failing intent's index/interpretation. A *run-level* failure
   (no `SearcherResult` at all — e.g. the Analyst raised) gets no `.json`/`.trace.jsonl`; a
-  *partial* result (the Searcher caught a mid-loop failure) keeps its `.json`/`.trace.jsonl`
-  **and** is listed in `errors.log`.
+  *partial* result (the controller caught a mid-loop Searcher/Judge failure) keeps its
+  `.json`/`.trace.jsonl` **and** is listed in `errors.log`.
 - **docno on disk.** Results are `cp` in memory but the writer rewrites every persisted `cp`
   to its `docno` via the read-only `DocnoMap` (TASK-6.3) — in the `RankedList` *and* the
   trace events — so the saved files are portable (the field is renamed `cp` → `docno`). A
@@ -250,29 +256,33 @@ C3 produces the data and catches errors; C2 only writes:
 ## The Orchestrator (C3)
 
 `isj_agent/orchestrator.py` drives one question end to end.
-`Orchestrator(analyst=…, searcher=…).run_question(question, *, on_intent=None)`
-calls `Analyst.analyze`, then runs the `Searcher` per interpretation in order,
-and returns `(intents, outcomes, run_error)` — one `outcome` per interpretation
-(a `SearcherResult` on success, a `RunError` on a per-intent failure; the run
-continues past a failed intent). An analysis-level failure returns
-`(None, [], <message>)`. It writes no files (the CLI calls `write_run`) and does
-no fusion; `on_intent(i, interp, outcome)` is the hook the CLI's `--verbose` uses
-to render each interpretation as it completes. The CLI (above) is the thin wiring
-layer that builds the agents from config and feeds the 3-tuple straight into
-`write_run`.
+`Orchestrator(analyst, controller, *, max_judgments=1000).run_question(question, *,
+on_intent=None)` calls `Analyst.analyze`, splits the **run-total** judgment budget
+evenly across interpretations (`intent_budget = max_judgments // num_intents`, ≥1),
+then runs the `Controller` per interpretation in order, and returns
+`(intents, outcomes, run_error)` — one `outcome` per interpretation (a
+`SearcherResult` on success, a `RunError` on a per-intent failure; the run continues
+past a failed intent). An analysis-level failure returns `(None, [], <message>)`. It
+writes no files (the CLI calls `write_run`) and does no fusion; `on_intent(i, interp,
+outcome)` is the hook the CLI's `--verbose` uses to render each interpretation as it
+completes. The CLI builds the Searcher, Judger, Controller, and Orchestrator from
+config (`[agents.searcher]`, `[agents.judger]`, `[loop]`) and feeds the 3-tuple
+straight into `write_run`.
 
 ## Status
 
-The full Searcher pipeline is implemented and tested. The `Analyst` makes a
-single guided-decoding LLM call returning an `Intents`. The engine contract (B1)
-— the `SearchEngine` Protocol, `EngineError`, the typed
-`SearchResponse`/`Judgement`, and the scripted `FakeEngine` — backs the `Searcher`
-(B2). The live `HttpSearchEngine` (C1, validated against a real server), the
-run-output writer (C2), and the `Orchestrator` + CLI (C3) that wire Analyst →
-per-intent Searcher (over `HttpSearchEngine`) → `write_run` are all in place; the
-CLI is the full real-LLM live gate. The richer INP / CM / IP pipeline from the
-design spec is shelved in favor of the simpler `Intents` output (see the agent
-design decision docs under `backlog/docs/`). The earlier proof-of-concept agent
-has been archived to `archive/example-agent/` (TASK-5.4), and the full run/usage
-flow lives in [`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md)
-(TASK-5.10).
+The full pipeline is implemented and tested. The `Analyst` makes a single
+guided-decoding LLM call returning an `Intents`. The **Searcher/Judger split**
+(TASK-16) replaces the old combined search+judge loop: a query-only `Searcher`, a
+parallel full-document `Judger` (pointwise 0-3 + trust), and a `Controller` that owns
+wave-judging, the grade-0 non-relevant streak, retain-all recording, de-duplication,
+and the run-total judgment budget split across intents. The engine contract — the
+`SearchEngine` Protocol, `EngineError`, the typed `SearchResponse`/`Verdict`, and the
+scripted `FakeEngine` — backs them. The live `HttpSearchEngine` (validated against a
+real server), the run-output writer, and the `Orchestrator` + CLI that wire Analyst →
+per-intent Controller (over `HttpSearchEngine`) → `write_run` are all in place; the
+CLI is the full real-LLM live gate. The judge-serving defaults (`concurrency=15`,
+`reasoning_effort="high"`, `max_doc_chars=50000`) come from the `scout_judger.py`
+serving scout (decode-bound; KV is not the constraint). The earlier proof-of-concept
+agent is archived under `archive/example-agent/`, and the full run/usage flow lives in
+[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md).

@@ -41,11 +41,30 @@ llm = "default"
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"
 llm = "default"
-# Optional recall/budget knobs (B2 defaults shown; the Searcher keeps searching
-# until queries dry up, not a fixed search count):
-# top_k = 10
-# window = 75
-# max_turns = 150
+# The Searcher authors GCL queries; high reasoning helps. Defaults shown:
+# reasoning_effort = "high"   # gpt-oss-120b top tier (forwarded via extra_body)
+# fetch_k = 200               # the LARGE per-request ranking batch the controller pulls
+# window = 75                 # cover_search summary window (tokens)
+# max_queries = 100           # per-intent backstop on the number of queries
+
+[agents.judger]
+class = "isj_agent.agents.judger.Judger"
+llm = "default"
+# Pointwise full-document judging (0-3 + reason). Defaults from the serving scout
+# (decode-bound on the dev GPU; concurrency 15 is the throughput peak):
+# concurrency = 15            # in-flight judge calls AND the controller's wave width
+# reasoning_effort = "high"   # the dominant throughput/cost lever; forwarded via extra_body
+
+# ---------------------------------------------------------------------------
+# [loop]
+# Controller knobs for the per-intent search/judge loop (defaults shown).
+# ---------------------------------------------------------------------------
+[loop]
+# nonrelevant_streak = 5        # stop descending after this many non-relevant docs in a row
+# relevant_grade_threshold = 1  # non-relevant-for-the-streak = grade < this (default: grade 0)
+# max_judgments = 1000          # RUN-TOTAL judgment budget, split evenly across intents
+# max_doc_chars = 50000         # truncate each judged document to this many chars
+# max_list_depth =              # optional per-query descent safety cap (unset = off)
 
 # ---------------------------------------------------------------------------
 # [index]

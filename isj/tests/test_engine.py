@@ -3,7 +3,7 @@ from pydantic import ValidationError
 
 from isj_agent.engine.base import EngineError, SearchEngine
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.search import AtomCount, Hit, Judgement, SearchResponse
+from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
 
 
 def _resp(cps, total=None, unjudged=None, atoms=None):
@@ -21,13 +21,14 @@ def _resp(cps, total=None, unjudged=None, atoms=None):
 
 # --- type validation -------------------------------------------------------
 
-def test_judgement_grade_bounds():
-    assert Judgement(cp=1, grade=0, reason="ok").grade == 0
-    assert Judgement(cp=1, grade=4, reason="ok").grade == 4
+def test_verdict_grade_bounds():
+    # Verdict carries NO cp (the controller owns it) and uses the 0-3 scale.
+    assert Verdict(reason="ok", grade=0).grade == 0
+    assert Verdict(reason="ok", grade=3).grade == 3
     with pytest.raises(ValidationError):
-        Judgement(cp=1, grade=5, reason="too high")
+        Verdict(reason="too high", grade=4)
     with pytest.raises(ValidationError):
-        Judgement(cp=1, grade=-1, reason="too low")
+        Verdict(reason="too low", grade=-1)
 
 
 def test_search_response_round_trips():

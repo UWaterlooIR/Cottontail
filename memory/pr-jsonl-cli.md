@@ -1,6 +1,6 @@
 ---
 name: pr-jsonl-cli
-description: PR status — #1/#3/#4 merged; PR #5 OPEN on claude/trec-rag-2026-design is where ALL open backlog work lands; gh-https push now wired
+description: PR status — #1/#3/#4/#5 all MERGED; design branch deleted; new work goes on fresh feature branches; gh-https push wired
 metadata:
   type: reference
 ---
@@ -28,12 +28,16 @@ agent HTTP transport, `//test:jsonl_server_test`, and
 `docs/cottontail-search-server-spec.md` + `docs/cottontail-server-threadpool-spec.md`.
 
 **PR #5** ("Implement Searcher agent and cover_search engine tool for ISJ",
-https://github.com/UWaterlooIR/Cottontail/pull/5) is **OPEN** on branch
-`claude/trec-rag-2026-design`. **Decided (2026-06-25, the user): ALL open backlog
-work lands on this one PR/branch — TASK-5.x (Searcher) and TASK-6.x (cp-native
-indexing). Do NOT create new branches or new PRs; stay on `claude/trec-rag-2026-design`
-and push commits onto PR #5.** See [[climbmix-poc-plan]] and the cp-native indexing
-design (docs/indexing.md, doc-6).
+https://github.com/UWaterlooIR/Cottontail/pull/5) is now **MERGED** into `main`
+(merge commit `be60e90`). It carried TASK-5.x (the ISJ Searcher) and TASK-6.x
+(cp-native indexing). Its branch `claude/trec-rag-2026-design` has been **DELETED**.
+
+**The old "all work lands on one branch, no new branches" rule is RESCINDED** (it
+applied only to PR #5 while it was open). New work now goes on **fresh feature
+branches off `main`**, one per effort, each its own PR — per the CLAUDE.md
+contributing rule (never commit to `main`). Current active branch:
+**`searcher-judger`** (TASK-16, the Searcher/Judger split). See [[climbmix-poc-plan]]
+and the cp-native indexing design (docs/indexing.md, doc-6).
 
 Access note: push access **now works** for the agent. As of 2026-06-25 the repo is
 wired **repo-local** (in `.git/config` only — nothing global, nothing outside the
