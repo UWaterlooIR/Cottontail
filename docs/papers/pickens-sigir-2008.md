@@ -52,7 +52,6 @@ The term "collaboration" has also been used to refer to synchronous, intentional
 
 Nevertheless, the synchronous, intentional approaches mentioned above are closely related to the system described in this paper. Figure 1 shows the structural differences in architecture between three user interface-only collaborative IR systems ([4], [13], and [9]) and the algorithmically mediated approach. All three earlier systems use search engines that are not aware of the ongoing collaboration. As each query arrives at the engine, it is treated as a new, separate search. Although searchers may collaborate at the user interface and interpersonal level, the search engine itself does not support collaboration. This is true whether each searcher uses a separate search engine, or if they share a search engine as in Físchlár-DiamondTouch [13]. In SearchTogether [9], a searcher's activity is not used by the underlying engine to influence the partner's actions; all influence happens in the interface or live communication channels. In contrast, an algorithmically-mediated collaborative search engine coordinates user activities throughout the session.
 
-![Figure 1: System Architecture Comparisons](figure-1.png)
 
 > **Figure 1: System Architecture Comparisons.** Four side-by-side architecture diagrams contrasting collaborative IR systems. (1) *Baeza-Yates, 1997*: two users, each with their own GUI and search engine, whose separate results lists are combined by an "Algorithm" into a final results set (post hoc merging). (2) *Smeaton, Foley, 2005* (Físchlár-DiamondTouch): two users sharing a single GUI connected to one search engine. (3) *Morris, 2007* (SearchTogether): two users with linked GUIs, each connected to a separate search engine, sharing at the interface level only. (4) *[This Paper]*: two users with separate GUIs connected to a single "Algorithmic collaboration inside search engine," with bidirectional links so each user's activity influences the other through the engine itself.
 
@@ -103,7 +102,6 @@ Our current system allows collaborating users to assume the complementary roles 
 
 The system architecture consists of three parts: the User Interface Layer, the Regulator Layer, and the Algorithmic Layer (Figure 2). System components communicate through a web service API, and can be combined in different ways: the single shared display in a co-located setting can be replaced by separate displays in remote locations, showing the same information.
 
-![Figure 2: Collaborative System Architecture](figure-2.png)
 
 > **Figure 2: Collaborative System Architecture.** A three-layer block diagram. The top **User Interface Layer** contains three boxes: "Prospector UI (MediaMagic)," "Shared Display," and "Miner UI (RSVP)." The middle **Regulator Layer** contains an "Input Coordinator" and an "Output Coordinator" (with a bidirectional link between them). The bottom **Algorithmic Layer** contains an "Algorithmic Collaboration Module." Arrows flow from the UI layer down through the input coordinator into the algorithmic module, and back up through the output coordinator to the appropriate UI clients.
 
@@ -123,7 +121,6 @@ The regulator layer consists of an input regulator and an output regulator. The 
 
 The algorithmic layer consists of a number of functions for combining searchers' activities to produce documents, rankings, query suggestions, and other information relevant to the search. It performs basic searches, and generates raw search results, transformed search results based on input from multiple users, and query terms that characterize the current state of the collaboration. Details of these algorithms are discussed in the following section.
 
-![Figure 3: A collaborative search session](figure-3.png)
 
 > **Figure 3: A collaborative search session.** A photograph of two co-located users seated at a shared workstation. Each user's UI is suited to their role: Prospector (left) and Miner (right). Large side screens show sample relevant shots for the current topic; the center screen shows the shared query state.
 
@@ -239,7 +236,6 @@ Over time, there appears to be no strong trend for either metric either overall 
 
 As with recall and precision measures discussed in the previous section, these results suggest that mediated collaboration is more effective when the search topics are sparse. While a more principled exploration of the effect of topic difficulty on system performance is warranted, the trend is encouraging.
 
-![Figure 4: Plentiful/Sparse Split](figure-4.png)
 
 > **Figure 4: Plentiful/Sparse Split: Selected Precision, Selected Recall, Viewed Precision.** Three grouped bar charts, one per metric (Difference in Selected Precision, Difference in Selected Recall, Difference in Viewed Precision). Each chart plots the difference (collaborative minus merged) on the y-axis (range roughly −2 to +2) against time elapsed on the x-axis (3.75, 7.50, 11.25, 15.00 minutes). Within each time point there are three bars: Plentiful (white), Sparse (gray), and Overall (dark red). Error bars represent ±1 standard error. The gray (Sparse) bars are consistently positive and grow larger over time, especially for Viewed Precision (reaching above +1 at 15 min); the white (Plentiful) bars are small and their error bars span 0.
 
