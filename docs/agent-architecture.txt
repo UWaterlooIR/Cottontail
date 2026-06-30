@@ -1,0 +1,81 @@
+ISJ FRAMEWORK: COMPONENTS AND RESPONSIBILITIES
+==============================================
+
+
+ANALYST AGENT
+-------------
+- Takes a user statement and converts it into a list of search intents
+  (search information needs).
+- Each intent is explored independently.
+- Each intent ultimately produces its own final ranked list.
+
+
+RANKED LIST of RESULTS
+----------------------
+- A ranked list is ordered descending by relevance judgment, with
+  ties broken by score (higher score better), and tied scores broken
+  by descending string docno.
+- A ranked list is a json record containing the intent and a list of
+  entries (the ranked documents).  Each entry has a rank, relevance
+  grade, score, summary, reason for relevance grade, the
+  query that first surfaced the the document, and the docno.
+
+
+SEARCHER AGENT
+--------------
+- Receives a single search intent.
+- Formulates a query object (a "queryable") and hands it to the controller
+  as a tool request; it does NOT run the query itself.
+- May produce any of the system's valid query types. The specific type
+  is not known in advance, but it will always be one of the approved
+  tool usages of the system.
+- First call: given only the intent plus a selection of search tools
+  (e.g. cover_search and/or tiered_query_search).
+- Subsequent calls: given the intent plus the judged search results
+  (returned via the controller) so it can intelligently formulate a
+  new search request.
+
+
+CONTROLLER
+----------
+- Receives the searcher's query / tool request and executes it against
+  Cottontail.
+- Specifies the top-k (the searcher does not).
+- Uses the Judger agent to judge documents and their summaries against
+  the search intent.
+- Hands back to the searcher:
+    - the original search intent, and
+    - the history of queries issued and their judged results, and
+    - statistics regarding the search: atom counts, etc.
+- The judged results do NOT repeat already-judged items.
+- Each judged result displays:
+    - rank,
+    - score,
+    - document summary,
+    - reason for being relevant or not, and
+    - relevance grade score.
+
+
+COTTONTAIL HTTP JSON SERVER
+---------------------------
+- The search system that executes GCL queries.
+- Runs a given query and returns the top-k results, each with a
+  summary.
+- Can also fetch a document given its cp (location in collection).
+
+
+JUDGER AGENT
+------------
+- Receives the search intent (information need), the document summary,
+  and the document text.
+- Judges the document and returns a score and a reason for the score.
+- Uses relevance grades 0, 1, 2, 3 (per UMBRELA).
+
+
+QUERY TYPES (QUERYABLES)
+-----------------------
+- A generic "queryable" abstraction captures any of the system's valid
+  query types and is converted into an actual Cottontail query.
+- Two concrete types currently exist:
+    - Cover search: a single GCL query.
+    - Tiered query search: a series of GCL query tiers.
