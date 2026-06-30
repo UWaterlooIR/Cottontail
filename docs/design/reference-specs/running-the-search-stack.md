@@ -7,7 +7,7 @@ design spec — keep run instructions here so the README and `CLAUDE.md` can lin
 without drifting.
 
 **Prerequisites:** a working build. The toolchain (bazelisk/Bazel, a C++ compiler,
-zlib) and the build/test basics are in [`CLAUDE.md`](../CLAUDE.md) (*Prerequisites*
+zlib) and the build/test basics are in [`CLAUDE.md`](../../../CLAUDE.md) (*Prerequisites*
 and *Build*).
 
 The pieces fit together in a line:
@@ -112,12 +112,12 @@ Full contract: [server-spec](cottontail-search-server-spec.md). Concurrency desi
 
 ## 4. Run the ISJ Searcher — `isj/`
 
-The maintained agent is the **ISJ Searcher** under [`isj/`](../isj/): an Analyst
+The maintained agent is the **ISJ Searcher** under [`isj/`](../../../isj/): an Analyst
 splits the question into interpretations, then a per-intent Searcher drives the
 server's **`cover_search`** tool (search → read cover summaries → judge →
 reformulate) and the CLI writes a run-output directory. One-time setup — the `uv`
 project, `config.toml`, and serving the model with vLLM — is in
-**[`isj/README.md`](../isj/README.md)** (its single source).
+**[`isj/README.md`](../../../isj/README.md)** (its single source).
 
 Prerequisites: a **`--stem porter`** burrow (§1 — `cover_search`'s `word*` family
 marker needs the stemmed stream), the **server** running over it (§3), and a
@@ -145,7 +145,7 @@ the served burrow whose `docno-cp.sqlite` maps `cp`→`docno`).
 - `errors.log` — present **only if something failed**; its **absence means the whole
   run succeeded**. The CLI exits non-zero iff it was written.
 
-Contract and internals: [`isj/README.md`](../isj/README.md). (The earlier
+Contract and internals: [`isj/README.md`](../../../isj/README.md). (The earlier
 proof-of-concept agent has been archived to
-[`archive/example-agent/`](../archive/example-agent/) and is no longer maintained;
-its design notes live in [search-agent-spec](cottontail-search-agent-spec.md).)
+[`archive/example-agent/`](../../../archive/example-agent/) and is no longer maintained;
+its design notes live in [search-agent-spec](../archive/cottontail-search-agent-spec.md).)

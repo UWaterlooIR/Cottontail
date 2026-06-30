@@ -20,8 +20,8 @@ Canonical vocabulary for a document's parts (decision **doc-7**, 2026-06-25):
 next to `docno-cp.sqlite` split). One canonical vocabulary; the raw JSON names stay
 local to the indexer.
 
-**Applied:** the index path (TASK-6.1/6.2/6.3) + `docs/indexing.md` +
-`docs/cottontail-jsonl-cli-spec.md`. **Still pending:** the query/response path still
+**Applied:** the index path (TASK-6.1/6.2/6.3) + `docs/design/reference-specs/indexing.md` +
+`docs/design/reference-specs/cottontail-jsonl-cli-spec.md`. **Still pending:** the query/response path still
 emits `docid` (`Hit.docid`, the `"docid"` keys in `apps/jsonl_json.cc`) — **A3 /
 TASK-5.12** must rename per doc-7 (results carry `cp`; persisted id = `docno`).
 Builds on cp-native identity (doc-6). See [[project-cottontail-overview]] and

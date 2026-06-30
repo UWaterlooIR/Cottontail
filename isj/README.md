@@ -2,7 +2,7 @@
 
 This is the implementation of the agentic ISJ (Interactive Searching and
 Judging) system described in
-[`docs/agentic-isj-investigation-planner.md`](../docs/agentic-isj-investigation-planner.md).
+[`docs/design/archive/agentic-isj-investigation-planner.md`](../docs/design/archive/agentic-isj-investigation-planner.md).
 Read that document first — it is the authoritative specification.
 
 This is a TREC RAG 2026 primary-system deliverable, not an example or demo.
@@ -90,7 +90,7 @@ uv run --directory isj python -m isj_agent.cli \
 It needs **both** a running vLLM (the `[llm.*]` endpoint) and a running
 `cottontail-jsonl-server` over a `--stem porter` burrow (the
 `[cottontail_http_json_server]` endpoint) — see
-[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md) for
+[`docs/design/reference-specs/running-the-search-stack.md`](../docs/design/reference-specs/running-the-search-stack.md) for
 starting the server. The server is a **local** loopback service (fine to run); an
 off-loopback or external endpoint needs explicit go-ahead.
 
@@ -285,4 +285,4 @@ CLI is the full real-LLM live gate. The judge-serving defaults (`concurrency=15`
 `reasoning_effort="high"`, `max_doc_chars=50000`) come from the `scout_judger.py`
 serving scout (decode-bound; KV is not the constraint). The earlier proof-of-concept
 agent is archived under `archive/example-agent/`, and the full run/usage flow lives in
-[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md).
+[`docs/design/reference-specs/running-the-search-stack.md`](../docs/design/reference-specs/running-the-search-stack.md).

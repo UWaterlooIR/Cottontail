@@ -12,8 +12,8 @@ compiler-loop framing). The RISC ideas survive as background; the *system we are
 going to build* is the one described here.
 
 The CLI, HTTP server, and tool surface this design binds to are specified in
-[`docs/cottontail-jsonl-cli-spec.md`](cottontail-jsonl-cli-spec.md),
-[`docs/cottontail-search-server-spec.md`](cottontail-search-server-spec.md), and
+[`docs/cottontail-jsonl-cli-spec.md`](../reference-specs/cottontail-jsonl-cli-spec.md),
+[`docs/cottontail-search-server-spec.md`](../reference-specs/cottontail-search-server-spec.md), and
 [`docs/cottontail-search-agent-spec.md`](cottontail-search-agent-spec.md).
 
 ---
@@ -972,8 +972,8 @@ place. What follows is the exact mapping.
 ### 7.1 Tools already shipped
 
 The JSONL CLI + HTTP server exposes (per
-[`docs/cottontail-jsonl-cli-spec.md`](cottontail-jsonl-cli-spec.md) and
-[`docs/cottontail-search-server-spec.md`](cottontail-search-server-spec.md)):
+[`docs/cottontail-jsonl-cli-spec.md`](../reference-specs/cottontail-jsonl-cli-spec.md) and
+[`docs/cottontail-search-server-spec.md`](../reference-specs/cottontail-search-server-spec.md)):
 
 | Server endpoint | Used by |
 |---|---|
