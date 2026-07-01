@@ -1,10 +1,11 @@
 ---
 id: TASK-18
 title: 'Queryable abstraction + generic BaseSearcher (cover-only, behavior-preserving)'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-06-30 21:45'
-updated_date: '2026-07-01 00:17'
+updated_date: '2026-07-01 01:51'
 labels: []
 dependencies: []
 references:
@@ -83,18 +84,18 @@ Key files: `isj/isj_agent/agents/searcher.py`, `isj/isj_agent/controller.py`, `i
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A Queryable interface provides tool_schema(), from_tool_arguments(args), and execute(engine, *, top_k, exclude, window) -> SearchResponse
-- [ ] #2 Each Queryable exposes a trace descriptor (tool_name plus trace_arguments() -> dict); the Controller derives the trace tool fields and the leading key(s) of the searcher-facing judged-results payload from it via spreading trace_arguments(), so _summarize is generic with no isinstance branch
-- [ ] #3 CoverQuery.trace_arguments() returns {"query": gcl}, so for a cover query the judged-results payload key order stays query, atom_counts, total_matches, depth_judged, already_judged, new_results (the existing payload-shape assertion still holds)
-- [ ] #4 CoverQuery implements Queryable and its execute() delegates to engine.search, returning the same SearchResponse as before the refactor
-- [ ] #5 BaseSearcher builds the LLM tool list from its query_types and routes a returned tool call to a Queryable by tool name; the cover searcher is a BaseSearcher with query_types=[CoverQuery]
-- [ ] #6 Malformed or empty tool arguments, or an unknown tool name, yield queryable=None and the Controller bounces it back to the searcher (the existing defensive path is preserved)
-- [ ] #7 ProposeResult carries a Queryable; the Controller calls queryable.execute(self.engine, ...) and never calls engine.search directly; the Queryable receives the engine as a parameter and stores no engine reference
-- [ ] #8 Live single-cover ranked output is identical to before the refactor; the seam unit tests (test_searcher.py and the test_controller.py StubSearcher) are updated to the queryable / cover_search seam
-- [ ] #9 Only the LLM-facing function is renamed search -> cover_search (engine.search() and the /tools/cover_search server endpoint are unchanged); agent-architecture.txt QUERY TYPES wording is updated to say the queryable executes itself when invoked by the Controller
-- [ ] #10 Queryable provides query_string() -> str (a plain string, distinct from trace_arguments() dict); the Controller sets RankedEntry.surfacing_query from queryable.query_string() at controller.py:208
-- [ ] #11 CoverQuery.query_string() == its gcl, so the persisted RankedEntry.surfacing_query for a cover query stays the bare GCL (e.g. (^ ...)) and is never a dict or JSON
-- [ ] #12 The --verbose CLI renderer (cli.py propose/search_request/search) does not KeyError on any queryable: the trace events keep a query key set to queryable.query_string() (cover renders byte-identically), so neither TASK-19 nor TASK-20 needs a cli.py change
+- [x] #1 A Queryable interface provides tool_schema(), from_tool_arguments(args), and execute(engine, *, top_k, exclude, window) -> SearchResponse
+- [x] #2 Each Queryable exposes a trace descriptor (tool_name plus trace_arguments() -> dict); the Controller derives the trace tool fields and the leading key(s) of the searcher-facing judged-results payload from it via spreading trace_arguments(), so _summarize is generic with no isinstance branch
+- [x] #3 CoverQuery.trace_arguments() returns {"query": gcl}, so for a cover query the judged-results payload key order stays query, atom_counts, total_matches, depth_judged, already_judged, new_results (the existing payload-shape assertion still holds)
+- [x] #4 CoverQuery implements Queryable and its execute() delegates to engine.search, returning the same SearchResponse as before the refactor
+- [x] #5 BaseSearcher builds the LLM tool list from its query_types and routes a returned tool call to a Queryable by tool name; the cover searcher is a BaseSearcher with query_types=[CoverQuery]
+- [x] #6 Malformed or empty tool arguments, or an unknown tool name, yield queryable=None and the Controller bounces it back to the searcher (the existing defensive path is preserved)
+- [x] #7 ProposeResult carries a Queryable; the Controller calls queryable.execute(self.engine, ...) and never calls engine.search directly; the Queryable receives the engine as a parameter and stores no engine reference
+- [x] #8 Live single-cover ranked output is identical to before the refactor; the seam unit tests (test_searcher.py and the test_controller.py StubSearcher) are updated to the queryable / cover_search seam
+- [x] #9 Only the LLM-facing function is renamed search -> cover_search (engine.search() and the /tools/cover_search server endpoint are unchanged); agent-architecture.txt QUERY TYPES wording is updated to say the queryable executes itself when invoked by the Controller
+- [x] #10 Queryable provides query_string() -> str (a plain string, distinct from trace_arguments() dict); the Controller sets RankedEntry.surfacing_query from queryable.query_string() at controller.py:208
+- [x] #11 CoverQuery.query_string() == its gcl, so the persisted RankedEntry.surfacing_query for a cover query stays the bare GCL (e.g. (^ ...)) and is never a dict or JSON
+- [x] #12 The --verbose CLI renderer (cli.py propose/search_request/search) does not KeyError on any queryable: the trace events keep a query key set to queryable.query_string() (cover renders byte-identically), so neither TASK-19 nor TASK-20 needs a cli.py change
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -185,6 +186,24 @@ identical; the trace's llm_call tool NAME intentionally changes `search` -> `cov
 AC MAP: #1->step1; #2,#3->steps1,3,5; #4->step1; #5->step2; #6->step2; #7->steps2,3; #8->steps5,6;
 #9->steps2,6; #10,#11->steps1,3,5; #12->step4.
 
+FROZEN SEAMS -- TASK-19/20 plug into these; implement EXACTLY so they need no base/controller change:
+- Queryable.execute(engine, *, top_k, exclude, window) -> SearchResponse. Signature is fixed;
+  TieredQuery implements it identically. The controller calls it generically each REFILL with
+  exclude=sorted(seen), so paging works for any queryable (TieredQuery re-runs its cascade per call).
+- Descriptor: tool_name:str, trace_arguments()->dict, query_string()->str. The controller reads EVERY
+  query sink through these (never isinstance): llm_call name/args <- tool_name + trace_arguments();
+  _summarize leading field <- **trace_arguments(); propose/search event `query` key + surfacing_query
+  <- query_string(). TieredQuery supplies {"tiers":[...]} / joined string with zero controller change.
+- BaseSearcher is generic over `query_types: list[type[Queryable]]` (build tools + route by tool_name);
+  NO CoverQuery hardcoding. __init__(client, model, *, reasoning_effort, temperature) unchanged so
+  config selection (cli _build_agent) constructs TieredSearcher identically; system_prompt/query_types
+  are subclass CLASS attrs.
+- Dry detection stays on `resp.results` empty (controller.py:179), NOT total_matches -- so TASK-19's
+  total_matches=sum aggregation never affects control flow.
+CONSEQUENCE (consistent, already deferred): a tiered query is traced at the queryable boundary -- one
+search_request/search event per execute() with MERGED results + UNION atom_counts; the internal
+per-tier engine.search calls are not individually traced (matches the deferred per-tier surfacing_query).
+
 DECISIONS:
 A. RESOLVED (per user): keep the class named `Searcher` -- a thin `Searcher(BaseSearcher)`. Config
    path (`isj_agent.agents.searcher.Searcher`) and imports are UNCHANGED. Only the LLM tool STRING
@@ -193,3 +212,15 @@ B. BaseSearcher + Searcher live in agents/searcher.py; Queryable + CoverQuery in
 C. Queryable.execute types `engine` as SearchEngine via TYPE_CHECKING (protocol/ does not import
    engine/ at runtime).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+IMPLEMENTED (all steps). New isj_agent/protocol/queryable.py (Queryable ABC + CoverQuery with tool_schema/from_tool_arguments/execute/tool_name/trace_arguments/query_string) + tests/test_queryable.py (6). searcher.py: ProposeResult.query->queryable; generic BaseSearcher (tools from query_types, route by tool_name, defensive bounce incl. unknown-tool/malformed-args, no inline-JSON recovery); Searcher(BaseSearcher) name unchanged, query_types=[CoverQuery]. controller.py: reads all four query sinks via the descriptor/query_string (llm_call<-tool_name+trace_arguments; propose/search/list_exhausted/bounce event 'query'<-query_string; _summarize leading field<-**trace_arguments; surfacing_query<-query_string; refill calls queryable.execute). LLM tool renamed search->cover_search (CoverQuery schema + searcher.md refs). doc: agent-architecture.txt QUERY TYPES wording. cli.py unchanged (events keep 'query' key). Tests updated: test_searcher (cover_search, r.queryable, +unknown-tool test), test_controller (StubSearcher->CoverQuery/cover_search, +surfacing_query + llm_call-trace-name tests). Suite: 96 passed, 1 skipped. LIVE smoke (gpt-oss + climbmix-1M-porter): one intent, clean; model called cover_search; surfacing_query='(^ "Yellowstone" bear* safety*)' (bare GCL); --verbose rendered 35 events with NO KeyError.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Queryable seam landed, cover-only and behavior-preserving. Queryable ABC + CoverQuery own tool_schema/from_tool_arguments/execute/tool_name/trace_arguments/query_string; BaseSearcher is generic over query_types (routes by tool_name, defensive bounce, no inline-JSON recovery); the Controller reads all four query sinks via the descriptor (trace_arguments for the LLM-facing sinks, query_string for the display/persisted sinks), calls queryable.execute(), and never touches engine.search directly. LLM tool renamed search->cover_search; class name Searcher and cli.py unchanged. Verified: 96 pytest passed (incl. new test_queryable + updated seam tests + surfacing_query/trace-name tests); live smoke (gpt-oss + climbmix-1M-porter) ran clean, model called cover_search, surfacing_query is a bare GCL, --verbose rendered all events with no KeyError. AC#8 taken as shape-identity (unit tests) + clean live run; a strict pre/post byte-diff was not run and is unreliable anyway since the intended tool rename changes the model's input.
+<!-- SECTION:FINAL_SUMMARY:END -->

@@ -102,7 +102,8 @@ RANKED LIST OF RESULTS
 QUERY TYPES (QUERYABLES)
 ------------------------
 - A generic "queryable" abstraction captures any of the system's valid query
-  types and is converted into an actual Cottontail query by the Controller.
+  types and is executed by the queryable itself when the Controller invokes it
+  (passing the engine, top-k, exclude, and window).
 - This abstraction is what lets a Searcher emit different query types and the
   Controller execute any of them without knowing the specific type in advance --
   the seam that makes the Searcher role pluggable across query strategies.

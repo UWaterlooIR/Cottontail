@@ -7,6 +7,7 @@ from isj_agent.agents.searcher import ProposeResult
 from isj_agent.controller import Controller
 from isj_agent.engine.base import EngineError
 from isj_agent.engine.fake import FakeEngine
+from isj_agent.protocol.queryable import CoverQuery
 from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
 
 
@@ -49,10 +50,10 @@ class StubSearcher:
         self.i += 1
         cid = f"c{self.i}"
         return ProposeResult(
-            query=q, content="reasoning", tool_call_id=cid,
+            queryable=CoverQuery(q), content="reasoning", tool_call_id=cid,
             assistant_message={"role": "assistant", "content": "",
                                "tool_calls": [{"id": cid, "type": "function",
-                                               "function": {"name": "search",
+                                               "function": {"name": "cover_search",
                                                             "arguments": json.dumps({"query": q})}}]},
             usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
             finish_reason="tool_calls", n_tool_calls=1,
@@ -218,3 +219,23 @@ def test_judge_llm_call_keeps_verbatim_request():
     result = ctl.run("intent", intent_budget=100)
     judge_calls = [e for e in result.events if e.type == "llm_call" and e.model_dump().get("purpose") == "judge"]
     assert judge_calls and "body-10" in judge_calls[0].model_dump()["request"][0]["content"]
+
+
+def test_surfacing_query_is_the_bare_gcl_for_a_cover():
+    # AC#11: RankedEntry.surfacing_query for a cover query stays the bare GCL (never a dict/JSON).
+    resp, docs = build([(10, 3)])
+    ctl = _ctl(["(^ black bear*)"], [resp], docs, max_queries=1)
+    result = ctl.run("bears", intent_budget=1)
+    assert result.ranked_list.entries[0].surfacing_query == "(^ black bear*)"
+
+
+def test_llm_call_trace_names_the_cover_search_tool():
+    # AC: the trace's searcher_turn llm_call reflects the renamed tool + its dict arguments.
+    resp, docs = build([(10, 3)])
+    ctl = _ctl(["(^ a b)"], [resp], docs, max_queries=1)
+    result = ctl.run("intent", intent_budget=1)
+    turn = [e.model_dump() for e in result.events
+            if e.type == "llm_call" and e.model_dump().get("purpose") == "searcher_turn"][0]
+    assert turn["tool"] == "cover_search"
+    assert turn["calls"][0]["name"] == "cover_search"
+    assert json.loads(turn["calls"][0]["arguments"]) == {"query": "(^ a b)"}
