@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-30 21:48'
-updated_date: '2026-07-01 03:52'
+updated_date: '2026-07-01 04:26'
 labels: []
 dependencies:
   - TASK-18
@@ -69,17 +69,23 @@ Key files: `isj/isj_agent/agents/tiered_searcher.py` (new), `isj/isj_agent/agent
 - [ ] #11 bazel test //test:jsonl_test and the isj pytest suite pass
 <!-- AC:END -->
 
+## Implementation Plan
 
+<!-- SECTION:PLAN:BEGIN -->
+Plugs into the TASK-18/19 seam: BaseSearcher is generic (a subclass sets system_prompt + query_types; propose() offers those tools with tool_choice=required and routes by name), TieredQuery exists, and _build_agent("searcher") instantiates [agents.searcher].class via load_class(...)(client=, model=, reasoning_effort=, temperature=). So TieredSearcher is a thin subclass + prompt + a config line -- NO controller/base edits.
 
+1. agents/tiered_searcher.py (new). TieredSearcher(BaseSearcher): load _PROMPT from tiered_searcher.md via importlib.resources.files("isj_agent.agents"); set prompt = system_prompt = _PROMPT and query_types = [TieredQuery]. Inherits __init__ and propose() unchanged -> exposes ONLY the tiered_query_search tool and emits one TieredQuery per turn.
 
+2. agents/tiered_searcher.md (new). Port the reviewed draft prompt from this task's Implementation Notes VERBATIM (it already carries the total_matches "distinct documents" wording and the three worked examples A/au-pair-201, B/nuclear-202, C/firearms-250 that fix infix-plus, entity under-expansion, and phrase-heaviness). Decisions: do NOT add a lowercase-in-phrases note (so a capitalized quoted phrase may show atom_count 0 until TASK-21 lands; the prompt's own "fix count-0 atoms" nudge covers it). DO add one line in PART 3: the tiered score is tier-encoded (higher = tighter tier) -- rank by the rank field, do not over-read the raw score number. Packaging is automatic (pyproject artifacts = isj_agent/**/*.md).
 
+3. config.example.toml (edit). Under [agents.searcher], add commented lines documenting the swap-in: class = "isj_agent.agents.tiered_searcher.TieredSearcher" (exposes tiered_query_search; needs the server built after TASK-19). Actual selection is the user's gitignored config.toml.
 
+4. Tests (isj/tests/). New test_tiered_searcher.py mirroring test_searcher.py: propose returns TieredQuery from a scripted tiered_query_search tool call; tool_choice=required with offered names == ["tiered_query_search"] (AC#2); reasoning_effort forwarded; usage captured; malformed/unknown tool call -> queryable is None (defensive bounce); TieredSearcher.prompt contains GCL + tiered-method markers and "do not judge" (AC#3 content). Selectability (AC#1): load_class("isj_agent.agents.tiered_searcher.TieredSearcher") returns the class and constructs via the (client=, model=) path _build_agent uses. End-to-end: wire the REAL TieredSearcher(StubClient) into a real Controller over a FakeEngine (scripted merged response) and assert the loop runs, emits a TieredQuery, and yields a ranked list -- with no controller/base change. Run uv run --directory isj python -m pytest (full suite green).
 
+5. Live validation (vLLM already up; I start the cottontail server on :8080 with Scrapheap/climbmix-1M-porter.burrow -- the tiered-capable binary from TASK-19 -- and confirm before running). AC#4 (HARD): run TieredSearcher on >= 3 scoped needs (scoped TREC-4 topics and/or Yellowstone per-concern needs) by pointing config.toml [agents.searcher].class at TieredSearcher; assert every emitted tier is syntactically valid GCL (the server parses it) and the ladder is precise->broad. AC#5 (OBSERVED, not a gate): on a scoped entity-anchored need, check whether an entity-drop (transferable) tier appears and REPORT it with the anchoring caveat (a loop regression is a model finding to escalate to the planner, not an implementation defect). Capture traces and summarize.
 
-
-
-
-
+6. Confirm AC#1 no controller/base change: the controller only calls searcher.propose() and reads searcher.system_prompt (duck-typed; its Searcher annotation is cosmetic and stays); BaseSearcher untouched. Final git diff shows only tiered_searcher.py (new), tiered_searcher.md (new), config.example.toml, and tests.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
