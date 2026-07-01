@@ -211,6 +211,19 @@ cc_binary(
 )
 
 cc_binary(
+    name = "mt-compile",
+    srcs = [
+      "mt-compile.cc",
+    ],
+    deps = [
+      "//src:cottontail",
+    ],
+    linkopts = [
+      "-pthread",
+    ],
+)
+
+cc_binary(
     name = "parameters",
     srcs = [
       "parameters.cc",
