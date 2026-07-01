@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-06-30 21:48'
-updated_date: '2026-06-30 23:50'
+updated_date: '2026-07-01 03:52'
 labels: []
 dependencies:
   - TASK-18
@@ -61,7 +61,25 @@ Key files: `isj/isj_agent/agents/tiered_searcher.py` (new), `isj/isj_agent/agent
 - [ ] #3 The prompt includes worked examples that prevent infix-plus inside (+ ...), entity under-expansion, and over-use of long exact phrases
 - [ ] #4 A live run on at least 3 scoped needs produces syntactically valid tiered GCL (every tier parses) with precise-to-broad structure
 - [ ] #5 On a scoped entity-anchored need, the run is checked and reported for an entity-drop (transferable) tier; this is OBSERVED/best-effort, not a hard pass/fail -- the tiered scouting produced such tiers one-shot and whether the multi-turn loop sustains it is what this measures, so a regression is a model finding (escalate to the planner) not an implementation defect
+- [ ] #6 atom_counts for a term inside a quoted phrase reflects the tokenizer-normalized feature the phrase match path actually resolves it to, so a phrase leaf that matches documents never reports count 0 due to case (e.g. the quoted phrase "Yellowstone" reports its true nonzero occurrence count)
+- [ ] #7 The fix lives in the shared atom-count computation in apps/jsonl_core.cc, so BOTH cover_search and tiered_query_search report corrected counts from the one change; word* family resolution via the stemmer is left unchanged
+- [ ] #8 Bare (unquoted) GCL terms are unchanged: a bare capitalized term that genuinely cannot match the lowercased index still reports count 0, so real dead atoms are not masked
+- [ ] #9 A regression test in test/jsonl.cc builds a porter burrow containing a capitalized proper noun, confirms a quoted-phrase query matches documents, and asserts its atom_counts entry is greater than 0 and equals the true occurrence count
+- [ ] #10 jsonl_explain's df computation (the same raw featurize(atom) pattern) is either fixed the same way or explicitly documented as out of scope with a reason
+- [ ] #11 bazel test //test:jsonl_test and the isj pytest suite pass
 <!-- AC:END -->
+
+
+
+
+
+
+
+
+
+
+
+
 
 ## Implementation Notes
 
@@ -172,7 +190,7 @@ diagnostics. Read it top to bottom:
   - atom_counts: one entry per term, with its occurrences in the WHOLE collection. A
     "count": 0 means that term matched NOTHING (a typo, a shortened stem, or a stray infix
     "+") and silently killed its cover -- FIX it first.
-  - total_matches: how broad the cascade was (0 = dry).
+  - total_matches: how many DISTINCT documents your cascade matched across all tiers (0 = dry).
   - already_judged: documents you had judged on a PRIOR turn, de-duplicated out (count +
     relevant/non_relevant).
   - new_results: the NEW graded documents -- each with rank, score, summary, reason, grade.

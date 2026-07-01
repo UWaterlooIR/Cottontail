@@ -1,10 +1,10 @@
 ---
 id: TASK-19
 title: TieredQuery queryable over a native tiered_query_search server endpoint
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-06-30 21:48'
-updated_date: '2026-07-01 02:54'
+updated_date: '2026-07-01 04:00'
 labels: []
 dependencies:
   - TASK-18
@@ -34,6 +34,7 @@ Built entirely from existing helpers (cover_rewrite, cover_leaves, cover_ranking
 - Cascade with provenance: loop the tiers in order; per tier run cover_ranking(tier, depth=top_k+|exclude|, exclude); merge with cross-tier cp de-dup, appending in tier order, and RECORD the surfacing tier per cp.
 - Faithful per-tier summaries: post-filter exclude, cap top_k; for each survivor re-walk ITS surfacing tier's hopper within [cp,cq] and call cover_summary (cover_search's phase-2, but per surfacing tier).
 - Score: tier-monotonic (like native fake_score = depth - position) so the precise->broad tier order survives the final list's (grade, score) tiebreak; per-tier cover-density scores are not comparable across tiers.
+- Malformed tier = WHOLE-REQUEST-FAIL (v1): a GCL syntax error in ANY tier fails the whole call (same 400 -> EngineError -> controller bounce as cover_search); the error NAMES the offending tier (its index and GCL string) so the model fixes the right one rather than blindly resubmitting all tiers. A count-0 dead atom does NOT trigger this -- it parses and simply goes dry, which is exactly what atom_counts=0 diagnoses. (Skip-and-report of individual bad tiers is deliberately out of scope for v1.)
 
 ### Server + JSON
 - tiered_spec_from(json) reads tiers[] / top_k / exclude / window / max_covers / max_words; the response reuses cover_results_json.
@@ -44,6 +45,7 @@ Built entirely from existing helpers (cover_rewrite, cover_leaves, cover_ranking
 - HttpSearchEngine implements it (POST /tools/tiered_query_search; body {tiers, top_k, exclude, window}; parse the reused SearchResponse).
 - FakeEngine gains tiered_search (returns the next scripted SearchResponse and records the call). No KeyedFakeEngine is needed -- the cascade and de-dup now live in C++, so the Python fake just returns a pre-merged response.
 - TieredQuery(tiers) implements Queryable: tool_name tiered_query_search; schema {tiers: array of string, required tiers}; from_tool_arguments validates a non-empty list of strings; trace_arguments returns a {tiers: [...]} dict; query_string returns the tiers joined by " ; " (a plain string, never a dict); execute forwards to engine.tiered_search(self.tiers, ...) (a thin forwarder).
+- The tool-schema description STATES THE CASCADE SEMANTICS (the tiers run in order, results are de-duplicated across tiers, and tighter tiers outrank broader ones), so the tool self-documents alongside the TieredSearcher prompt (TASK-20) and the two cannot drift.
 
 ## Degenerate / base case
 A single-tier tiered_query_search must behave identically to cover_search (same results, ranking, counts, and summaries). Locked with a C++ test.
@@ -57,6 +59,26 @@ The handler re-runs all tiers on each execute() call (the Controller pages by re
 Key files: apps/jsonl_core.{h,cc} (TieredSpec + jsonl_tiered_query_search), apps/jsonl_json.{h,cc} (tiered_spec_from; reuse cover_results_json), apps/cottontail-jsonl-server.cc (route), isj/isj_agent/engine/{base,http,fake}.py, isj/isj_agent/protocol/queryable.py (TieredQuery), and tests in test/jsonl.cc and isj/tests/.
 <!-- SECTION:DESCRIPTION:END -->
 
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [x] #1 A new server tool POST /tools/tiered_query_search accepts a tiers string-array request and returns the cover_search response shape (total_matches, unjudged_matches, atom_counts, results with rank/score/cp/summary)
+- [x] #2 jsonl_tiered_query_search runs the tiers as a cascade using Cottontail existing ranking primitives (no Python cascade and no src/ ranking edits) with cross-tier de-duplication, so a cp returned by an earlier tier never reappears
+- [x] #3 cps in the incoming exclude never appear in the results
+- [x] #4 Results are merged in tier order (tighter tiers rank above looser) and capped at top_k, and every tier still runs even when earlier tiers already fill top_k so atom_counts and the counts stay complete
+- [x] #5 atom_counts is the union of every tier leaves deduped by term, present and deterministic on every call, so a count of 0 means a dead atom and never an un-run tier
+- [x] #6 total_matches and unjudged_matches are the EXACT distinct union across tiers (a depth=0 counting pass over the OR of the tiers) and are 0 if and only if every tier is dry
+- [x] #7 Each result summary is built against the specific tier that surfaced that document (faithful per-tier biasing) reusing cover_summary
+- [x] #8 A single-tier tiered_query_search returns results identical to cover_search for the same query, locked by a C++ base-case test in test/jsonl.cc
+- [x] #9 C++ tests in test/jsonl.cc drive jsonl_tiered_query_search against a real burrow and assert cross-tier de-dup, exact union counts, per-tier summaries, and exclude handling
+- [x] #10 The SearchEngine Protocol gains tiered_search and HttpSearchEngine posts to /tools/tiered_query_search with a tiers/top_k/exclude/window body, parsing the reused SearchResponse
+- [x] #11 TieredQuery implements Queryable with tool_name tiered_query_search and a tiers string-array argument, from_tool_arguments validates a non-empty list of strings, trace_arguments returns a tiers-keyed dict and query_string returns the tiers joined into a plain string (never a dict), and execute forwards to engine.tiered_search
+- [x] #12 The Controller and BaseSearcher are unchanged, and a controller-level Python test drives a TieredQuery-emitting searcher stub and asserts the judged-results payload leads with the tiers field and surfacing_query records the joined tier string
+- [x] #13 Python tests (test_queryable.py, test_http_engine.py) cover the schema, from_tool_arguments, trace/string forms, and the HTTP forwarding, and the full pytest suite plus bazel test //test:jsonl_test pass
+- [x] #14 A live end-to-end run of the hand-authored 5-tier Yellowstone cascade returns a merged, de-duplicated, per-tier-summarized ranked list
+- [x] #15 A GCL syntax error in any tier fails the WHOLE tiered_query_search request (whole-request-fail, same bounce path as cover_search) and the error names the offending tier by index and GCL string; a count-0 dead atom does NOT trigger this since it parses and simply goes dry
+- [x] #16 The tiered_query_search tool-schema description states the cascade semantics (tiers run in order, results de-duplicated across tiers, tighter tiers outrank broader) so the tool self-documents alongside the TieredSearcher prompt
+<!-- AC:END -->
+
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
@@ -69,20 +91,18 @@ Key files: apps/jsonl_core.{h,cc} (TieredSpec + jsonl_tiered_query_search), apps
 7. Build + live check. bazel build the server; run the hand-authored 5-tier Yellowstone cascade against a porter burrow for the live end-to-end AC (needs the running stack).
 <!-- SECTION:PLAN:END -->
 
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 A new server tool POST /tools/tiered_query_search accepts a tiers string-array request and returns the cover_search response shape (total_matches, unjudged_matches, atom_counts, results with rank/score/cp/summary)
-- [ ] #2 jsonl_tiered_query_search runs the tiers as a cascade using Cottontail existing ranking primitives (no Python cascade and no src/ ranking edits) with cross-tier de-duplication, so a cp returned by an earlier tier never reappears
-- [ ] #3 cps in the incoming exclude never appear in the results
-- [ ] #4 Results are merged in tier order (tighter tiers rank above looser) and capped at top_k, and every tier still runs even when earlier tiers already fill top_k so atom_counts and the counts stay complete
-- [ ] #5 atom_counts is the union of every tier leaves deduped by term, present and deterministic on every call, so a count of 0 means a dead atom and never an un-run tier
-- [ ] #6 total_matches and unjudged_matches are the EXACT distinct union across tiers (a depth=0 counting pass over the OR of the tiers) and are 0 if and only if every tier is dry
-- [ ] #7 Each result summary is built against the specific tier that surfaced that document (faithful per-tier biasing) reusing cover_summary
-- [ ] #8 A single-tier tiered_query_search returns results identical to cover_search for the same query, locked by a C++ base-case test in test/jsonl.cc
-- [ ] #9 C++ tests in test/jsonl.cc drive jsonl_tiered_query_search against a real burrow and assert cross-tier de-dup, exact union counts, per-tier summaries, and exclude handling
-- [ ] #10 The SearchEngine Protocol gains tiered_search and HttpSearchEngine posts to /tools/tiered_query_search with a tiers/top_k/exclude/window body, parsing the reused SearchResponse
-- [ ] #11 TieredQuery implements Queryable with tool_name tiered_query_search and a tiers string-array argument, from_tool_arguments validates a non-empty list of strings, trace_arguments returns a tiers-keyed dict and query_string returns the tiers joined into a plain string (never a dict), and execute forwards to engine.tiered_search
-- [ ] #12 The Controller and BaseSearcher are unchanged, and a controller-level Python test drives a TieredQuery-emitting searcher stub and asserts the judged-results payload leads with the tiers field and surfacing_query records the joined tier string
-- [ ] #13 Python tests (test_queryable.py, test_http_engine.py) cover the schema, from_tool_arguments, trace/string forms, and the HTTP forwarding, and the full pytest suite plus bazel test //test:jsonl_test pass
-- [ ] #14 A live end-to-end run of the hand-authored 5-tier Yellowstone cascade returns a merged, de-duplicated, per-tier-summarized ranked list
-<!-- AC:END -->
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented the native tiered_query_search endpoint + a thin Python TieredQuery.
+
+C++ (apps/): TieredSpec + jsonl_tiered_query_search built entirely from the existing cover_search helpers (cover_rewrite, cover_leaves, cover_ranking, cover_summary) -- no new ranking math, no src/ranking.cc edits. Union atom_counts; EXACT distinct union match counts via a depth=0 pass over the OR of the tiers; cross-tier de-dup cascade with per-tier provenance; faithful per-tier summaries; tier-monotonic score (reduces to the raw density for a single tier, so it equals cover_search exactly); whole-request-fail naming the offending tier. New POST /tools/tiered_query_search route reusing cover_results_json.
+
+Python (isj/): SearchEngine.tiered_search on the Protocol; HttpSearchEngine (POST) + FakeEngine (scripted) implementations; TieredQuery queryable forwarding to engine.tiered_search. Controller and BaseSearcher unchanged.
+
+Verified: Python 110 passed / 1 skipped; bazel //test:jsonl_test (7 new JsonlTiered cases) and //test:tests PASS; live 5-tier Yellowstone cascade over climbmix-100k-porter returned a merged, de-duplicated, per-tier-summarized ranked list (10 distinct cps, tier-monotonic scores, exact union total_matches=2605).
+
+All 16 ACs met. AC#5 caveat: the tiered-specific guarantee (complete union atom_counts; a 0 is never an un-run tier) is met, but the blanket "count 0 = dead atom" is undercut by a pre-existing cover_search phrase-leaf case-fold bug (a matching quoted phrase can show 0) -- inherited here, not a TASK-19 regression, and now tracked separately as TASK-21.
+
+Deviation from the plan's file list: tiered_spec_from was placed in cottontail-jsonl-server.cc next to cover_spec_from (where the analogous helper actually lives), not in jsonl_json.{h,cc}; the response serializer cover_results_json was reused unchanged.
+<!-- SECTION:FINAL_SUMMARY:END -->
