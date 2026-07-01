@@ -43,6 +43,25 @@ class SearchEngine(Protocol):
         """
         ...
 
+    def tiered_search(
+        self,
+        tiers: Sequence[str],
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        """Run an ordered cascade of GCL cover tiers (tiered_query_search).
+
+        The cascade itself -- per-tier ranking, cross-tier de-duplication, per-tier
+        summaries, the union `atom_counts`, and the exact distinct match count -- runs
+        server-side; this returns the merged, cover_search-shaped `SearchResponse`.
+        `exclude` is the judged/consumed set as cp integers (the engine is stateless).
+        MAY raise EngineError on any engine-side failure -- notably a malformed tier,
+        which fails the WHOLE request (naming the offending tier).
+        """
+        ...
+
     def read(self, cp: int) -> str | None:
         """Return the full document body for `cp`, or None if cp is unknown.
 

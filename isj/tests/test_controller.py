@@ -7,7 +7,7 @@ from isj_agent.agents.searcher import ProposeResult
 from isj_agent.controller import Controller
 from isj_agent.engine.base import EngineError
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.queryable import CoverQuery
+from isj_agent.protocol.queryable import CoverQuery, TieredQuery
 from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
 
 
@@ -55,6 +55,36 @@ class StubSearcher:
                                "tool_calls": [{"id": cid, "type": "function",
                                                "function": {"name": "cover_search",
                                                             "arguments": json.dumps({"query": q})}}]},
+            usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
+            finish_reason="tool_calls", n_tool_calls=1,
+        )
+
+
+class StubTieredSearcher:
+    """A searcher that emits a TieredQuery each turn (TASK-19): same shape as
+    StubSearcher but exercises the tiered path through the unchanged controller."""
+
+    system_prompt = "SYSTEM"
+
+    def __init__(self, tier_lists):
+        self.tier_lists = [tuple(t) for t in tier_lists]
+        self.i = 0
+        self.tool_results = []
+
+    def propose(self, messages):
+        for m in reversed(messages):
+            if m.get("role") == "tool":
+                self.tool_results.append(json.loads(m["content"]))
+                break
+        tiers = self.tier_lists[self.i] if self.i < len(self.tier_lists) else ("(^ more)",)
+        self.i += 1
+        cid = f"c{self.i}"
+        return ProposeResult(
+            queryable=TieredQuery(tiers), content="reasoning", tool_call_id=cid,
+            assistant_message={"role": "assistant", "content": "",
+                               "tool_calls": [{"id": cid, "type": "function",
+                                               "function": {"name": "tiered_query_search",
+                                                            "arguments": json.dumps({"tiers": list(tiers)})}}]},
             usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
             finish_reason="tool_calls", n_tool_calls=1,
         )
@@ -227,6 +257,42 @@ def test_surfacing_query_is_the_bare_gcl_for_a_cover():
     ctl = _ctl(["(^ black bear*)"], [resp], docs, max_queries=1)
     result = ctl.run("bears", intent_budget=1)
     assert result.ranked_list.entries[0].surfacing_query == "(^ black bear*)"
+
+
+def test_tiered_query_payload_leads_with_tiers_and_surfacing_query_joins():
+    # TASK-19 AC#12: a TieredQuery-emitting searcher drives the UNCHANGED controller;
+    # the judged-results payload leads with "tiers" and surfacing_query is the joined
+    # tier string (a plain str, never a dict/JSON).
+    resp, docs = build([(10, 3), (20, 2)])
+    tiers = ["(>> (# 8) (^ a b))", "(^ a b)"]
+    ctl = Controller(StubTieredSearcher([tiers]), StubJudger(),
+                     FakeEngine([resp], docs), nonrelevant_streak=9, max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    assert {e.cp for e in result.ranked_list.entries} == {10, 20}
+    # surfacing_query is the joined tier string, never a dict
+    assert result.ranked_list.entries[0].surfacing_query == "(>> (# 8) (^ a b)) ; (^ a b)"
+    # the judged-results payload leads with "tiers" (the queryable's trace descriptor)
+    payload = ctl.searcher.tool_results[-1]
+    assert list(payload) == [
+        "tiers", "atom_counts", "total_matches", "depth_judged", "already_judged", "new_results"
+    ]
+    assert payload["tiers"] == tiers
+    # the controller executed via engine.tiered_search (the call carries a `tiers` key)
+    assert "tiers" in ctl.engine.calls[0]
+
+
+def test_tiered_query_llm_call_trace_names_the_tiered_tool():
+    # the searcher_turn llm_call reflects the tiered tool + its {tiers:[...]} arguments.
+    resp, docs = build([(10, 3)])
+    tiers = ["(^ a b)", "(^ a)"]
+    ctl = Controller(StubTieredSearcher([tiers]), StubJudger(),
+                     FakeEngine([resp], docs), max_queries=1)
+    result = ctl.run("intent", intent_budget=1)
+    turn = [e.model_dump() for e in result.events
+            if e.type == "llm_call" and e.model_dump().get("purpose") == "searcher_turn"][0]
+    assert turn["tool"] == "tiered_query_search"
+    assert turn["calls"][0]["name"] == "tiered_query_search"
+    assert json.loads(turn["calls"][0]["arguments"]) == {"tiers": tiers}
 
 
 def test_llm_call_trace_names_the_cover_search_tool():

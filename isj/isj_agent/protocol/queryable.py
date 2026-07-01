@@ -113,3 +113,75 @@ class CoverQuery(Queryable):
 
     def query_string(self) -> str:
         return self.gcl
+
+
+@dataclass(frozen=True)
+class TieredQuery(Queryable):
+    """An ordered precise->broad cascade of GCL cover tiers (TASK-19).
+
+    Thin over the server's `tiered_query_search` tool: the cascade itself -- per-tier
+    ranking, cross-tier de-duplication, per-tier summaries, the union `atom_counts`,
+    and the exact distinct match count -- runs in the C++ handler. This class only
+    carries the tiers, exposes the tool schema + trace forms, and forwards `execute`
+    to `engine.tiered_search`. `tiers` is a tuple so the dataclass stays frozen and
+    hashable (parity with CoverQuery); the trace/JSON forms re-expose it as a list.
+    """
+
+    tiers: tuple[str, ...]
+    tool_name: ClassVar[str] = "tiered_query_search"
+
+    @classmethod
+    def tool_schema(cls) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": cls.tool_name,
+                "description": (
+                    "Run an ORDERED list of GCL cover tiers as a de-duplicated CASCADE: "
+                    "each tier in turn, most precise first and broadest last. A document "
+                    "found by an earlier (tighter) tier is never re-listed by a later "
+                    "(looser) one, and tighter tiers outrank broader ones. Returns the NEW "
+                    "documents the cascade surfaces, each already graded (0-3) with a reason "
+                    "and a summary from the tier that surfaced it, plus the union atom_counts "
+                    "and the count of distinct documents matched across all tiers."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "tiers": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "The cover tiers as GCL strings, ordered most precise to "
+                                "most broad."
+                            ),
+                        }
+                    },
+                    "required": ["tiers"],
+                },
+            },
+        }
+
+    @classmethod
+    def from_tool_arguments(cls, args: dict) -> TieredQuery:
+        tiers = args["tiers"]  # KeyError -> BaseSearcher bounces
+        if (
+            not isinstance(tiers, list)
+            or not tiers
+            or not all(isinstance(t, str) for t in tiers)
+        ):
+            raise ValueError("tiers must be a non-empty list of GCL strings")
+        return cls(tiers=tuple(tiers))
+
+    def execute(
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[int], window: int
+    ) -> SearchResponse:
+        return engine.tiered_search(
+            list(self.tiers), top_k=top_k, exclude=exclude, window=window
+        )
+
+    def trace_arguments(self) -> dict:
+        return {"tiers": list(self.tiers)}
+
+    def query_string(self) -> str:
+        return " ; ".join(self.tiers)

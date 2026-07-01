@@ -898,6 +898,191 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   return true;
 }
 
+// tiered_query_search: run an ordered list of cover tiers as a de-duplicated
+// cascade, reusing the cover_search helpers (cover_rewrite / cover_leaves /
+// cover_ranking / cover_summary) -- no new ranking math, no native src/ranking.cc
+// call. atom_counts is the UNION of every tier's leaves; total/unjudged are the
+// EXACT distinct union across tiers; each summary is built against the tier that
+// surfaced its document; the merged score is tier-monotonic. A single-tier cascade
+// reduces exactly to cover_search.
+bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
+                               const TieredSpec &spec, CoverResponse *out,
+                               std::string *error) {
+  out->results.clear();
+  out->atom_counts.clear();
+  out->total_matches = 0;
+  out->unjudged_matches = 0;
+  if (spec.tiers.empty())
+    return true; // no tiers -> empty response (parity with an empty cover query)
+
+  // A stemmer is needed if ANY tier uses the word* family marker.
+  std::shared_ptr<Stemmer> stemmer;
+  bool need_stem = false;
+  for (const auto &t : spec.tiers)
+    if (t.find('*') != std::string::npos) {
+      need_stem = true;
+      break;
+    }
+  if (need_stem) {
+    stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "tiered_query_search uses the word* family marker but this burrow has "
+          "no stemmed stream (rebuild the index with --stem porter)";
+      return false;
+    }
+  }
+
+  // WHOLE-REQUEST-FAIL: rewrite + validate EVERY tier up front. A GCL syntax error
+  // (or a bad '*') in ANY tier rejects the whole request, NAMING the tier, so the
+  // agent fixes the right one. (A count-0 atom is NOT an error: it parses and the
+  // tier simply goes dry -- that is what atom_counts=0 diagnoses.)
+  std::vector<std::string> rewritten(spec.tiers.size());
+  for (size_t i = 0; i < spec.tiers.size(); i++) {
+    std::string rw, inner;
+    if (!cover_rewrite(spec.tiers[i], stemmer, &rw, &inner)) {
+      safe_error(error) =
+          "tier " + std::to_string(i) + " (" + spec.tiers[i] + "): " + inner;
+      return false;
+    }
+    if (!rw.empty()) {
+      auto check = warren->hopper_from_gcl(rw, &inner);
+      if (check == nullptr) {
+        safe_error(error) =
+            "tier " + std::to_string(i) + " (" + spec.tiers[i] + "): " + inner;
+        return false;
+      }
+    }
+    rewritten[i] = rw;
+  }
+
+  // atom_counts: the UNION of every tier's content-term leaves, deduped by term
+  // (first-seen order), each with its corpus occurrence count. Present on every
+  // call regardless of results, so a count of 0 unambiguously means a dead atom.
+  std::set<std::string> seen_terms;
+  for (const auto &tier : spec.tiers) {
+    for (const auto &leaf : cover_leaves(tier)) {
+      if (!seen_terms.insert(leaf).second)
+        continue;
+      std::string atom;
+      auto star = leaf.find('*');
+      if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
+          stemmer != nullptr)
+        atom = resolve_family_atom(stemmer, leaf.substr(0, star));
+      else
+        atom = leaf;
+      AtomCount ac;
+      ac.term = leaf;
+      ac.count =
+          (long)warren->idx()->count(warren->featurizer()->featurize(atom));
+      out->atom_counts.push_back(std::move(ac));
+    }
+  }
+
+  std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
+
+  // total_matches / unjudged_matches = the EXACT distinct union across tiers: one
+  // depth=0 counting pass over the OR of the (non-empty) rewritten tiers. 0 iff
+  // every tier is dry. (Not the per-tier sum, which double-counts overlap.)
+  std::vector<std::string> nonempty;
+  for (const auto &rw : rewritten)
+    if (!rw.empty())
+      nonempty.push_back(rw);
+  if (!nonempty.empty()) {
+    std::string orq;
+    if (nonempty.size() == 1) {
+      orq = nonempty[0];
+    } else {
+      orq = "(+";
+      for (const auto &rw : nonempty)
+        orq += " " + rw;
+      orq += ")";
+    }
+    std::vector<CoverRanked> discard;
+    long tm = 0, um = 0;
+    if (!cover_ranking(warren, orq, 0, exclude, &discard, &tm, &um, error))
+      return false;
+    out->total_matches = tm;
+    out->unjudged_matches = um;
+  }
+
+  // The CASCADE: run each tier in order; drop cps in `exclude` and cross-tier
+  // duplicates; keep the surfacing tier + that tier's own density per survivor.
+  struct Surfaced {
+    addr cp = 0;
+    addr cq = 0;
+    size_t tier = 0;
+    double density = 0.0; // the surfacing tier's ssr cover-density score
+  };
+  std::vector<Surfaced> merged;
+  std::unordered_set<addr> merged_cps;
+  for (size_t ti = 0; ti < rewritten.size(); ti++) {
+    const std::string &rw = rewritten[ti];
+    if (rw.empty())
+      continue;
+    // Over-fetch depth = top_k + |exclude| so the cp post-filter still fills top_k
+    // (parity with cover_search paging). Per-tier counts are discarded (the exact
+    // union counts were computed above). ALL tiers run every call -- the caller
+    // pages by re-invoking with a grown exclude, and atom_counts must stay complete.
+    std::vector<CoverRanked> ranked;
+    long tm = 0, um = 0;
+    if (!cover_ranking(warren, rw, spec.top_k + exclude.size(), exclude, &ranked,
+                       &tm, &um, error))
+      return false;
+    for (const auto &r : ranked) {
+      if (exclude.find(r.cp) != exclude.end())
+        continue;
+      if (!merged_cps.insert(r.cp).second)
+        continue; // cross-tier duplicate: an earlier (tighter) tier already had it
+      merged.push_back({r.cp, r.cq, ti, r.score});
+    }
+  }
+
+  // Cap to top_k, then build each hit with a tier-monotonic score and a summary
+  // biased to the SURFACING tier's covers (faithful per-tier). Score = density +
+  // (last_tier - tier) * TIER_STRIDE, with TIER_STRIDE far larger than any real
+  // density, so tier order dominates (tighter tiers score higher) and precise->broad
+  // survives the caller's (grade, score) tiebreak; within a tier the density orders
+  // docs. A single tier reduces to exactly the density -> identical to cover_search.
+  const double TIER_STRIDE = 1e6; // >> any ssr density (a sum of 1/(42+span) terms)
+  size_t last = spec.tiers.size() - 1;
+  int rank = 1;
+  size_t n = std::min(merged.size(), spec.top_k);
+  for (size_t i = 0; i < n; i++) {
+    const Surfaced &s = merged[i];
+    CoverHit h;
+    h.rank = rank++;
+    h.cp = s.cp;
+    h.score = s.density + (double)(last - s.tier) * TIER_STRIDE;
+    // Recover the surfacing tier's covers within [cp,cq] (a localized re-walk over
+    // this survivor only, NOT a corpus pass) -- exactly cover_search's phase 2.
+    std::vector<std::pair<addr, addr>> covers;
+    auto qh = warren->hopper_from_gcl(rewritten[s.tier], error);
+    if (qh != nullptr) {
+      addr p, q;
+      for (qh->tau(s.cp, &p, &q); p < maxfinity && q <= s.cq;
+           qh->tau(p + 1, &p, &q))
+        if (p >= s.cp)
+          covers.emplace_back(p, q);
+    }
+    size_t k = std::max<size_t>(1, spec.max_covers);
+    if (covers.size() > k) {
+      auto tighter = [](const std::pair<addr, addr> &a,
+                        const std::pair<addr, addr> &b) {
+        addr sa = a.second - a.first, sb = b.second - b.first;
+        return sa != sb ? sa < sb : a.first < b.first;
+      };
+      std::nth_element(covers.begin(), covers.begin() + k, covers.end(), tighter);
+      covers.resize(k);
+      std::sort(covers.begin(), covers.end());
+    }
+    h.summary = cover_summary(warren, covers, s.cp, s.cq, (addr)spec.window,
+                              (addr)spec.max_words);
+    out->results.push_back(std::move(h));
+  }
+  return true;
+}
+
 bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
                bool *found, std::string *error) {
   *found = false;

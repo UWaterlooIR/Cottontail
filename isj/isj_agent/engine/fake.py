@@ -43,6 +43,26 @@ class FakeEngine:
         self.calls.append(
             {"query": query, "top_k": top_k, "exclude": list(exclude), "window": window}
         )
+        return self._next(set(exclude))
+
+    def tiered_search(
+        self,
+        tiers: Sequence[str],
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        # The real cascade (per-tier ranking, cross-tier de-dup, per-tier summaries)
+        # runs in the C++ handler; this fake just returns the next scripted (already
+        # merged) response, mirroring the server's cp exclude post-filter. The call is
+        # recorded with a `tiers` key so tests can tell tiered_search from search.
+        self.calls.append(
+            {"tiers": list(tiers), "top_k": top_k, "exclude": list(exclude), "window": window}
+        )
+        return self._next(set(exclude))
+
+    def _next(self, exclude: set[int]) -> SearchResponse:
         if self._i >= len(self._script):
             # Script exhausted: a dry response so the agent loop terminates.
             return SearchResponse(
@@ -52,7 +72,7 @@ class FakeEngine:
         self._i += 1
         if isinstance(entry, EngineError):
             raise entry
-        return _apply_exclude(entry, set(exclude))
+        return _apply_exclude(entry, exclude)
 
     def read(self, cp: int) -> str | None:
         return self._docs.get(cp)
