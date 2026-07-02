@@ -15,3 +15,4 @@
 - [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
 - [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace
+- [Leave dev server running](leave-dev-server-running.md) — don't ask about killing the 100M cottontail-jsonl-server; leave it up unless something server-side changes
