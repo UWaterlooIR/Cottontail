@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-01 03:52'
-updated_date: '2026-07-02 19:03'
+updated_date: '2026-07-02 19:17'
 labels:
   - bug
 dependencies: []
@@ -48,7 +48,7 @@ Key files: apps/jsonl_core.cc (the atom_counts loop shared by cover_search + tie
 - [ ] #5 PART 1. Regression test in test/jsonl.cc: a porter burrow with a capitalized proper noun AND a hyphenated/punctuated term; assert a quoted-phrase query matches, and its atom_counts are the tokenizer atoms with correct nonzero counts (single-word case-folded == that token's occurrence count; punctuated/multi-word -> multiple atom entries)
 - [ ] #6 PART 1. jsonl_explain's df computation (same raw featurize pattern) is fixed the same way or explicitly documented out of scope with a reason
 - [ ] #7 PART 1. bazel test //test:jsonl_test and the isj pytest suite pass
-- [ ] #8 PART 2 (prompts). Update the search-agent prompts (isj_agent/agents/searcher.md, tiered_searcher.md, and the MultiText/librarian prompt) to instruct: (a) write all query terms in lowercase; (b) for a word form containing punctuation the tokenizer splits on (e.g. u.s.a., hi-tech), QUOTE it AND OR a punctuation-collapsed variant -- e.g. (+ "u.s.a." usa), (+ "hi-tech" hitech) -- because a bare punctuated term is one nonexistent token that matches nothing and zeros any (^ ...) it is in
+- [ ] #8 PART 2 (prompts). Inform the searcher agents to only use lowercase, and when they want to consider word forms that contain punctuation (e.g. u.s.a. or hi-tech), that they should quote those words and also search for a collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech)
 <!-- AC:END -->
 
 ## Implementation Notes
@@ -125,19 +125,8 @@ cover_search and tiered_query_search): whitespace-split a phrase into words, the
 Each atom is one feature -> the same cheap idx->count. Bare terms and word* stay as they are.
 NON-GOAL: never walk the phrase hopper to report a whole-phrase count; atom_counts stays free.
 
-## PART 2 -- what to teach the Search agents (prompt content, with examples)
-Add to searcher.md, tiered_searcher.md, and the MultiText/librarian prompt:
-1. LOWERCASE every term. Bare terms are case-SENSITIVE: `Yellowstone` -> 0, `yellowstone` -> matches.
-   (Only `word*` and quoted phrases fold case.)
-2. Use `word*` for morphological families: `yellowstone*` = the porter stem family
-   (yellowstone, yellowstones, ...), case-insensitive. Prefer it when you want inflections.
-3. Punctuated word forms do NOT work bare -- the tokenizer split them at index time, so the bare
-   token does not exist and it ZEROS any `(^ ...)` it sits in. QUOTE the form AND OR a
-   punctuation-collapsed variant:
-     - `(+ "u.s.a." usa)`
-     - `(+ "hi-tech" hitech)`
-   The quoted form becomes an adjacency of the pieces; the collapsed form catches the no-punctuation
-   spelling. (This is also why a bare `hi-tech` or `u.s.a.` must never appear in a query.)
-4. Quoted phrases are proximity/adjacency, not literal strings: `"food storage"` = food followed by
-   storage. Use them for multi-word concepts.
+## PART 2 -- what to teach the Search agents (searcher.md, tiered_searcher.md, MultiText/librarian)
+Inform the searcher agents to only use lowercase, and when they want to consider word forms that
+contain punctuation, e.g. u.s.a. or hi-tech, that they should quote those words and also search for a
+collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech).
 <!-- SECTION:NOTES:END -->
