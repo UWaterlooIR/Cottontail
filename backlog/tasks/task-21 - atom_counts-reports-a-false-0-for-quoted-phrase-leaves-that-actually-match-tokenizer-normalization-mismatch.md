@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-01 03:52'
-updated_date: '2026-07-02 20:32'
+updated_date: '2026-07-02 20:45'
 labels:
   - bug
 dependencies: []
@@ -17,26 +17,27 @@ ordinal: 35000
 ## Description
 
 <!-- SECTION:DESCRIPTION:BEGIN -->
-atom_counts reports a FALSE count of 0 for a quoted-phrase leaf that actually matches, because the count path featurizes the leaf AS WRITTEN while the query MATCH path tokenizer-normalizes it (lowercasing). A false 0 tells the Searcher/TieredSearcher a productive term is dead.
+atom_counts reports a FALSE count of 0 for a quoted-phrase leaf that actually matches, because the count path featurizes the leaf AS WRITTEN while the query MATCH path tokenizer-normalizes it (case-fold + punctuation split). A false 0 tells the Searcher/TieredSearcher a productive term is dead.
 
-## Observed (TASK-19 live testing)
-A 5-tier Yellowstone cascade over climbmix-100k-porter returned documents matching the quoted phrase "Yellowstone" (rank 1 came from a tier whose tightest facet was "Yellowstone"), yet the response atom_counts listed `Yellowstone` with count 0. The "count 0 => dead atom, fix it first" signal (taught to the model in TASK-17 / TASK-20) was WRONG: the term matches thousands of documents.
+## Observed (first seen in TASK-19 live testing; re-verified on climbmix-100M-porter)
+A 5-tier Yellowstone cascade returned documents matching the quoted phrase "Yellowstone" (rank 1 came from a tier whose tightest facet was "Yellowstone"), yet the response atom_counts listed `Yellowstone` with count 0. The "count 0 => dead atom, fix it first" signal (taught to the model in TASK-17 / TASK-20) was WRONG: the term matches thousands of documents. The Implementation Notes carry the live-verified numbers.
 
 ## Cause
-atom_counts is built by featurizing each leaf AS WRITTEN: cover_leaves(query) -> featurizer->featurize(leaf), with only the word* case routed through the stemmer (apps/jsonl_core.cc, the cover_search atom loop near line 834-846, and the identical tiered loop added by TASK-19). But the indexing/query MATCH path NORMALIZES tokens: the tokenizer lowercases (src/ascii_tokenizer.cc:95), and a QUOTED phrase is matched by tokenizing its content (cover_rewrite keeps a star-free phrase quoted; expand_phrases then tokenizes it). So a capitalized phrase word ("Yellowstone") is stored and matched as its lowercased feature ("yellowstone"), while the atom count featurizes the raw "Yellowstone" and finds 0. The counted feature is not the feature the query resolves the leaf to.
+atom_counts is built by featurizing each leaf AS WRITTEN: cover_leaves(query) -> featurizer->featurize(leaf), with only the word* case routed through the stemmer (apps/jsonl_core.cc, the cover_search atom loop and the identical tiered loop added by TASK-19). But the indexing/query MATCH path NORMALIZES tokens: the default utf8 tokenizer CASE-FOLDS and SPLITS on punctuation, and a QUOTED phrase is matched by tokenizing its content (cover_rewrite keeps a star-free phrase quoted; expand_phrases then tokenizes it). So a capitalized phrase word ("Yellowstone") is stored and matched as its folded feature ("yellowstone"), and a hyphenated/punctuated word ("hi-tech") as its split tokens (hi, tech), while the atom count featurizes the raw leaf and finds 0. The counted feature is not the feature the query resolves the leaf to.
 
 ## Precise scope (an important nuance)
-The false 0 is specific to QUOTED-PHRASE leaves, which DO lowercase-match. A BARE (unquoted) GCL term is different: the match path featurizes it raw too, so a bare capitalized term genuinely does NOT match a lowercased index -- there both the match and the count are 0, which is CONSISTENT and CORRECT (a real dead atom). So the fix must:
-- make a phrase leaf's count reflect the tokenizer-normalized feature the phrase match path actually uses (so a matching phrase never reports 0 due to case), and
+The false 0 is specific to QUOTED-PHRASE leaves, which DO fold/split-match. A BARE (unquoted) GCL term is different: the match path featurizes it raw too, so a bare capitalized or punctuated term genuinely does NOT match the index -- there both the match and the count are 0, which is CONSISTENT and CORRECT (a real dead atom). So the fix must:
+- make a phrase leaf's count reflect the tokenizer-normalized feature the phrase match path actually uses (so a matching phrase never reports 0 due to case or punctuation), and
 - leave bare-term counts alone, so a genuinely dead bare atom still correctly reports 0 (do not mask real dead atoms).
 
-## Shared code -> both tools benefit
-The atom loop is shared logic in apps/jsonl_core.cc: fixing it corrects BOTH cover_search and the TASK-19 tiered_query_search (which reuses the same helper). word* family resolution already goes through the stemmer and is correct -- leave it. Also review jsonl_explain's df computation (apps/jsonl_core.cc near line 1162), which uses the same raw featurize(atom) pattern, and fix it the same way or document it as out of scope.
+## Both atom-count tools benefit; jsonl_explain is removed instead of fixed
+The atom loop is shared logic in apps/jsonl_core.cc: fixing it (Part 2) corrects BOTH cover_search and the TASK-19 tiered_query_search (which reuses the same helper). word* family resolution already goes through the stemmer and is correct -- leave it. jsonl_explain had the SAME raw-featurize pattern, but rather than fix it, Part 1 REMOVES jsonl_explain (with its --explain CLI mode, /tools/explain endpoint, and gcl_terms): it is superseded by atom_counts and unused by the ISJ agents.
 
 ## Not a TASK-19 regression
-This predates TASK-19 in cover_search; TASK-19 inherited it by reusing the helper. It is filed separately because the fix is a general atom_counts correctness change, not tiered-specific.
+The atom_counts bug predates TASK-19 in cover_search; TASK-19 inherited it by reusing the helper. It is filed separately because the fix is a general atom_counts correctness change, not tiered-specific.
 
-Key files: apps/jsonl_core.cc (the atom_counts loop shared by cover_search + tiered_query_search, and the explain df loop), a regression test in test/jsonl.cc.
+## Scope (three ordered steps -- see the Implementation Plan)
+1. Remove jsonl_explain. 2. Fix the atom_counts decomposition in cover_leaves + the shared atom loop. 3. Update the searcher prompts. Key files: apps/jsonl_core.cc (cover_leaves + the shared atom loop) and a regression test in test/jsonl.cc; the removal also spans apps/jsonl_json.*, apps/cottontail-jsonl-query.cc, apps/cottontail-jsonl-server.cc, test/jsonl*.cc and the live spec docs; the prompts live in isj_agent/agents/.
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -194,12 +195,13 @@ mechanisms). The last row is the bug: phrase matches 89,215 docs but atom_count 
 | `(+ dog* sled*)` | porter:dog + porter:sled | 4,106,344 | dog*=37,483,853, sled*=221,829 |
 | `"dog sled"` | `(>> (# 2) (... dog sled))` | 4,227 | dog=22,999,296, sled=152,187 |
 | `"dog sled*"` | `(>> (# 2) (... dog porter:sled))` | 8,498 | dog=22,999,296, sled*=221,829 |
-| `"hi-tech gear*"` | `(>> (# 2) (... hi-tech porter:gear))` | **0** (MATCH bug) | hi-tech=0, gear*=4,228,494 |
+| `"hi-tech gear*"` | `(>> (# 2) (... hi-tech porter:gear))` | **0** (match bug, FIXED in TASK-23) | hi-tech=0, gear*=4,228,494 |
 
-`"dog sled*"` is correct today: whitespace-splitting PRESERVES the trailing `*` and the atom loop
-resolves it. That is exactly why Part 1 must NOT run a naive `tokenizer->split` on the whole phrase
-(it would eat the `*`, turning `sled*` into exact `sled`). The last row (`"hi-tech gear*"` -> 0) is
-a MATCH-path correctness bug, filed separately as TASK-23.
+`"dog sled*"` is correct: whitespace-splitting PRESERVES the trailing `*` and the atom loop resolves
+it -- exactly why Part 2 must NOT run a naive `tokenizer->split` on the whole phrase (it would eat the
+`*`, turning `sled*` into exact `sled`). (`"hi-tech gear*"` also hit a MATCH-path bug -- a hyphenated
+non-star word passed raw -- which was FIXED in TASK-23; the row is kept only to show the same
+`*`-preservation lesson, which the count path here must also respect.)
 
 ## Cost
 - Atom (single feature) count = free directory lookup. word* and bare-exact each resolve to ONE
