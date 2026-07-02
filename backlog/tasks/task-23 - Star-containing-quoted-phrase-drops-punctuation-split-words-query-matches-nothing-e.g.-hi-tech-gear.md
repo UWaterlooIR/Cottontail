@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-02 18:28'
+updated_date: '2026-07-02 19:20'
 labels:
   - bug
 dependencies: []
@@ -64,3 +65,29 @@ Key files: apps/jsonl_core.cc (cover_rewrite / emit_phrase / emit_cover_term), s
 - [ ] #3 A regression test in test/jsonl.cc builds a porter burrow and asserts a star-containing phrase with a hyphenated/punctuated non-star word matches the expected documents (guards the total_matches=0 regression)
 - [ ] #4 bazel test //test:jsonl_test and the isj pytest suite pass
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+## Illustrative comparison (live, climbmix-100M-porter)
+
+The bug is specifically about a NON-star word that contains tokenizer-split punctuation. Hold the
+concepts fixed (hi, tech, gear) and vary only the spelling of the word forms:
+
+| query | compiles to | total_matches |
+|---|---|---|
+| `"hi tech gear"`  | `(>> (# 3) (... hi tech gear))`        | 74 |
+| `"hi tech gear*"` | `(>> (# 3) (... hi tech porter:gear))` | 77 (gear* family adds gears/gearing) |
+| `"hi-tech gear*"` | `(>> (# 2) (... hi-tech porter:gear))` | **0** <- BUG |
+
+Same three concepts, same trailing `*`, but the hyphenated form returns 0 while the space-separated
+form returns 77. The ONLY difference: `emit_phrase` whitespace-splits the star-containing phrase and
+passes `hi-tech` RAW, so `featurize("hi-tech") = 0` kills the adjacency; the space-separated `hi` and
+`tech` are real tokens and match fine. So the star-in-phrase path is not broken for clean words -- it
+breaks precisely when a non-star word needs tokenizer folding/splitting.
+
+The fix is therefore exactly to tokenizer-split (fold + punctuation) the non-star words of a
+star-containing phrase, the same way the star-FREE path already does via expand_phrases:
+`"hi-tech gear*"` should compile to `(>> (# 3) (... hi tech porter:gear))` and then match like
+`"hi tech gear*"` (77).
+<!-- SECTION:NOTES:END -->
