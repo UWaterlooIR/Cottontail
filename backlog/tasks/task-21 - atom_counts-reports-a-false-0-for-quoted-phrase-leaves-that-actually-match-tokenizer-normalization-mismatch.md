@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-01 03:52'
-updated_date: '2026-07-02 19:17'
+updated_date: '2026-07-02 20:14'
 labels:
   - bug
 dependencies: []
@@ -50,6 +50,95 @@ Key files: apps/jsonl_core.cc (the atom_counts loop shared by cover_search + tie
 - [ ] #7 PART 1. bazel test //test:jsonl_test and the isj pytest suite pass
 - [ ] #8 PART 2 (prompts). Inform the searcher agents to only use lowercase, and when they want to consider word forms that contain punctuation (e.g. u.s.a. or hi-tech), that they should quote those words and also search for a collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech)
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+## Root cause (confirmed in code)
+- atom_counts (apps/jsonl_core.cc:857 cover_search loop, ~964 tiered loop) iterates cover_leaves(query),
+  which whitespace-splits a quoted phrase and featurizes each WORD raw (:866-868). A phrase word the
+  tokenizer would FOLD (Yellowstone) or SPLIT on punctuation (hi-tech, u.s.a.) is a non-existent
+  feature -> reported count 0, even though the phrase matches. Bare terms and word* are already correct.
+- jsonl_explain (GCL mode, :1161) uses gcl_terms(query), which is quote-UNAWARE (keeps the `"` chars in a
+  phrase term) and also featurizes raw (:1185/1188). Same class of bug, worse. NOTE: explain uses a
+  DIFFERENT query model than cover_search -- a global `--stem` flag (stem-all/none), not word* markers.
+
+## Confirmed decisions
+- Q1: report the RESOLVED atom as the displayed `term`: the FOLDED token for a plain phrase word
+  (yellowstone, hi, tech); the `word*` marker for a family (NEVER porter:word); the exact string for a
+  bare term. The COUNT is always the real feature's count (porter:<stem> for a family). The porter:
+  string only ever appears inside featurize(), never in a `term`. (Already an invariant: the AtomCounts
+  test asserts atom_count(resp,"porter:bear") == -1.)
+- Bare terms unchanged (raw featurize) so a genuinely dead bare atom still reports 0 (no masking).
+- NON-GOAL: never walk the phrase hopper to report a whole-phrase count; atom_counts stays cheap
+  per-feature idx->count lookups.
+- Q2: fix jsonl_explain too, via a shared phrase-aware leaf extractor.
+
+## Implementation
+
+### Step 1 -- one shared, phrase-aware leaf extractor (replaces cover_leaves AND gcl_terms)
+Give cover_leaves the tokenizer and make it decompose quoted phrases the way the match path does; delete
+gcl_terms (its only caller is explain).
+```
+// Countable leaves of a GCL expression: drop operators / parens / :tags. A BARE word (including a
+// word* marker) is kept AS-WRITTEN; a QUOTED phrase is decomposed like the match path -- whitespace-
+// split so a trailing '*' survives, then PER WORD: a word* marker is kept as-is, else tokenizer->split
+// (case-fold + punctuation) into its true index token(s). Deduped, first-seen order.
+std::vector<std::string> cover_leaves(const std::string &gcl,
+                                      std::shared_ptr<Tokenizer> tokenizer);
+```
+Notes:
+- The `*` must survive (whitespace-split BEFORE tokenizing a word), same lesson as TASK-23; a valid
+  trailing word* stays a leaf ("sled*") for the caller to resolve, it is NOT run through tokenizer->split.
+- Keeps the existing is_gcl_nonterm operator/`:tag` drop and the dedup `seen` set.
+- This is the ONLY new logic. It distinguishes bare-vs-phrase by WHERE a word sits (inside quotes ->
+  tokenize; outside -> raw), so downstream loops need no bare/phrase branching.
+
+### Step 2 -- atom_counts loops: signature only, logic UNCHANGED
+Pass warren->tokenizer() to cover_leaves at both call sites (cover_search ~857, tiered ~964). The
+per-leaf loop is UNCHANGED: trailing '*' -> resolve_family_atom (term = leaf e.g. "bear*", count =
+porter:bear); else -> featurize(leaf) (term = leaf, count = leaf). Because phrase words now arrive as
+folded tokens, this AUTOMATICALLY yields: "Yellowstone" -> {yellowstone: N}; "hi-tech" -> {hi},{tech};
+"u.s.a." -> {u},{s},{a}; "dog sled*" -> {dog},{sled*}; while bare/word*/porter:-invariant all hold.
+
+### Step 3 -- jsonl_explain: GCL-mode extraction via the shared helper
+- Replace `terms = gcl_terms(spec.query)` (:1161) with `terms = cover_leaves(spec.query, warren->tokenizer())`.
+- Text mode (:1164, tokenizer->split) is already tokenized -> unchanged.
+- Per-leaf --stem/exact resolution (:1176-1189) unchanged. So a phrase term now tokenizes correctly
+  (--explain '(^ "hi-tech" ...)' reports df for hi and tech, not the quoted string). explain's word*
+  handling stays outside its model (a "bear*" leaf is featurized literally, exactly as today -- not made
+  worse); add a one-line comment saying word* resolution is a cover_search concept, not explain's.
+- Delete gcl_terms.
+
+### Step 4 -- tests (AC#5)
+- test/jsonl.cc AtomCounts (extend): on the porter cover burrow assert the fold/split fixes --
+  "Yellowstone" -> single leaf "yellowstone" with count == that token's count (was 0); "hi-tech" ->
+  leaves hi & tech both > 0; "u.s.a." -> u,s,a; "dog sled*" -> dog & sled*; bare "Yellowstone" still 0
+  (dead-atom preserved); no "porter:" term ever appears.
+- Explain test: add a phrase case asserting df keyed by hi/tech (not '"hi-tech"'); update any existing
+  explain assertion whose term set changes due to tokenization/dedup (df_of/leaf_of by term).
+- AC#7: bazel test //test:jsonl_test and //test:tests green; isj pytest green.
+
+### Step 5 -- Part 2 prompts (AC#8)
+Update isj_agent/agents/searcher.md, tiered_searcher.md, and the MultiText/librarian prompt with the
+confirmed guidance: only use lowercase; for word forms containing punctuation (e.g. u.s.a., hi-tech)
+quote those words AND also search for a collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech).
+
+## Verification
+- Unit tests above.
+- Live on the 1M server (:8081, already fixed binary + will include this): "Yellowstone" phrase
+  atom_count 0 -> nonzero; "hi-tech"/"u.s.a." phrase leaves nonzero; bare "Yellowstone" stays 0;
+  --explain of a hyphenated phrase reports per-token df.
+
+## Risks / edge cases
+- Preserve the trailing '*' in a phrase (whitespace-split first) -- do NOT naive-tokenize the whole
+  phrase (TASK-23 lesson).
+- dedup key = the (folded) leaf string; explain gains dedup (minor, benign).
+- explain's word* stays literal (explain is a --stem tool, not word*) -- documented, unchanged.
+- No change to bare-term counts, word* counts, the porter:-never-shown invariant, or total_matches.
+- Scope: cover_leaves + gcl_terms are file-local; changing their signature/removing them touches only
+  this file (+ the explain/atom loops). gcl_terms has no other caller.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
