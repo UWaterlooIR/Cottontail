@@ -254,15 +254,54 @@ bool emit_cover_term(const std::string &t, std::shared_ptr<Stemmer> stemmer,
   return false;
 }
 
+// Decompose a quoted phrase into its ordered GCL atoms, mirroring the MATCH path:
+// split on WHITESPACE (so a trailing '*' survives), then PER WORD -- a valid word*
+// becomes its stem-family atom (via emit_cover_term); any other word is normalized
+// with the burrow tokenizer (case-fold + punctuation split, exactly like the
+// star-free expand_phrases pass), so e.g. "hi-tech" -> hi, tech and "Dog" -> dog.
+// Returns false on a malformed '*'.
+bool phrase_atoms(const std::string &phrase, std::shared_ptr<Stemmer> stemmer,
+                  std::shared_ptr<Tokenizer> tokenizer,
+                  std::vector<std::string> *atoms, std::string *error) {
+  std::string w;
+  auto take = [&]() -> bool {
+    if (w.empty())
+      return true;
+    if (w.find('*') != std::string::npos) {
+      std::string a; // a valid word* -> its family atom (emit_cover_term validates)
+      if (!emit_cover_term(w, stemmer, &a, error))
+        return false;
+      if (!a.empty())
+        atoms->push_back(a);
+    } else {
+      for (const auto &t : tokenizer->split(w)) // fold + punctuation split
+        atoms->push_back(t);
+    }
+    w.clear();
+    return true;
+  };
+  for (char c : phrase) {
+    if (c == ' ' || c == '\t' || c == '\n') {
+      if (!take())
+        return false;
+    } else {
+      w.push_back(c);
+    }
+  }
+  return take();
+}
+
 // Rewrite a cover query, translating word* markers to stemmed-stream atoms. Bare
 // terms stay exact; operators/:tags are untouched. A quoted phrase that uses
 // word* is desugared HERE (before the normal expand_phrases pass) into the
-// explicit (>> (# n) (... ...)) form with each word translated -- splitting the
-// phrase on WHITESPACE so a trailing '*' survives (the tokenizer would drop it).
-// A star-free phrase is left quoted for the standard pass. Returns false on a
+// explicit (>> (# n) (... ...)) form: split on WHITESPACE so a trailing '*'
+// survives, then normalize each NON-star word with the tokenizer (fold + split)
+// so it addresses the index exactly as the star-free expand_phrases pass would.
+// A star-free phrase is left quoted for that standard pass. Returns false on a
 // malformed '*' or an unterminated phrase.
 bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
-                   std::string *out, std::string *error) {
+                   std::shared_ptr<Tokenizer> tokenizer, std::string *out,
+                   std::string *error) {
   out->clear();
   std::string tok, phrase;
   bool in_phrase = false;
@@ -272,39 +311,23 @@ bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
     return ok;
   };
   auto emit_phrase = [&]() -> bool {
-    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted
-      *out += '"';
+    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted for the
+      *out += '"';                               // standard expand_phrases pass
       *out += phrase;
       *out += '"';
       return true;
     }
-    std::vector<std::string> words;
-    std::string w;
-    for (char c : phrase) {
-      if (c == ' ' || c == '\t' || c == '\n') {
-        if (!w.empty()) {
-          words.push_back(w);
-          w.clear();
-        }
-      } else {
-        w.push_back(c);
-      }
-    }
-    if (!w.empty())
-      words.push_back(w);
     std::vector<std::string> atoms;
-    for (const auto &word : words) {
-      std::string a;
-      if (!emit_cover_term(word, stemmer, &a, error))
-        return false;
-      atoms.push_back(a);
-    }
+    if (!phrase_atoms(phrase, stemmer, tokenizer, &atoms, error))
+      return false;
     if (atoms.empty())
       return true;
     if (atoms.size() == 1) {
       *out += atoms[0];
       return true;
     }
+    // width = TOTAL atoms after tokenizing (e.g. "hi-tech gear*" -> 3 atoms), so a
+    // hyphenated non-star word no longer collapses the adjacency to a dead atom.
     *out += "(>> (# " + std::to_string(atoms.size()) + ") (...";
     for (const auto &a : atoms)
       *out += " " + a;
@@ -821,7 +844,7 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
     }
   }
   std::string rewritten;
-  if (!cover_rewrite(spec.query, stemmer, &rewritten, error))
+  if (!cover_rewrite(spec.query, stemmer, warren->tokenizer(), &rewritten, error))
     return false;
   if (rewritten.empty())
     return true; // nothing to search -> no hits, zero counts, no atoms
@@ -940,7 +963,7 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
   std::vector<std::string> rewritten(spec.tiers.size());
   for (size_t i = 0; i < spec.tiers.size(); i++) {
     std::string rw, inner;
-    if (!cover_rewrite(spec.tiers[i], stemmer, &rw, &inner)) {
+    if (!cover_rewrite(spec.tiers[i], stemmer, warren->tokenizer(), &rw, &inner)) {
       safe_error(error) =
           "tier " + std::to_string(i) + " (" + spec.tiers[i] + "): " + inner;
       return false;

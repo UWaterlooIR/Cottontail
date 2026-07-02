@@ -825,6 +825,41 @@ TEST(JsonlCover, AtomCounts) {
   w->end();
 }
 
+// TASK-23: a star-containing quoted phrase whose NON-star word is hyphenated (the
+// utf8 tokenizer splits the hyphen) must still match. Before the fix it compiled to
+// the dead adjacency (>> (# 2) (... hi-tech porter:gear)) and returned 0, because
+// the non-star word "hi-tech" was passed raw instead of tokenizer-split.
+TEST(JsonlCover, StarPhraseTokenizesNonStarWords) {
+  const std::vector<std::string> rows = {
+      R"({"docid":"h-1","contents":"the hi-tech gear was on sale"})",
+      R"({"docid":"h-2","contents":"low tech sandals only"})",
+  };
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("star_phrase", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // hyphenated non-star word + a word* family: must match h-1 (regression: was 0).
+  CoverResponse resp;
+  CoverSpec spec;
+  spec.query = "\"hi-tech gear*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(resp.total_matches, 0);
+
+  // Parity: the space-separated spelling compiles identically and matches the same.
+  CoverResponse resp2;
+  spec.query = "\"hi tech gear*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp2, &error)) << error;
+  EXPECT_EQ(resp.total_matches, resp2.total_matches);
+
+  // Parity with the star-FREE hyphenated phrase (which already tokenized correctly).
+  CoverResponse resp3;
+  spec.query = "\"hi-tech gear\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp3, &error)) << error;
+  EXPECT_GT(resp3.total_matches, 0);
+  w->end();
+}
+
 // AC#13 / AC#14: a larger window yields a longer summary; rank and score are
 // unchanged (window affects only the summary text, not ranking).
 TEST(JsonlCover, WindowOverrideLongerSummary) {
