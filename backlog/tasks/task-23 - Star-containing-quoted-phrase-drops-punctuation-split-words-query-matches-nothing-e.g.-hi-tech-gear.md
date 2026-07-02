@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-02 18:28'
-updated_date: '2026-07-02 19:20'
+updated_date: '2026-07-02 19:29'
 labels:
   - bug
 dependencies: []
@@ -65,6 +65,114 @@ Key files: apps/jsonl_core.cc (cover_rewrite / emit_phrase / emit_cover_term), s
 - [ ] #3 A regression test in test/jsonl.cc builds a porter burrow and asserts a star-containing phrase with a hyphenated/punctuated non-star word matches the expected documents (guards the total_matches=0 regression)
 - [ ] #4 bazel test //test:jsonl_test and the isj pytest suite pass
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+## Root cause (confirmed in code)
+cover_rewrite's emit_phrase (apps/jsonl_core.cc:274-313) handles a STAR-CONTAINING quoted phrase by
+whitespace-splitting it and calling emit_cover_term per word. emit_cover_term passes a NON-star word
+through RAW (apps/jsonl_core.cc: `*out += t`). So a non-star word that the tokenizer would fold/split
+(e.g. "hi-tech", "Dog") becomes a single non-existent atom, and the compiled adjacency
+`(>> (# 2) (... hi-tech porter:gear))` can never match -> total_matches = 0. Star-FREE phrases avoid
+this because emit_phrase keeps them quoted and parse.cc expand_phrases tokenizes them
+(tokenizer->split, fold+split). The two phrase decomposers are inconsistent; only the star-containing
+one is wrong.
+
+Scope: cover_search + tiered_query_search only (both call cover_rewrite: lines ~824 and ~943).
+cover_rewrite is file-local (not in jsonl_core.h, no test/other callers), so the signature change is
+contained to this file. The direct search_gcl path (hopper_from_gcl only, no cover_rewrite) does not
+do word* stemming at all and is out of scope.
+
+## The fix
+Make emit_phrase tokenize its NON-star words exactly as the star-free path does, and size the window
+by the TOTAL number of resulting atoms.
+
+### Step 1 -- thread the tokenizer into cover_rewrite
+emit_phrase needs the warren tokenizer (cover_rewrite currently gets only the stemmer). Add a
+`std::shared_ptr<Tokenizer> tokenizer` parameter:
+- `bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
+                       std::shared_ptr<Tokenizer> tokenizer, std::string *out, std::string *error)`
+- Update the two callers to pass `warren->tokenizer()`:
+  - jsonl_cover_search (~824): `cover_rewrite(spec.query, stemmer, warren->tokenizer(), &rewritten, error)`
+  - jsonl_tiered_query_search (~943): `cover_rewrite(spec.tiers[i], stemmer, warren->tokenizer(), &rw, &inner)`
+Tokenizer is already included/used in this file (warren->tokenizer()->split at line ~185), so no new include.
+
+### Step 2 -- extract a shared decomposition helper (AC#2)
+Add a file-local helper that both emit_phrase and (optionally) the star-free path can share:
+```
+// Decompose a quoted phrase into its ordered GCL atoms: whitespace-split, then per word:
+//   trailing word* -> stem family atom (resolve_family_atom); else -> tokenizer->split(word) tokens.
+bool phrase_atoms(const std::string &phrase, std::shared_ptr<Stemmer> stemmer,
+                  std::shared_ptr<Tokenizer> tokenizer,
+                  std::vector<std::string> *atoms, std::string *error);
+```
+Per word: if it has a valid trailing `*` (reuse emit_cover_term / resolve_family_atom) push the ONE
+stem atom; else push each token from `tokenizer->split(word)` (0+ atoms; folds case, splits
+punctuation). This is what makes "hi-tech" -> hi, tech and "Dog" -> dog.
+
+### Step 3 -- rebuild emit_phrase on the helper
+Replace the per-word loop (lines 295-311) with:
+```
+std::vector<std::string> atoms;
+if (!phrase_atoms(phrase, stemmer, tokenizer, &atoms, error)) return false;
+if (atoms.empty()) return true;                       // all-punctuation phrase -> nothing
+if (atoms.size() == 1) { *out += atoms[0]; return true; }
+*out += "(>> (# " + std::to_string(atoms.size()) + ") (...";   // width = TOTAL atoms
+for (const auto &a : atoms) *out += " " + a;
+*out += "))";
+return true;
+```
+Key: `(# N)` uses the total atom count AFTER tokenization (e.g. "hi-tech gear*" -> 3 atoms ->
+`(>> (# 3) (... hi tech porter:gear))`), matching the star-free path's width convention
+(expand_phrases uses tokenizer->split(phrase).size()). Verified target: identical to "hi tech gear*".
+
+### Consistency note (AC#2 wording)
+A LITERAL helper shared with parse.cc's expand_phrases is impractical: expand_phrases lives in the
+core library and has no stemmer / no porter: namespace knowledge (all `*` resolution happens in the
+app-layer cover_rewrite before parse). We instead achieve behavioral consistency by having emit_phrase
+tokenize with the SAME warren tokenizer expand_phrases uses -- tokenizer->split of the whitespace words
+is token-identical to tokenizer->split of the whole phrase (whitespace is a token separator). Suggest
+rewording AC#2 to "consistent tokenization (shared helper within jsonl_core.cc)". OPTIONAL upgrade:
+route the star-FREE branch through phrase_atoms too (drop the keep-quoted case) so cover queries have a
+single decomposer; low value, slightly higher risk (changes a currently-working path) -- defer.
+
+## Regression test (AC#3) -- test/jsonl.cc
+Use the existing build_rows helper (defaults to the utf8 tokenizer, which splits hyphens; pass
+stemmer "porter"):
+```
+const std::vector<std::string> rows = {
+  R"({"docid":"h-1","contents":"the hi-tech gear was on sale"})",   // "hi-tech" -> hi, tech ; gear
+  R"({"docid":"h-2","contents":"low tech sandals"})",               // negative control
+};
+ASSERT_TRUE(build_rows("star_phrase", rows, "porter", &burrow, &error)) << error;
+// open warren, run cover_search
+CoverSpec spec; spec.query = "\"hi-tech gear*\""; spec.top_k = 10;
+CoverResponse resp;
+ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+EXPECT_GT(resp.total_matches, 0);            // was 0 before the fix (the regression guard)
+// parity: the space-separated form matches the same doc
+spec.query = "\"hi tech gear*\""; CoverResponse resp2;
+ASSERT_TRUE(jsonl_cover_search(w, spec, &resp2, &error)) << error;
+EXPECT_EQ(resp.total_matches, resp2.total_matches);
+```
+Model the warren-open + assertions on the existing cover_search / atom_count tests (test/jsonl.cc
+~790-808). Optionally add a case-fold case ("Dog sled*" style) if a suitable fixture is cheap.
+
+## Verification
+- `bazel test //test:jsonl_test` (new test + existing green) and the isj pytest suite.
+- Live sanity on the running 100M server: `"hi-tech gear*"` should go 0 -> ~77 (parity with
+  "hi tech gear*"=77); spot-check "Dog sled*" folds; confirm star-free phrases and (+ dog* sled*)
+  are unchanged.
+- Confirm tiered_query_search benefits (same helper) with a tier containing a hyphenated star phrase.
+
+## Risks / edge cases
+- Width change: ensure `(# N)` uses post-tokenization atom count, not word count (the whole point).
+- Empty atoms (phrase of only punctuation) -> emit nothing (preserve current behavior).
+- Single-atom phrase (e.g. "gear*") -> emit the bare atom, no >> wrapper (preserve).
+- Does NOT touch bare terms, word* atoms, or star-free phrases -> those paths and their tests must
+  stay green (guard against accidental behavior change).
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
