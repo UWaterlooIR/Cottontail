@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-01 03:52'
-updated_date: '2026-07-02 20:26'
+updated_date: '2026-07-02 20:32'
 labels:
   - bug
 dependencies: []
@@ -38,6 +38,19 @@ This predates TASK-19 in cover_search; TASK-19 inherited it by reusing the helpe
 
 Key files: apps/jsonl_core.cc (the atom_counts loop shared by cover_search + tiered_query_search, and the explain df loop), a regression test in test/jsonl.cc.
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 PART 1 (remove). Remove jsonl_explain and its full surface: jsonl_explain(), gcl_terms() (used only by explain), ExplainResult/ExplainLeaf, explain_json(), the --explain CLI mode (cottontail-jsonl-query.cc), and the /tools/explain server endpoint + its describe/schema entry. No remaining code references explain and the build is green
+- [ ] #2 PART 1 (remove). Remove the explain tests (JsonlExplain + df_of/leaf_of in test/jsonl.cc; the "explain" schema assertion in test/jsonl_cli.cc) and drop explain from the LIVE reference-spec docs (cottontail-jsonl-cli-spec.md, cottontail-search-server-spec.md, stemming.md, running-the-search-stack.md); archived docs left as-is
+- [ ] #3 PART 2 (fix). cover_leaves gains the tokenizer and becomes the single phrase-aware leaf extractor: a quoted phrase is whitespace-split (trailing '*' survives) then PER WORD a word* marker is kept as-is else tokenizer->split (case-fold + punctuation) into true index token(s); bare words kept as-written; operators dropped; deduped. Used by BOTH cover_search and tiered atom loops
+- [ ] #4 PART 2 (fix). atom_counts reports the RESOLVED atom as the displayed term -- the folded token for a plain phrase word (yellowstone; hi, tech), the word* marker for a family (NEVER porter:word), the exact string for a bare term -- counted via cheap idx->count. A matching phrase leaf never reports a spurious 0 from case or punctuation
+- [ ] #5 PART 2 NON-GOAL. No whole-phrase (adjacency) count and no phrase-hopper walk; atom_counts stays cheap per-feature idx->count lookups
+- [ ] #6 PART 2 (fix). Bare (unquoted) terms unchanged (raw featurize -> a genuinely dead bare atom still reports 0); word* resolution unchanged; the porter:-never-shown invariant preserved (a family term stays "bear*")
+- [ ] #7 PART 2 (fix). Regression test in test/jsonl.cc (porter burrow): "Yellowstone" -> single leaf yellowstone with count > 0 (was 0); "hi-tech" -> hi & tech both > 0; "u.s.a." -> u,s,a; "dog sled*" -> dog & sled*; bare "Yellowstone" still 0; no "porter:" term ever appears
+- [ ] #8 PART 2 (fix). bazel test //test:jsonl_test and //test:tests, and the isj pytest suite, pass
+- [ ] #9 PART 3 (prompts). Update the search-agent prompts (searcher.md, tiered_searcher.md, MultiText/librarian) to instruct: only use lowercase; for word forms containing punctuation (e.g. u.s.a., hi-tech) quote those words AND also search for a collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech)
+<!-- AC:END -->
 
 ## Implementation Plan
 
@@ -196,39 +209,12 @@ a MATCH-path correctness bug, filed separately as TASK-23.
 
 ---
 
-## PART 1 -- REMOVE jsonl_explain (YAGNI; superseded by atom_counts)
-jsonl_explain (the `--explain` CLI mode + `/tools/explain` endpoint) was the "dry-run df / validate a
-query" tool, but atom_counts (TASK-17, returned inline by cover_search/tiered) subsumed it, and the ISJ
-agents never call it. Remove it FIRST so PART 2 has a clean base -- gcl_terms (used only by explain)
-goes with it, leaving cover_leaves as the single phrase-aware leaf extractor. Removes: jsonl_explain,
-explain_json, ExplainResult/ExplainLeaf, gcl_terms, the `--explain` CLI mode, the `/tools/explain`
-endpoint + its describe/schema entry, the JsonlExplain tests, and the explain references in the LIVE
-reference-spec docs (leave archived/ specs alone).
-
-## PART 2 -- fix the atom_counts decomposition (code; cheap; low risk)
-Give cover_leaves the tokenizer (now the ONLY phrase-aware leaf extractor): whitespace-split a phrase
-so a trailing `*` survives, then PER WORD -- a word* marker kept as-is; else `tokenizer->split()` (the
-SAME fold + punctuation split the match path uses) into its true token(s). The per-leaf atom loop is
-UNCHANGED and now reports the RESOLVED atom as the term: the folded token for a plain phrase word
-(yellowstone; hi, tech); the `word*` marker for a family (NEVER porter:word); the exact string for a
-bare term. Count = the real feature's cheap idx->count. Bare terms and word* stay as they are.
-NON-GOAL: never walk the phrase hopper for a whole-phrase count; atom_counts stays free.
-
-## PART 3 -- what to teach the Search agents (searcher.md, tiered_searcher.md, MultiText/librarian)
-Inform the searcher agents to only use lowercase, and when they want to consider word forms that
-contain punctuation, e.g. u.s.a. or hi-tech, that they should quote those words and also search for a
-collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech).
+## Decisions (the three steps -- remove, fix, prompts -- live in the Implementation Plan)
+- Remove jsonl_explain FIRST (YAGNI; superseded by atom_counts; also deletes gcl_terms, leaving
+  cover_leaves as the sole phrase-aware extractor).
+- atom_counts displays the RESOLVED atom: the folded token for a plain phrase word (yellowstone;
+  hi, tech), the `word*` marker for a family (NEVER porter:word), the exact string for a bare term.
+  The count is the real feature's cheap idx->count.
+- Bare terms and word* unchanged (a genuinely dead bare atom still reports 0). NON-GOAL: never walk
+  the phrase hopper for a whole-phrase count.
 <!-- SECTION:NOTES:END -->
-
-## Acceptance Criteria
-<!-- AC:BEGIN -->
-- [ ] #1 PART 1 (remove). Remove jsonl_explain and its full surface: jsonl_explain(), gcl_terms() (used only by explain), ExplainResult/ExplainLeaf, explain_json(), the --explain CLI mode (cottontail-jsonl-query.cc), and the /tools/explain server endpoint + its describe/schema entry. No remaining code references explain and the build is green
-- [ ] #2 PART 1 (remove). Remove the explain tests (JsonlExplain + df_of/leaf_of in test/jsonl.cc; the "explain" schema assertion in test/jsonl_cli.cc) and drop explain from the LIVE reference-spec docs (cottontail-jsonl-cli-spec.md, cottontail-search-server-spec.md, stemming.md, running-the-search-stack.md); archived docs left as-is
-- [ ] #3 PART 2 (fix). cover_leaves gains the tokenizer and becomes the single phrase-aware leaf extractor: a quoted phrase is whitespace-split (trailing '*' survives) then PER WORD a word* marker is kept as-is else tokenizer->split (case-fold + punctuation) into true index token(s); bare words kept as-written; operators dropped; deduped. Used by BOTH cover_search and tiered atom loops
-- [ ] #4 PART 2 (fix). atom_counts reports the RESOLVED atom as the displayed term -- the folded token for a plain phrase word (yellowstone; hi, tech), the word* marker for a family (NEVER porter:word), the exact string for a bare term -- counted via cheap idx->count. A matching phrase leaf never reports a spurious 0 from case or punctuation
-- [ ] #5 PART 2 NON-GOAL. No whole-phrase (adjacency) count and no phrase-hopper walk; atom_counts stays cheap per-feature idx->count lookups
-- [ ] #6 PART 2 (fix). Bare (unquoted) terms unchanged (raw featurize -> a genuinely dead bare atom still reports 0); word* resolution unchanged; the porter:-never-shown invariant preserved (a family term stays "bear*")
-- [ ] #7 PART 2 (fix). Regression test in test/jsonl.cc (porter burrow): "Yellowstone" -> single leaf yellowstone with count > 0 (was 0); "hi-tech" -> hi & tech both > 0; "u.s.a." -> u,s,a; "dog sled*" -> dog & sled*; bare "Yellowstone" still 0; no "porter:" term ever appears
-- [ ] #8 PART 2 (fix). bazel test //test:jsonl_test and //test:tests, and the isj pytest suite, pass
-- [ ] #9 PART 3 (prompts). Update the search-agent prompts (searcher.md, tiered_searcher.md, MultiText/librarian) to instruct: only use lowercase; for word forms containing punctuation (e.g. u.s.a., hi-tech) quote those words AND also search for a collapsed version, e.g. (+ "u.s.a." usa) and (+ "hi-tech" hitech)
-<!-- AC:END -->
