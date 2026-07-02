@@ -63,20 +63,6 @@ bool any_body_has(std::shared_ptr<cottontail::Warren> w,
   return false;
 }
 
-cottontail::addr df_of(const ExplainResult &ex, const std::string &term) {
-  for (const auto &l : ex.leaves)
-    if (l.term == term)
-      return l.df;
-  return -1;
-}
-
-const ExplainLeaf *leaf_of(const ExplainResult &ex, const std::string &term) {
-  for (const auto &l : ex.leaves)
-    if (l.term == term)
-      return &l;
-  return nullptr;
-}
-
 // Write rows (one JSON object per line) into a fresh input dir and index it,
 // optionally with a stemmer. Keeps the stemming fixtures inline (no committed
 // fixture files needed).
@@ -322,38 +308,6 @@ TEST(JsonlQuery, FullText) {
   w->end();
 }
 
-TEST(JsonlExplain, TextDocumentFrequencies) {
-  std::string error;
-  IndexSummary s;
-  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e1"), &s, &error)) << error;
-  auto w = open_burrow(tmp_burrow("e1"), &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec spec;
-  spec.query = "quick fox";
-  ExplainResult ex = jsonl_explain(w, spec);
-  EXPECT_TRUE(ex.parsed_ok);
-  EXPECT_EQ(df_of(ex, "quick"), 2); // doc-001, doc-002
-  EXPECT_EQ(df_of(ex, "fox"), 2);   // doc-001, doc-002
-  w->end();
-}
-
-TEST(JsonlExplain, GclParse) {
-  std::string error;
-  IndexSummary s;
-  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e2"), &s, &error)) << error;
-  auto w = open_burrow(tmp_burrow("e2"), &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec good;
-  good.is_gcl = true;
-  good.query = "(^ quick fox)";
-  EXPECT_TRUE(jsonl_explain(w, good).parsed_ok);
-  QuerySpec bad;
-  bad.is_gcl = true;
-  bad.query = "(^ quick";
-  EXPECT_FALSE(jsonl_explain(w, bad).parsed_ok);
-  w->end();
-}
-
 // --- Stemming (docs/stemming.md) ------------------------------------------
 
 TEST(JsonlStem, StemmedRecallExactDoesNot) {
@@ -465,28 +419,6 @@ TEST(JsonlStem, MissingStreamIsAnError) {
   std::string qerr;
   EXPECT_FALSE(jsonl_query(w, spec, &hits, &qerr)); // no silent fallback
   EXPECT_FALSE(qerr.empty());
-  w->end();
-}
-
-TEST(JsonlStem, DISABLED_ExplainStreamLabeling) {
-  std::string error, burrow;
-  ASSERT_TRUE(build_rows("stem_explain", kStemRows, "porter", &burrow, &error))
-      << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec spec;
-  spec.query = "elephant ox";
-  spec.stem = true;
-  ExplainResult ex = jsonl_explain(w, spec);
-  ASSERT_TRUE(ex.parsed_ok);
-  const ExplainLeaf *el = leaf_of(ex, "elephant");
-  const ExplainLeaf *ox = leaf_of(ex, "ox");
-  ASSERT_NE(el, nullptr);
-  ASSERT_NE(ox, nullptr);
-  EXPECT_EQ(el->stream, "stemmed"); // elephant -> stemmed stream
-  EXPECT_GT(el->df, 0);
-  EXPECT_EQ(ox->stream, "exact"); // ox unstemmable -> exact stream
-  EXPECT_GT(ox->df, 0);
   w->end();
 }
 
@@ -857,6 +789,61 @@ TEST(JsonlCover, StarPhraseTokenizesNonStarWords) {
   spec.query = "\"hi-tech gear\"";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp3, &error)) << error;
   EXPECT_GT(resp3.total_matches, 0);
+  w->end();
+}
+
+// TASK-21: a quoted phrase leaf is decomposed with the TOKENIZER (case-fold +
+// punctuation split), not whitespace-split-then-raw, so atom_counts reports the
+// resolved atom (never a spurious 0). Bare terms stay raw; word* stays "word*";
+// the porter: form is never a displayed term.
+TEST(JsonlCover, AtomCountsPhraseTokenized) {
+  const std::vector<std::string> rows = {
+      R"({"docid":"a-1","contents":"yellowstone national park in winter"})",
+      R"({"docid":"a-2","contents":"the hi-tech gear on the u.s.a. trip"})",
+      R"({"docid":"a-3","contents":"a dog sled race across the snow"})",
+  };
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("atoms_phrase", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  CoverSpec spec;
+
+  // A capitalized phrase folds to its lowercased atom (was reported as 0).
+  spec.query = "\"Yellowstone\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "yellowstone"), 0);   // resolved (folded) atom, > 0
+  EXPECT_EQ(atom_count(resp, "Yellowstone"), -1);  // never the as-written form
+
+  // A hyphenated phrase word splits into its true tokens (both real, both > 0).
+  spec.query = "\"hi-tech\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.atom_counts.size(), 2u);
+  EXPECT_GT(atom_count(resp, "hi"), 0);
+  EXPECT_GT(atom_count(resp, "tech"), 0);
+
+  // A period-punctuated phrase splits into single-letter tokens.
+  spec.query = "\"u.s.a.\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "u"), 0);
+  EXPECT_GT(atom_count(resp, "s"), 0);
+  EXPECT_GT(atom_count(resp, "a"), 0);
+
+  // A word* INSIDE a phrase stays the "sled*" marker (family count), plain word folds.
+  spec.query = "\"dog sled*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "dog"), 0);
+  EXPECT_GT(atom_count(resp, "sled*"), 0);
+  EXPECT_EQ(atom_count(resp, "porter:sled"), -1); // never the porter: form
+
+  // A BARE capitalized term stays raw -> a genuinely dead atom still reports 0.
+  spec.query = "Yellowstone";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(atom_count(resp, "Yellowstone"), 0);
+
+  // No displayed term is ever the internal porter: form (across any query above).
+  for (const auto &a : resp.atom_counts)
+    EXPECT_EQ(a.term.rfind("porter:", 0), std::string::npos) << a.term;
   w->end();
 }
 

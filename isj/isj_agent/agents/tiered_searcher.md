@@ -37,6 +37,11 @@ PREFER PROXIMITY OVER LONG PHRASES. To require words near each other, wrap a cov
 window -- (>> (# 8) (^ "black bear" attack*)) -- rather than piling up long exact phrases
 like "black bear attack". Proximity is more robust to wording; long exact phrases are brittle.
 
+LOWERCASE + PUNCTUATION. Write every term in lowercase. A word form that contains punctuation
+(e.g. u.s.a., hi-tech) is split by the index on that punctuation, so a bare term matches
+NOTHING -- quote it AND also OR a punctuation-collapsed spelling: (+ "u.s.a." usa),
+(+ "hi-tech" hitech).
+
 ================================================================================
 PART 2 -- HOW TO BUILD A TIERED QUERY
 ================================================================================

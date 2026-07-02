@@ -47,7 +47,7 @@ Non-goals (v1):
 
 The CLI's JSON (de)serialization currently lives in
 `apps/cottontail-jsonl-query.cc`'s anonymous namespace (`results_json`,
-`hit_json`, `explain_json`, `get_json`, `count_json`, `describe_json`). To keep
+`hit_json`, `get_json`, `count_json`, `describe_json`). To keep
 the server and CLI **byte-for-byte identical** on the wire, **move these into a
 shared unit** — e.g. `apps/jsonl_json.{h,cc}` — and have both the query CLI and
 the server include it. Do this refactor first; it should be behavior-preserving
@@ -57,7 +57,6 @@ the server include it. Do this refactor first; it should be behavior-preserving
 // apps/jsonl_json.h  (sketch)
 namespace cottontail { namespace jsonl {
 json results_json(const QuerySpec &, const std::vector<Hit> &, double elapsed_ms);
-json explain_json(const QuerySpec &, const ExplainResult &);
 json get_json(const std::string &docid, bool found, const std::string &text);
 json count_json(const QuerySpec &, long match_count);
 json describe_json();   // the OpenAI/Anthropic tool schema (array)
@@ -76,7 +75,6 @@ URL. All bodies and responses are JSON; `Content-Type: application/json`.
 | `POST /tools/search_text` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "ranker"?, "snippet_chars"?}` | search results (`results_json`) |
 | `POST /tools/search_gcl` | yes | `{"query", "top_k"?, "stem"?, "full_text"?, "snippet_chars"?}` | search results |
 | `POST /tools/cover_search` | yes | `{"query", "top_k"?, "exclude"? : [cp,…], "window"?, "max_covers"?, "max_words"?}` | cover results (`cover_results_json`): `{"total_matches","unjudged_matches","atom_counts":[{term,count}],"results":[{rank,score,cp,summary}]}` |
-| `POST /tools/explain` | yes | `{"query", "is_gcl"?, "stem"?}` | explain (`explain_json`) |
 | `POST /tools/get_document` | yes | `{"docid"}` | `{"docid","found","text"}` |
 | `POST /tools/count_matches` | yes | `{"query", "is_gcl"?, "stem"?}` | `{"query","query_mode","stemmed","match_count"}` |
 
@@ -273,8 +271,8 @@ int main(int argc, char **argv) {
   };
   svr.Post("/tools/search_text", search(false));
   svr.Post("/tools/search_gcl", search(true));
-  // /tools/explain, /tools/get_document, /tools/count_matches: analogous,
-  // calling jsonl_explain / jsonl_get / jsonl_count via provider.with(...).
+  // /tools/get_document, /tools/count_matches: analogous,
+  // calling jsonl_get / jsonl_count via provider.with(...).
 
   std::cerr << "listening on " << host << ":" << port << " burrow=" << burrow
             << (auth_required ? " (auth on)\n" : " (NO AUTH)\n");

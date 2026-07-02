@@ -4,7 +4,7 @@
 // docs/cottontail-search-server-spec.md.
 //
 // Endpoints: GET /healthz (public), GET /describe, POST /tools/<name>
-//   for search_text | search_gcl | explain | get_document | count_matches.
+//   for search_text | search_gcl | get_document | count_matches.
 // Auth: a bearer token, optional on loopback, required on a non-loopback bind.
 
 #include <condition_variable>
@@ -26,7 +26,6 @@ namespace {
 using cottontail::jsonl::CoverHit;
 using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
-using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
 using cottontail::jsonl::TieredSpec;
@@ -392,29 +391,6 @@ int main(int argc, char **argv) {
                return fail(res, 400, e, "tiered_query_search");
              // Reuse the cover_search response shape (identical CoverResponse).
              res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
-                             "application/json");
-           });
-
-  svr.Post("/tools/explain",
-           [&](const httplib::Request &req, httplib::Response &res) {
-             log_req(req);
-             json b;
-             try {
-               b = json::parse(req.body);
-             } catch (...) {
-               return fail(res, 400, "bad JSON body", "request");
-             }
-             QuerySpec spec;
-             try {
-               spec = spec_from(b, b.value("is_gcl", false));
-             } catch (...) {
-               return fail(res, 400, "missing/invalid 'query'", "request");
-             }
-             ExplainResult ex = provider.with(
-                 [&](std::shared_ptr<cottontail::Warren> &w) {
-                   return cottontail::jsonl::jsonl_explain(w, spec);
-                 });
-             res.set_content(cottontail::jsonl::explain_json(spec, ex).dump(),
                              "application/json");
            });
 

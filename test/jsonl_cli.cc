@@ -291,7 +291,6 @@ TEST(JsonlCli, DescribeEmitsToolSchema) {
   }
   EXPECT_EQ(names.count("search_text"), 1u);
   EXPECT_EQ(names.count("search_gcl"), 1u);
-  EXPECT_EQ(names.count("explain"), 1u);
   EXPECT_EQ(names.count("get_document"), 1u);
   EXPECT_EQ(names.count("count_matches"), 1u);
 }

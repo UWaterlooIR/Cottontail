@@ -13,7 +13,7 @@
 // docno/text naming, doc-7).
 //
 // NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
-// jsonl_explain / jsonl_cover_search) still reads ":docno" and is therefore
+// jsonl_cover_search) still reads ":docno" and is therefore
 // INCOMPATIBLE with the cp-native burrow -- it is pending the cp-native query
 // cutover (TASK-5.12 / A3) and is left in source unchanged for now.
 
@@ -179,23 +179,6 @@ bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
 // a hard error (malformed gcl, or --stem against a non-stemmed burrow).
 bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  long *count, std::string *error = nullptr);
-
-struct ExplainLeaf {
-  std::string term;
-  addr df = 0;
-  std::string stream = "exact"; // which stream df came from: "exact" | "stemmed"
-};
-
-struct ExplainResult {
-  bool parsed_ok = false;
-  std::string error;
-  std::vector<ExplainLeaf> leaves;
-};
-
-// Dry run: validate the query and return per-leaf document frequencies. Cheap
-// (no ranking); df comes from idx()->count().
-ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
-                            const QuerySpec &spec);
 
 } // namespace jsonl
 } // namespace cottontail

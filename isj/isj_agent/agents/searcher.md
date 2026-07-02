@@ -35,6 +35,11 @@ infix, never the words AND / OR / NOT.
   "black bear" an EXACT PHRASE in double quotes: these words, in this order, adjacent.
                Use it for fixed multi-word names and tight phrases.
 
+  LOWERCASE + PUNCTUATION. Write every term in lowercase. A word form that contains
+               punctuation (e.g. u.s.a., hi-tech) is split by the index on that punctuation,
+               so a bare term finds NOTHING — QUOTE it AND also OR a punctuation-collapsed
+               spelling: (+ "u.s.a." usa), (+ "hi-tech" hitech).
+
 --------------------------------------------------------------------------------
 1.2  The two core operators — COVER and ALTERNATION
 --------------------------------------------------------------------------------

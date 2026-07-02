@@ -240,7 +240,6 @@ Progress/warnings → stderr. On completion, one JSON object → stdout:
 ```
 cottontail-jsonl-query --burrow <path> --text "<query words>" [options]
 cottontail-jsonl-query --burrow <path> --gcl  "<gcl expression>" [options]
-cottontail-jsonl-query --burrow <path> --explain --gcl "<expr>" [options]
 echo '{"q":"...","top_k":5}' | cottontail-jsonl-query --burrow <path> --batch
 ```
 
@@ -298,7 +297,6 @@ Exactly one of `--text` / `--gcl` / `--cover` (or `--batch`) must be supplied.
 | `--exclude <docid>` | — | `--cover` only, repeatable: carve a judged document out of the search. |
 | `--full-text` | off | Include the entire row body in each result (otherwise best passage + snippet). |
 | `--snippet-chars <n>` | 240 | Max chars of the best-passage text when `--full-text` is off. |
-| `--explain` | off | Dry run: parse + cheap diagnostics, no ranking (see 4.5). |
 | `--batch` | off | Read one query object per stdin line; emit one result object per line (JSONL). |
 | `--format <json\|jsonl>` | `json` | Single JSON object, or one object per line. |
 
@@ -339,29 +337,6 @@ Default (`--format json`):
 - If character offsets into the original `contents` are cheaply available, add
   `char_start`/`char_end`; otherwise the passage **text** is sufficient (required).
 - `text` is `null` unless `--full-text`, in which case it holds the full row body.
-
-### 4.5 Explain output schema
-
-`--explain` must **not** rank. It parses the query and returns cheap diagnostics so an
-agent can detect the common silent-failure case (a required term with zero postings)
-before spending a real query. Per-term `df` comes from `idx()->count(featurize(term))`,
-which is effectively free.
-
-```json
-{
-  "query": "(>> :item (^ elephant qesem))",
-  "query_mode": "gcl",
-  "parsed_ok": true,
-  "leaves": [
-    {"term": "elephant", "df": 5123},
-    {"term": "qesem", "df": 4}
-  ]
-}
-```
-
-If the query fails to parse, return `{"parsed_ok": false, "error": "<parser message>"}`
-and exit non-zero. (`--explain` is the dry-run an agent should use to validate a
-structured query and spot zero-posting terms cheaply.)
 
 ### 4.6 Batch mode (for agents / eval loops)
 
@@ -456,8 +431,6 @@ is strict).
 - **`--text` and `--gcl` as separate modes** let the agent start with bag-of-words and
   escalate to precise structured queries (phrase, proximity, containment, required/
   excluded) — the structured language is an action space, not a requirement.
-- **`--explain` as a dry run** turns the structured language's main failure mode (silent
-  zero results from a missing term) into a cheap, inspectable signal.
 - **JSON to stdout + JSONL batch** make both tools trivial to wrap later behind a REST or
   MCP layer using the identical contract.
 
@@ -651,21 +624,19 @@ Build into a temporary `Working::mkdir` directory; reference fixtures by relativ
    `--strict` makes them fatal.
 6. **GCL semantics** — `(>> :item (^ a b))` and `(... a b)` match exactly the expected
    docs on the fixture; assert counts.
-7. **`--explain`** — per-term `df` matches the fixture; `parsed_ok:false` + error message
-   on a malformed expression.
-8. **JSON output contract** — parse stdout and assert the §4.4 field names/shape (a
+7. **JSON output contract** — parse stdout and assert the §4.4 field names/shape (a
    renamed field is a breaking change worth catching).
-9. **Empty results** — a no-match query yields an empty array and exit `0`, not an error.
-10. **Exit codes & error shape** — usage error → exit `1`; runtime error (missing/corrupt
+8. **Empty results** — a no-match query yields an empty array and exit `0`, not an error.
+9. **Exit codes & error shape** — usage error → exit `1`; runtime error (missing/corrupt
     burrow, malformed `--gcl`) → exit `2` with a single stderr `{"error","where"}` object;
     success (including empty results) → exit `0`. (Contract from §2.)
-11. **Batch mode** — `--batch` preserves input order, emits one object per input line with
+10. **Batch mode** — `--batch` preserves input order, emits one object per input line with
     an `input_index`, and a malformed input line yields a per-line `{"input_index","error"}`
     object **without aborting** the batch. (Contract from §4.6.)
-12. **`--full-text` vs snippet** — default returns the best-passage snippet (≤
+11. **`--full-text` vs snippet** — default returns the best-passage snippet (≤
     `--snippet-chars`) with `text: null`; `--full-text` returns the full row body. (§4.3.)
 
-Items 1–9 are library-level (call the §11.1 functions directly). Items 10–12 are
+Items 1–8 are library-level (call the §11.1 functions directly). Items 9–11 are
 process-boundary behaviors — see §11.6.
 
 ### 11.5 Determinism caveats (so tests don't flake)

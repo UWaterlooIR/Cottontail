@@ -194,29 +194,6 @@ bool build_match_gcl(std::shared_ptr<Warren> warren, const QuerySpec &spec,
   return true;
 }
 
-// Candidate term atoms in a GCL expression: drop operators, parens, and
-// structural tags (":...") so --explain can report leaf document frequencies.
-std::vector<std::string> gcl_terms(const std::string &gcl) {
-  std::vector<std::string> out;
-  std::string tok;
-  auto flush = [&]() {
-    if (tok.empty())
-      return;
-    if (tok != "^" && tok != "+" && tok != "..." && tok != "<>" &&
-        tok != "<<" && tok != ">>" && tok[0] != ':')
-      out.push_back(tok);
-    tok.clear();
-  };
-  for (char c : gcl) {
-    if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n')
-      flush();
-    else
-      tok.push_back(c);
-  }
-  flush();
-  return out;
-}
-
 // ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
 
 // The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
@@ -536,11 +513,17 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
   return true;
 }
 
-// The query's content-term LEAVES (bare words and word* markers), AS WRITTEN,
-// deduped first-seen. Operators / parens / :tags are skipped; each word inside a
-// quoted phrase is its own leaf. Used to build atom_counts. The query has already
-// been validated by cover_rewrite, so no mid-token '*' reaches here.
-std::vector<std::string> cover_leaves(const std::string &gcl) {
+// The query's content-term LEAVES for atom_counts, deduped first-seen. Operators /
+// parens / :tags are skipped. A BARE word (including a word* marker) is kept AS
+// WRITTEN; a QUOTED phrase is decomposed like the match path -- whitespace-split so a
+// trailing '*' survives, then PER WORD a word* marker is kept as-is, else the word is
+// normalized with the tokenizer (case-fold + punctuation split) into its true index
+// token(s). So "Yellowstone" -> yellowstone, "hi-tech" -> hi, tech, "dog sled*" ->
+// dog, sled*. The query was validated by cover_rewrite, so no mid-token '*' reaches
+// here. The atom loop resolves each leaf: a trailing '*' -> its stem family, else the
+// exact feature (a bare capitalized/punctuated term stays raw and may report 0).
+std::vector<std::string> cover_leaves(const std::string &gcl,
+                                      std::shared_ptr<Tokenizer> tokenizer) {
   std::vector<std::string> out;
   std::set<std::string> seen;
   auto add = [&](const std::string &t) {
@@ -548,6 +531,18 @@ std::vector<std::string> cover_leaves(const std::string &gcl) {
       return;
     if (seen.insert(t).second)
       out.push_back(t);
+  };
+  // A word from inside a quoted phrase: a word* marker stays as-is (the atom loop
+  // resolves it to its family); any other word is tokenizer-normalized (fold +
+  // punctuation split) into its true index token(s), matching the query path.
+  auto add_phrase_word = [&](const std::string &w) {
+    if (w.empty())
+      return;
+    if (w.find('*') != std::string::npos)
+      add(w);
+    else
+      for (const auto &t : tokenizer->split(w))
+        add(t);
   };
   std::string tok, phrase;
   bool in_phrase = false;
@@ -562,16 +557,13 @@ std::vector<std::string> cover_leaves(const std::string &gcl) {
         std::string w;
         for (char pc : phrase) {
           if (pc == ' ' || pc == '\t' || pc == '\n') {
-            if (!w.empty()) {
-              add(w);
-              w.clear();
-            }
+            add_phrase_word(w);
+            w.clear();
           } else {
             w.push_back(pc);
           }
         }
-        if (!w.empty())
-          add(w);
+        add_phrase_word(w);
         in_phrase = false;
       }
     } else if (in_phrase) {
@@ -854,7 +846,7 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
     return false;
   // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
   // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
-  for (const auto &leaf : cover_leaves(spec.query)) {
+  for (const auto &leaf : cover_leaves(spec.query, warren->tokenizer())) {
     std::string atom;
     auto star = leaf.find('*');
     if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
@@ -984,7 +976,7 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
   // call regardless of results, so a count of 0 unambiguously means a dead atom.
   std::set<std::string> seen_terms;
   for (const auto &tier : spec.tiers) {
-    for (const auto &leaf : cover_leaves(tier)) {
+    for (const auto &leaf : cover_leaves(tier, warren->tokenizer())) {
       if (!seen_terms.insert(leaf).second)
         continue;
       std::string atom;
@@ -1143,53 +1135,6 @@ bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     n++;
   *count = n;
   return true;
-}
-
-ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
-                            const QuerySpec &spec) {
-  ExplainResult out;
-  std::vector<std::string> terms;
-  if (spec.is_gcl) {
-    std::string err;
-    auto check = warren->hopper_from_gcl(spec.query, &err);
-    if (check == nullptr) {
-      out.parsed_ok = false;
-      out.error = err;
-      return out;
-    }
-    out.parsed_ok = true;
-    terms = gcl_terms(spec.query);
-  } else {
-    out.parsed_ok = true;
-    terms = warren->tokenizer()->split(spec.query);
-  }
-  std::shared_ptr<Stemmer> stemmer;
-  if (spec.stem) {
-    stemmer = burrow_stemmer(warren);
-    if (stemmer == nullptr) {
-      out.parsed_ok = false;
-      out.error = "--stem requested but this burrow has no stemmed stream "
-                  "(rebuild the index with --stem)";
-      return out;
-    }
-  }
-  for (const auto &t : terms) {
-    ExplainLeaf leaf;
-    leaf.term = t;
-    if (spec.stem) {
-      // The stemmed atom addresses the stemmed stream; if the term is
-      // unstemmable the stemmer returns the surface form (exact stream).
-      bool stemmed = false;
-      std::string atom = stemmer->stem(t, &stemmed);
-      leaf.stream = stemmed ? "stemmed" : "exact";
-      leaf.df = warren->idx()->count(warren->featurizer()->featurize(atom));
-    } else {
-      leaf.stream = "exact";
-      leaf.df = warren->idx()->count(warren->featurizer()->featurize(t));
-    }
-    out.leaves.push_back(leaf);
-  }
-  return out;
 }
 
 } // namespace jsonl

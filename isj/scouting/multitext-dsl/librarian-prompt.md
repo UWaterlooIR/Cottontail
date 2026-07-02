@@ -15,6 +15,9 @@ THE LANGUAGE
   ( expr ) < [N]        constrain expr to a window of at most N tokens (proximity).
   name = expr           define a macro; reference it later by its bare (unquoted) name.
   Tokens are ALWAYS quoted; macros are bare identifiers -- that is how a term is told from a variable.
+  Write tokens in lowercase. A token that contains punctuation (e.g. "u.s.a.", "hi-tech") is split
+  by the index on that punctuation, so also OR a punctuation-collapsed spelling:
+  ("u.s.a." + "usa"), ("hi-tech" + "hitech").
 
 EXAMPLE
 

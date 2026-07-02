@@ -142,16 +142,12 @@ A no-op term is safe and symmetric: `Porter::stem("ox")` returns `"ox"`
   (symmetry: index-time and query-time stemmers must match). If `--stem` is
   requested but the tokenizer is plain `ascii` (no stemmed stream), **exit 2**
   with a clear error. Do **not** silently fall back to exact — silent recall loss
-  is the failure `--explain` exists to surface.
+  is exactly the failure this refuse-on-mismatch rule exists to prevent.
 
 - best_passage spans and docid recovery are unchanged (addresses are shared).
 
 - Search output (§4.4): add `"stemmed": true|false`, reflecting which stream the
   query ran against.
-
-- `--explain` (§4.5): for each leaf term, report `"stream": "exact"|"stemmed"`
-  and the `df` from **that** stream (for stemmed, `featurize` the stemmer's
-  output). A stemmed term with zero stemmed postings is then detectable.
 
 ---
 
@@ -225,17 +221,15 @@ c. **No-op fallback** — `--stem "ox"` still finds a row containing `ox` (prove
    the symmetric exact fallback for unstemmable terms).
 d. **Missing-stream error** — `--stem` against a burrow built **without** `--stem`
    exits `2` with a clear error (no silent fallback).
-e. **`--explain` stream labeling** — per-term `stream` = `exact`|`stemmed` and the
-   `df` comes from the correct stream.
-f. **Position alignment** — a stemmed-term hit returns a correct `best_passage`
+e. **Position alignment** — a stemmed-term hit returns a correct `best_passage`
    span and correct `docid` (proves shared addresses).
-g. **Over-stem pinned** — a fixture with two words sharing a Porter stem
+f. **Over-stem pinned** — a fixture with two words sharing a Porter stem
    (`organization`/`organ`): `--stem` conflates them **and** exact keeps them
    separate. Locks the documented behavior so it can't regress silently.
-h. **No dna mutation** — running a `--stem` query leaves the burrow's dna
+g. **No dna mutation** — running a `--stem` query leaves the burrow's dna
    byte-for-byte unchanged (guards the `set_stemmer` landmine), and a subsequent
    default open is still exact.
-i. **gzip parity** — stemming does not change the `.jsonl` vs `.jsonl.gz`
+h. **gzip parity** — stemming does not change the `.jsonl` vs `.jsonl.gz`
    equivalence.
 
 Determinism: stemmed and exact share addresses, so the §11.5 tie caveats apply —

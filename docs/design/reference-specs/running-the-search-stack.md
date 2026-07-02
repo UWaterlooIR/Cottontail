@@ -53,9 +53,6 @@ bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --text "climbing ro
 # structured GCL search (full operator set: Boolean, phrase, proximity, containment, negation)
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --gcl '(^ carabiner belay)'
 
-# dry-run term diagnostics (document frequency per term) — cheap, no ranking
-bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --explain --text "carabiner belay"
-
 # other actions
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --count --text "carabiner belay"
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --get shard_00016_68307
@@ -99,7 +96,7 @@ token) is not. Lines from concurrent workers are serialized so they don't
 interleave.
 
 **Endpoints:** `GET /healthz` (public), `GET /describe`, and `POST /tools/<name>`
-for `search_text` · `search_gcl` · `explain` · `get_document` · `count_matches`.
+for `search_text` · `search_gcl` · `get_document` · `count_matches`.
 
 ```sh
 curl http://127.0.0.1:8080/healthz

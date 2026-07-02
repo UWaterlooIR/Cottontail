@@ -21,9 +21,6 @@ namespace jsonl {
 json results_json(const QuerySpec &spec, const std::vector<Hit> &hits,
                   double elapsed_ms);
 
-// Dry-run diagnostics: per-leaf df + stream (exact|stemmed).
-json explain_json(const QuerySpec &spec, const ExplainResult &ex);
-
 // A row fetched by cp: {cp, found, text}.
 json get_json(addr cp, bool found, const std::string &text);
 
