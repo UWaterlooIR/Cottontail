@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-01 03:52'
-updated_date: '2026-07-02 18:41'
+updated_date: '2026-07-02 19:03'
 labels:
   - bug
 dependencies: []
@@ -39,61 +39,6 @@ This predates TASK-19 in cover_search; TASK-19 inherited it by reusing the helpe
 Key files: apps/jsonl_core.cc (the atom_counts loop shared by cover_search + tiered_query_search, and the explain df loop), a regression test in test/jsonl.cc.
 <!-- SECTION:DESCRIPTION:END -->
 
-## Implementation Notes
-
-<!-- SECTION:NOTES:BEGIN -->
-## Mechanism (live-verified on climbmix-100M-porter; utf8 + porter)
-
-CORRECTION of an earlier note: the count path does NOT featurize the whole raw quoted string,
-and NOT every phrase leaf reports 0. cover_leaves (jsonl_core.cc:520) splits a phrase's content
-on WHITESPACE and emits each WORD as a leaf; the atom loop then counts each leaf via
-idx->count(featurize(word)), with a trailing word* routed through the stemmer. So a clean
-lowercase multi-word phrase is already counted correctly per word; the 0s appear only for a word
-the real tokenizer would FOLD (Yellowstone) or SPLIT on punctuation (hi-tech, u.s.a.).
-
-What already works (single feature -> cheap, correct): a bare lowercase token and a word* stem
-family each resolve to ONE feature, and idx->count is a directory/header lookup (SimpleIdx::count_:
-locate in the in-memory feature directory + read one PstRecord 'n', memoized) -- effectively free,
-NOT a search.
-
-The '*' subtlety (why Part 1 is not a naive tokenizer->split): whitespace-splitting PRESERVES a
-trailing '*', and the atom loop resolves it, so "dog sled*" already reports dog (exact) + sled*
-(stem family). A naive tokenizer->split of the whole phrase would EAT the '*' (Po punctuation),
-turning sled* into exact sled and losing the family. So the decomposition must whitespace-split
-FIRST, then per word decide star vs tokenizer-normalize.
-
-Live evidence (cover_search total_matches / atom_counts):
-  (+ dog* sled*)   4,106,344   dog*=37,483,853  sled*=221,829   (stem families -- correct today)
-  "dog sled"           4,227   dog=22,999,296   sled=152,187    (whitespace ok for clean words)
-  "dog sled*"          8,498   dog=22,999,296   sled*=221,829   (whitespace preserves *, star resolved -- correct)
-  "hi-tech"           24,433   hi-tech=0                        (WRONG: not tokenizer-split)
-  "Yellowstone"       89,215   Yellowstone=0                    (WRONG: not case-folded)
-  "u.s.a."            75,241   u.s.a.=0                         (WRONG: not punctuation-split)
-
-## Decision (2026-07-02): two parts, one explicit non-goal
-
-PART 1 (code, cheap): fix the atom decomposition in the shared atom_counts helper. Whitespace-split
-the phrase into words, then per word: trailing '*' -> stem family (unchanged); else ->
-warren->tokenizer()->split() (the SAME fold + punctuation split the match path uses) into the true
-index atom(s). Each atom is one feature -> the same cheap idx->count. A phrase then contributes one
-atom_counts entry per resolved atom (e.g. "hi-tech" -> hi, tech; "u.s.a." -> u, s, a;
-"Yellowstone" -> yellowstone; "dog sled*" -> dog, sled*).
-
-PART 2 (prompts): teach the Search agents to form better queries (lowercase; quote + OR a
-punctuation-collapsed variant for punctuated forms).
-
-NON-GOAL (decided): do NOT report a count of the whole phrase (the adjacency). We will not run the
-phrase hopper to count its occurrences for reporting -- that is a walk, not a free lookup (see
-docs/design/phrase-search-performance-and-proposal.md). atom_counts stays cheap per-feature lookups;
-the searcher learns "these atoms exist / how common", not "how often the phrase occurs"
-(total_matches already gives whole-query size).
-
-OUT OF SCOPE here (separate bug -> TASK-23): the same whitespace-split + raw-per-word decomposition
-also afflicts the MATCH path for STAR-CONTAINING phrases -- "hi-tech gear*" compiles to
-(>> (# 2) (... hi-tech porter:gear)) and matches 0 documents. That changes query RESULTS (higher
-risk) and is filed as TASK-23. A single shared phrase-decomposition helper would fix both.
-<!-- SECTION:NOTES:END -->
-
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
 - [ ] #1 PART 1 (code). In the shared atom_counts computation (apps/jsonl_core.cc: cover_leaves + the atom loop used by BOTH cover_search and tiered_query_search), decompose a quoted phrase by WHITESPACE into words, then PER WORD: a trailing word* resolves to its stem family (unchanged); otherwise normalize the word with warren->tokenizer()->split() (the same case-fold + punctuation split the match path uses) into its true index atom(s). NOT a naive tokenizer->split of the whole phrase -- that would eat the * markers (e.g. turn sled* into exact sled)
@@ -105,3 +50,94 @@ risk) and is filed as TASK-23. A single shared phrase-decomposition helper would
 - [ ] #7 PART 1. bazel test //test:jsonl_test and the isj pytest suite pass
 - [ ] #8 PART 2 (prompts). Update the search-agent prompts (isj_agent/agents/searcher.md, tiered_searcher.md, and the MultiText/librarian prompt) to instruct: (a) write all query terms in lowercase; (b) for a word form containing punctuation the tokenizer splits on (e.g. u.s.a., hi-tech), QUOTE it AND OR a punctuation-collapsed variant -- e.g. (+ "u.s.a." usa), (+ "hi-tech" hitech) -- because a bare punctuated term is one nonexistent token that matches nothing and zeros any (^ ...) it is in
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+All tables below are LIVE-VERIFIED on climbmix-100M-porter (default utf8 tokenizer + porter).
+
+## How the index normalizes (the reason for everything below)
+- utf8 tokenizer CASE-FOLDS via a Unicode fold table (Yellowstone -> yellowstone) and SPLITS on
+  any non-letter/number/mark codepoint, so punctuation (. - / etc.) is a SEPARATOR:
+  "hi-tech" -> hi, tech ; "u.s.a." -> u, s, a.
+- --stem porter adds a co-located stem feature per word, namespaced "porter:<stem>", only when the
+  word actually stems. The porter wrapper lowercases its input first (porter.h), so the stem path
+  is case-INSENSITIVE.
+- idx->count(feature) is a directory/header lookup (SimpleIdx::count_: locate in the in-memory
+  feature directory + read one PstRecord 'n', memoized) -- effectively FREE, not a search.
+
+## Three query-term normalization paths (the crux)
+| form | example | resolves to | case | punctuation |
+|---|---|---|---|---|
+| bare exact | `yellowstone` | featurize(raw) -- ONE feature | SENSITIVE | literal (NOT split) |
+| family `word*` | `yellowstone*` | porter stem -> `porter:yellowston` | INSENSITIVE | n/a |
+| phrase `"..."` | `"Yellowstone"` | tokenizer split (fold+split) -> `(>> (# N) (...))` | INSENSITIVE | SPLIT |
+
+## "Yellowstone" four ways (total_matches / atom_count)
+| query | resolves to | matches | atom_count |
+|---|---|---|---|
+| `yellowstone` (bare) | featurize("yellowstone") | 89,215 | 260,925 |
+| `Yellowstone` (bare) | featurize("Yellowstone") | **0** | 0 |
+| `yellowstone*` | porter:yellowston | 89,271 | 261,162 |
+| `Yellowstone*` | porter:yellowston (porter lowercases) | 89,271 | 261,162 |
+| `"Yellowstone"` (phrase) | fold -> yellowstone | 89,215 | **0** <- BUG |
+
+Only bare-capitalized misses; adding `*`, quoting, OR lowercasing all fix it (three different
+mechanisms). The last row is the bug: phrase matches 89,215 docs but atom_count reports 0.
+
+## Punctuation (bare terms silently die; quoting rescues matching but not the count)
+| query | index reality | matches | atom_count |
+|---|---|---|---|
+| `hi-tech` (bare) | index has hi + tech; "hi-tech" is not a token | **0** | 0 |
+| `(^ hi-tech stereo)` | dead atom zeros the whole cover (stereo alone = 221,582) | **0** | hi-tech=0, stereo=496,148 |
+| `"hi-tech"` (phrase) | `(>> (# 2) (... hi tech))` | 24,433 | **0** <- BUG |
+| `u.s.a.` (bare) | index has u,s,a; "u.s.a." not a token | **0** | 0 |
+| `"u.s.a."` (phrase) | `(>> (# 3) (... u s a))` | 75,241 | **0** <- BUG |
+| `usa` (bare) | a real, punctuation-free token | 1,165,515 | 1,813,792 |
+
+## Stem families and a `*` INSIDE a phrase
+| query | resolves to | matches | atom_counts |
+|---|---|---|---|
+| `(+ dog* sled*)` | porter:dog + porter:sled | 4,106,344 | dog*=37,483,853, sled*=221,829 |
+| `"dog sled"` | `(>> (# 2) (... dog sled))` | 4,227 | dog=22,999,296, sled=152,187 |
+| `"dog sled*"` | `(>> (# 2) (... dog porter:sled))` | 8,498 | dog=22,999,296, sled*=221,829 |
+| `"hi-tech gear*"` | `(>> (# 2) (... hi-tech porter:gear))` | **0** (MATCH bug) | hi-tech=0, gear*=4,228,494 |
+
+`"dog sled*"` is correct today: whitespace-splitting PRESERVES the trailing `*` and the atom loop
+resolves it. That is exactly why Part 1 must NOT run a naive `tokenizer->split` on the whole phrase
+(it would eat the `*`, turning `sled*` into exact `sled`). The last row (`"hi-tech gear*"` -> 0) is
+a MATCH-path correctness bug, filed separately as TASK-23.
+
+## Cost
+- Atom (single feature) count = free directory lookup. word* and bare-exact each resolve to ONE
+  feature -> already cheap and correct.
+- Phrase (adjacency) count = a hopper WALK, not free (see
+  docs/design/phrase-search-performance-and-proposal.md) -> the NON-GOAL below.
+
+---
+
+## PART 1 -- fix the atom decomposition (code; cheap; low risk)
+In the shared atom_counts helper (apps/jsonl_core.cc: cover_leaves + the atom loop used by BOTH
+cover_search and tiered_query_search): whitespace-split a phrase into words, then PER WORD:
+- trailing `*` -> stem family (unchanged, e.g. sled* -> porter:sled),
+- else -> `warren->tokenizer()->split()` (the SAME fold + punctuation split the match path uses)
+  into the true index atom(s).
+Each atom is one feature -> the same cheap idx->count. Bare terms and word* stay as they are.
+NON-GOAL: never walk the phrase hopper to report a whole-phrase count; atom_counts stays free.
+
+## PART 2 -- what to teach the Search agents (prompt content, with examples)
+Add to searcher.md, tiered_searcher.md, and the MultiText/librarian prompt:
+1. LOWERCASE every term. Bare terms are case-SENSITIVE: `Yellowstone` -> 0, `yellowstone` -> matches.
+   (Only `word*` and quoted phrases fold case.)
+2. Use `word*` for morphological families: `yellowstone*` = the porter stem family
+   (yellowstone, yellowstones, ...), case-insensitive. Prefer it when you want inflections.
+3. Punctuated word forms do NOT work bare -- the tokenizer split them at index time, so the bare
+   token does not exist and it ZEROS any `(^ ...)` it sits in. QUOTE the form AND OR a
+   punctuation-collapsed variant:
+     - `(+ "u.s.a." usa)`
+     - `(+ "hi-tech" hitech)`
+   The quoted form becomes an adjacency of the pieces; the collapsed form catches the no-punctuation
+   spelling. (This is also why a bare `hi-tech` or `u.s.a.` must never appear in a query.)
+4. Quoted phrases are proximity/adjacency, not literal strings: `"food storage"` = food followed by
+   storage. Use them for multi-word concepts.
+<!-- SECTION:NOTES:END -->
