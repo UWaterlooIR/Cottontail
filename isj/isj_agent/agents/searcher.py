@@ -67,7 +67,7 @@ class BaseSearcher:
         client: openai.OpenAI,
         model: str,
         *,
-        reasoning_effort: str | None = "high",
+        reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
     ) -> None:
         self.client = client
