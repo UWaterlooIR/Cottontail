@@ -1,0 +1,18 @@
+=== constituent word counts + standalone phrase timings (warm) ===
+  WORD campsite               0.14s  count=49645  
+  WORD camp                   0.30s  count=635410  
+  WORD bear                   0.29s  count=1226053  
+  WORD placement              0.30s  count=836391  
+  WORD selection              0.45s  count=2507550  
+  WORD site                   0.57s  count=4812352  
+  WORD protection             0.57s  count=4056498  
+  WORD food                   1.12s  count=12174656  
+  PHRASE camp placement       5.38s  count=40  
+  WORD canister               5.40s  count=61708  
+  PHRASE campsite selection      5.53s  count=495  
+  WORD resistant              5.55s  count=1895447  
+  WORD hanging                5.60s  count=849262  
+  PHRASE site selection       5.80s  count=28071  
+  PHRASE food protection      5.92s  count=5758  
+  PHRASE bear-resistant       6.25s  count=2936  
+DONE

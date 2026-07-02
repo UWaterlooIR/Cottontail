@@ -1,0 +1,72 @@
+# gprof -b flat profile for tier2 (top_k=200), 100M burrow, 36 min wall, 5765 matches.
+# Built: bazel build -c dbg --cxxopt=-Og --copt=-pg --linkopt=-pg //apps:cottontail-jsonl-query
+
+Flat profile:
+Each sample counts as 0.01 seconds.
+  %   cumulative   self              self     total           
+ time   seconds   seconds    calls   s/call   s/call  name    
+ 13.61     50.35    50.35 2659140394     0.00     0.00  cottontail::(anonymous namespace)::hopping(long const*, long, long*, long)
+ 13.56    100.52    50.17 2658552097     0.00     0.00  cottontail::(anonymous namespace)::gnippoh(long const*, long, long*, long)
+ 13.21    149.39    48.87 6953519391     0.00     0.00  cottontail::ArrayHopper::L_(long)
+  9.03    182.82    33.43 6953518820     0.00     0.00  cottontail::ArrayHopper::R_(long)
+  4.13    198.11    15.29 3474076225     0.00     0.00  cottontail::gcl::FollowedBy::L_(long)
+  3.97    212.81    14.70 5317692490     0.00     0.00  cottontail::ArrayHopper::wait()
+  3.66    226.34    13.53     5026     0.00     0.00  cottontail::ArrayHopper::bind()
+  3.63    239.76    13.42     5051     0.00     0.00  cottontail::ArrayHopper::~ArrayHopper()
+  3.53    252.84    13.08 1750155872     0.00     0.00  cottontail::Hopper::ohr(long, long*, long*, double*)
+  3.50    265.78    12.94 1729317220     0.00     0.00  cottontail::gcl::Combinational::tau_(long, long*, long*, double*)
+  2.93    276.61    10.83 1738903587     0.00     0.00  cottontail::Hopper::tau(long, long*, long*, double*)
+  2.72    286.66    10.05 3474076227     0.00     0.00  cottontail::gcl::FollowedBy::R_(long)
+  2.60    296.28     9.62 1734121669     0.00     0.00  cottontail::Hopper::rho(long, long*, long*, double*)
+  2.53    305.63     9.36 1745358141     0.00     0.00  cottontail::gcl::Combinational::uat_(long, long*, long*, double*)
+  2.28    314.07     8.44 1754944317     0.00     0.00  cottontail::Hopper::uat(long, long*, long*, double*)
+  1.95    321.29     7.22 1728739518     0.00     0.00  cottontail::FixedWidthHopper::rho_(long, long*, long*, double*)
+  1.88    328.26     6.97        1     6.97     6.97  std::_Sp_counted_ptr_inplace<bool, std::allocator<void>, (__gnu_cxx::_Lock_policy)2>::_M_dispose()
+  1.83    335.04     6.78  4793088     0.00     0.00  cottontail::gcl::Containing::rho_(long, long*, long*, double*)
+  1.57    340.84     5.80 1745362784     0.00     0.00  cottontail::FixedWidthHopper::ohr_(long, long*, long*, double*)
+  1.51    346.42     5.58  2396544     0.00     0.00  cottontail::gcl::Or::R_(long)
+  1.31    351.25     4.83  4793088     0.00     0.00  cottontail::gcl::Containing::ohr_(long, long*, long*, double*)
+  0.93    354.69     3.44                             cottontail::ZlibCompressor::~ZlibCompressor()
+  0.85    357.83     3.14  4793088     0.00     0.00  cottontail::FixedWidthHopper::tau_(long, long*, long*, double*)
+  0.84    360.94     3.11  4793088     0.00     0.00  cottontail::FixedWidthHopper::uat_(long, long*, long*, double*)
+  0.78    363.82     2.88       21     0.14     0.14  cottontail::(anonymous namespace)::decode_all(char*, unsigned long, long*, unsigned long)
+  0.56    365.89     2.07                             cottontail::TfHopper::rho_(long, long*, long*, double*)
+  0.44    367.51     1.62                             std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::find_last_of(char const*, unsigned long) const
+  0.44    369.12     1.61     5294     0.00     0.00  std::mutex::lock()
+  0.10    369.49     0.37 73298463     0.00     0.00  std::vector<cottontail::IdxRecord, std::allocator<cottontail::IdxRecord> >::push_back(cottontail::IdxRecord const&)
+  0.05    369.69     0.20        1     0.20     0.20  cottontail::SimpleTxt::load_map(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >*)
+  0.02    369.78     0.09        1     0.09     0.46  cottontail::SimpleIdx::make(std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, std::shared_ptr<cottontail::Working>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >*)
+  0.02    369.85     0.07  2396544     0.00     0.00  cottontail::gcl::Or::L_(long)
+  0.01    369.90     0.06   588870     0.00     0.00  cottontail::ArrayHopper::rho_(long, long*, long*, double*)
+  0.01    369.94     0.04                             _init
+  0.01    369.97     0.03   599136     0.00     0.00  cottontail::gcl::And::R_(long)
+  0.01    369.99     0.02  4793088     0.00     0.00  cottontail::gcl::Containing::tau_(long, long*, long*, double*)
+  0.00    370.00     0.01  4793088     0.00     0.00  cottontail::gcl::Containing::uat_(long, long*, long*, double*)
+  0.00    370.01     0.01   599136     0.00     0.00  cottontail::gcl::And::L_(long)
+  0.00    370.02     0.01        1     0.01     0.01  cottontail::Utf8Tokenizer::Utf8Tokenizer()
+  0.00    370.03     0.01                             cottontail::gcl::ContainedIn::ohr_(long, long*, long*, double*)
+  0.00    370.04     0.01                             void std::vector<cottontail::IdxRecord, std::allocator<cottontail::IdxRecord> >::_M_realloc_insert<cottontail::IdxRecord const&>(__gnu_cxx::__normal_iterator<cottontail::IdxRecord*, std::vector<cottontail::IdxRecord, std::allocator<cottontail::IdxRecord> > >, cottontail::IdxRecord const&)
+  0.00    370.05     0.01  4793088     0.00     0.00  cottontail::Hopper::R_(long)
+  0.00    370.05     0.01                             cottontail::ArrayHopper::tau_(long, long*, long*, double*)
+  0.00    370.05     0.00  4793088     0.00     0.00  cottontail::Hopper::L_(long)
+  0.00    370.05     0.00   691203     0.00     0.00  cottontail::(anonymous namespace)::unicode(unsigned char const*, unsigned char const*, unsigned int*)
+  0.00    370.05     0.00   588870     0.00     0.00  cottontail::jsonl::(anonymous namespace)::cover_ranking(std::shared_ptr<cottontail::Warren>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&, unsigned long, std::unordered_set<long, std::hash<long>, std::equal_to<long>, std::allocator<long> > const&, std::vector<cottontail::jsonl::(anonymous namespace)::CoverRanked, std::allocator<cottontail::jsonl::(anonymous namespace)::CoverRanked> >*, long*, long*, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >*)::{lambda(long, long, double)#1}::operator()(long, long, double) const
+  0.00    370.05     0.00   284211     0.00     0.00  std::vector<long, std::allocator<long> >::push_back(long const&)
+  0.00    370.05     0.00   111095     0.00     0.00  std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_release()
+  0.00    370.05     0.00    89919     0.00     0.00  nlohmann::json_abi_v3_12_0::detail::serializer<nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool, long, unsigned long, double, std::allocator, nlohmann::json_abi_v3_12_0::adl_serializer, std::vector<unsigned char, std::allocator<unsigned char> >, void> >::decode(unsigned char&, unsigned int&, unsigned char)
+  0.00    370.05     0.00    85453     0.00     0.00  cottontail::gcl::(anonymous namespace)::is_term_character(char)
+  0.00    370.05     0.00    80925     0.00     0.00  std::_Sp_counted_base<(__gnu_cxx::_Lock_policy)2>::_M_add_ref_copy()
+  0.00    370.05     0.00    65876     0.00     0.00  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_M_dispose()
+  0.00    370.05     0.00    61814     0.00     0.00  std::unique_ptr<cottontail::Hopper, std::default_delete<cottontail::Hopper> >::~unique_ptr()
+  0.00    370.05     0.00    60200     0.00     0.00  std::__allocated_ptr<std::allocator<std::_Sp_counted_ptr_inplace<cottontail::gcl::SExpression, std::allocator<void>, (__gnu_cxx::_Lock_policy)2> > >::~__allocated_ptr()
+  0.00    370.05     0.00    55088     0.00     0.00  std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >::_S_copy(char*, char const*, unsigned long)
+  0.00    370.05     0.00    34058     0.00     0.00  nlohmann::json_abi_v3_12_0::basic_json<std::map, std::vector, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> >, bool, long, unsigned long, double, std::allocator, nlohmann::json_abi_v3_12_0::adl_serializer, std::vector<unsigned char, std::allocator<unsigned char> >, void>::assert_invariant(bool) const
+
+----- call-graph block: callers of ArrayHopper::L_ (99.9% from FollowedBy::L_) -----
+
+                0.04    0.05 5392224/6953519391     cottontail::gcl::Or::L_(long) [7]
+               48.83   64.23 6948127167/6953519391     cottontail::gcl::FollowedBy::L_(long) [11]
+[13]    30.6   48.87   64.28 6953519391         cottontail::ArrayHopper::L_(long) [13]
+               50.17    0.00 2658552097/2658552097     cottontail::(anonymous namespace)::gnippoh(long const*, long, long*, long) [17]
+                7.35    6.76 2658552096/5317692490     cottontail::ArrayHopper::wait() [18]
+

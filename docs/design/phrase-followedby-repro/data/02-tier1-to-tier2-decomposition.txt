@@ -1,0 +1,7 @@
+=== tier1 -> tier2 decomposition (parallel, warm cache, top_k=200) ===
+  DONE tier1 (baseline)           18.93s  matches=5765  
+  DONE +bear-resistant (B)        35.20s  matches=5765  
+  DONE +food protection (C)       59.90s  matches=5765  
+  DONE +camp placement (D)       649.48s  matches=5765  
+  DONE tier2 (all three)         711.82s  matches=5765  
+[wall-clock: 711.8s]
