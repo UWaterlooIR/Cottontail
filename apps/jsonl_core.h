@@ -10,12 +10,9 @@
 // ":item" start address (cp); jsonl_index pairs each docno with its cp in a flat
 // <burrow>/docno-cp.tsv dump, from which the index CLI (TASK-6.3) builds the
 // cp<->docno SQLite map. See docs/indexing.md (decision doc-6, cp-native, and the
-// docno/text naming, doc-7).
-//
-// NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
-// jsonl_cover_search) still reads ":docno" and is therefore
-// INCOMPATIBLE with the cp-native burrow -- it is pending the cp-native query
-// cutover (TASK-5.12 / A3) and is left in source unchanged for now.
+// docno/text naming, doc-7). The query side is cp-native throughout (the
+// TASK-5.12 / A3 cutover): results carry cp, and docno<->cp mapping is
+// Python-only (doc-8).
 
 #include <cstdint>
 #include <memory>
