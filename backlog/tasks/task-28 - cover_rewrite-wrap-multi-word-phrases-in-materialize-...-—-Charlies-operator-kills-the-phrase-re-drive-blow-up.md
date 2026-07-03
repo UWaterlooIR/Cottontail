@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-03 13:20'
-updated_date: '2026-07-03 13:29'
+updated_date: '2026-07-03 13:35'
 labels: []
 dependencies: []
 priority: high
@@ -57,11 +57,12 @@ Benefits all three searchers (cover_search, tiered_query_search, multitext_tiere
 3. MultiText tier post-pass: wrap the DSL's <> output (Mark, 2026-07-04: 'Both')
    3.1 New exported helper materialize_followed_by(s_expression) -> string: a small recursive-descent walk over Mt's well-formed prefix output (balanced parens, quoted strings opaque). Rule: wrap the OUTERMOST pathological unit — a (<< X (# n)) whose X contains a (... ...) wraps WHOLE as (materialize (<< X (# n))); a bare (... ...) group wraps itself. Idempotent: never wrap a node whose parent is already materialize.
    3.2 compile_multitext applies it to each compiled tier before handing tiers to the cascade. The JSON-tiers path is untouched (its quoted phrases are covered by 2.x; its prompt does not teach raw (... ) forms).
-   3.3 NOTE in code: parallel_cover_ranking workers each materialize their own copy (extra CPU, same wall-clock); sharing is a possible later refinement (upstream's 'substitute bindings' sketch).
+   3.3 WRAPPED FOR RANKING ONLY (Mark's review question, 2026-07-04): materialization pays off where a hopper is probed thousands of times across the corpus (the ranking scan); it is a LOSS where hoppers are rebuilt per document. So cover_search/tiered/multitext keep TWO forms per query/tier: the WRAPPED form feeds parallel_cover_ranking, and the UNWRAPPED form feeds the per-document summary re-walk (which rebuilds the hopper up to top_k times — each rebuild of a wrapped form would re-enumerate the FULL shard). Concretely: cover_rewrite returns the unwrapped rewrite as today plus a wrapped variant (or a second wrap pass over it); jsonl_cover_search and jsonl_tiered_query_search rank with wrapped, summarize with unwrapped; compile_multitext produces both.
+   3.4 Known cost, documented in code: each parallel_cover_ranking WORKER still materializes its own full-shard copy of each phrase (Materialize is not range-aware) — N threads = N full enumerations, ~1x wall-clock but Nx CPU, and the validated end-to-end numbers already include this. Range-aware or shared materialization needs gcl/ changes (upstream's 'substitute bindings' direction) — out of scope; candidate for the Charlie conversation.
 
 4. Unit tests (test/jsonl.cc)
    4.1 Rewrite shapes via exported cover_rewrite: multi-word phrase -> materialized; \"hi-tech\" and \"u.s.a.\" -> materialized; single-token quoted phrase -> NOT wrapped; starred phrase -> materialized (>> ...); single starred word -> bare atom unwrapped; the lipid*-adjacent glue regression parses (hopper_from_gcl non-null on the rewritten string).
-   4.2 materialize_followed_by shapes: (... a b) wrapped; (<< (... a b) (# 3)) wrapped as a whole; already-materialized input unchanged; non-phrase trees untouched.
+   4.2 Ranking-vs-summary split: a phrase query's SUMMARY output (cover positions/text) is identical to today's, and the summary path demonstrably uses the unwrapped form (assert via the exported rewrite pair). materialize_followed_by shapes: (... a b) wrapped; (<< (... a b) (# 3)) wrapped as a whole; already-materialized input unchanged; non-phrase trees untouched.
    4.3 Behavior parity on the small fixture: cover_search and multitext_tiered_search results identical before/after the change for phrase queries (build both ways? — the 'before' is the old behavior: assert instead that wrapped queries return the SAME results as the semantically-equal unwrapped GCL run through search_gcl/jsonl_query, plus the existing phrase tests all stay green unchanged — they pin current matching behavior).
    4.4 atom_counts unaffected: leaves come from the ORIGINAL text; a wrapped query's atom_counts contain no 'materialize' term.
    4.5 bazel test //test:all + full isj suite.
