@@ -1,10 +1,11 @@
 ---
 id: TASK-25
 title: Adopt parallel_ssr in cottontail-jsonl-server/-query (cp-native parallel SSR)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-03 00:47'
-updated_date: '2026-07-03 02:07'
+updated_date: '2026-07-03 02:13'
 labels: []
 dependencies:
   - TASK-24

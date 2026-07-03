@@ -316,3 +316,40 @@ TEST(JsonlCli, BatchPreservesOrderAndIsolatesErrors) {
   EXPECT_EQ(l1["input_index"], 1);
   EXPECT_TRUE(l1.contains("error")); // bad gcl isolated, batch not aborted
 }
+
+// TASK-25: --rank-threads parses, applies to --text/--gcl/--cover, and gives
+// results identical to sequential (this fixture is far below the 1M-token
+// parallel range minimum, so 0/N fall back to one range -- pinning the
+// plumbing and the fallback). A junk value is a usage error.
+TEST(JsonlCli, RankThreadsFlag) {
+  std::string b = build_burrow("cli_rankthreads");
+  int code;
+  // elapsed_ms is timing noise; drop that line before comparing runs.
+  auto strip_elapsed = [](const std::string &s) {
+    std::string out;
+    for (const auto &l : lines(s))
+      if (l.find("\"elapsed_ms\"") == std::string::npos)
+        out += l + "\n";
+    return out;
+  };
+  std::string base = run(std::string(kQueryBin) + " --burrow " + b +
+                             " --text fox --ranker ssr --rank-threads 1",
+                         &code);
+  ASSERT_EQ(code, 0) << base;
+  ASSERT_NE(base.find("\"result_count\": 2"), std::string::npos) << base;
+  for (const std::string n : {"0", "4"}) {
+    std::string out = run(std::string(kQueryBin) + " --burrow " + b +
+                              " --text fox --ranker ssr --rank-threads " + n,
+                          &code);
+    EXPECT_EQ(code, 0) << out;
+    EXPECT_EQ(strip_elapsed(out), strip_elapsed(base)) << "--rank-threads " << n;
+  }
+  std::string cover = run(std::string(kQueryBin) + " --burrow " + b +
+                              " --cover fox --rank-threads 4",
+                          &code);
+  EXPECT_EQ(code, 0) << cover;
+  run(std::string(kQueryBin) + " --burrow " + b +
+          " --text fox --rank-threads junk",
+      &code);
+  EXPECT_NE(code, 0);
+}

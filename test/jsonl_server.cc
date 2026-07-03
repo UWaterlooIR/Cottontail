@@ -5,7 +5,10 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -57,6 +60,32 @@ pid_t start_server(const std::string &burrow, int port) {
     _exit(127); // exec failed
   }
   return pid;
+}
+
+// TASK-25 variant: pass --rank-threads and capture the server's stderr (the
+// startup line logs the resolved rank_threads policy) into `errfile`.
+pid_t start_server_rank(const std::string &burrow, int port,
+                        const std::string &rank_threads,
+                        const std::string &errfile) {
+  pid_t pid = ::fork();
+  if (pid == 0) {
+    if (std::freopen(errfile.c_str(), "w", stderr) == nullptr)
+      _exit(126);
+    std::string ports = std::to_string(port);
+    ::execl(kServerBin, kServerBin, "--burrow", burrow.c_str(), "--host",
+            "127.0.0.1", "--port", ports.c_str(), "--threads", "4",
+            "--rank-threads", rank_threads.c_str(), "--token", kToken,
+            static_cast<char *>(nullptr));
+    _exit(127); // exec failed
+  }
+  return pid;
+}
+
+std::string slurp(const std::string &path) {
+  std::ifstream f(path);
+  std::stringstream ss;
+  ss << f.rdbuf();
+  return ss.str();
 }
 } // namespace
 
@@ -348,4 +377,85 @@ TEST(JsonlServer, ConcurrentRequests) {
   ::kill(pid, SIGTERM);
   int status = 0;
   ::waitpid(pid, &status, 0);
+}
+
+// TASK-25: --rank-threads is accepted, the startup line logs the resolved
+// policy (explicit N; the auto-budget default logs "(auto)"), and queries over
+// all three ranked tools still answer correctly.
+TEST(JsonlServer, RankThreadsFlagAndStartupLog) {
+  std::string burrow = tmpdir() + "/server_rank.burrow";
+  std::string build = std::string(kIndexBin) + " --input test/jsonl/plain --burrow " +
+                      burrow + " --overwrite >/dev/null 2>&1";
+  ASSERT_EQ(std::system(build.c_str()), 0);
+
+  int port = free_port();
+  std::string errfile = tmpdir() + "/server_rank.stderr";
+  pid_t pid = start_server_rank(burrow, port, "3", errfile);
+  ASSERT_GT(pid, 0);
+
+  httplib::Client cli("127.0.0.1", port);
+  cli.set_connection_timeout(2, 0);
+  bool up = false;
+  for (int i = 0; i < 100 && !up; ++i) {
+    if (auto r = cli.Get("/healthz"); r && r->status == 200)
+      up = true;
+    else
+      ::usleep(50 * 1000);
+  }
+  ASSERT_TRUE(up) << "server did not start: " << slurp(errfile);
+
+  EXPECT_NE(slurp(errfile).find("rank_threads=3"), std::string::npos)
+      << slurp(errfile);
+
+  const httplib::Headers auth = {
+      {"Authorization", std::string("Bearer ") + kToken}};
+  {
+    auto r = cli.Post("/tools/search_text", auth,
+                      R"({"query":"fox","ranker":"ssr"})", "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["result_count"].get<int>(), 2) << r->body;
+  }
+  {
+    auto r = cli.Post("/tools/cover_search", auth, R"({"query":"fox"})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+  }
+  {
+    auto r = cli.Post("/tools/tiered_query_search", auth,
+                      R"({"tiers":["\"quick brown fox\"","fox"]})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+  }
+  ::kill(pid, SIGTERM);
+  int st;
+  ::waitpid(pid, &st, 0);
+
+  // Default (no flag) resolves the auto-budget and says so in the log.
+  port = free_port();
+  std::string errfile2 = tmpdir() + "/server_rank_auto.stderr";
+  pid = start_server_rank(burrow, port, "0", errfile2);
+  ASSERT_GT(pid, 0);
+  up = false;
+  httplib::Client cli2("127.0.0.1", port);
+  cli2.set_connection_timeout(2, 0);
+  for (int i = 0; i < 100 && !up; ++i) {
+    if (auto r = cli2.Get("/healthz"); r && r->status == 200)
+      up = true;
+    else
+      ::usleep(50 * 1000);
+  }
+  ASSERT_TRUE(up) << "server did not start: " << slurp(errfile2);
+  std::string log = slurp(errfile2);
+  EXPECT_NE(log.find("rank_threads="), std::string::npos) << log;
+  EXPECT_NE(log.find("(auto)"), std::string::npos) << log;
+  ::kill(pid, SIGTERM);
+  ::waitpid(pid, &st, 0);
 }
