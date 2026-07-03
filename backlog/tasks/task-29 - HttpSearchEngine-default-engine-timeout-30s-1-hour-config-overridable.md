@@ -1,11 +1,11 @@
 ---
 id: TASK-29
 title: 'HttpSearchEngine: default engine timeout 30s -> 1 hour, config-overridable'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-03 13:25'
-updated_date: '2026-07-03 15:07'
+updated_date: '2026-07-03 15:09'
 labels: []
 dependencies: []
 priority: medium
@@ -30,9 +30,9 @@ Tests: default is 3600 when config omits it; config value is honored; existing e
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 HttpSearchEngine's default timeout is 3600s, with the docstring explaining that abandoned requests keep computing server-side
-- [ ] #2 [cottontail_http_json_server] timeout_s overrides it via build_search_engine; documented in config.example.toml
-- [ ] #3 Tests cover the default and the config override; the full isj suite passes
+- [x] #1 HttpSearchEngine's default timeout is 3600s, with the docstring explaining that abandoned requests keep computing server-side
+- [x] #2 [cottontail_http_json_server] timeout_s overrides it via build_search_engine; documented in config.example.toml
+- [x] #3 Tests cover the default and the config override; the full isj suite passes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -51,3 +51,9 @@ Tests: default is 3600 when config omits it; config value is honored; existing e
    4.3 Full isj suite.
 5. Finalize: notes, ACs, commit, push (rides PR #9).
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented on claude/ssr-parallel-etc: HttpSearchEngine default timeout is httpx.Timeout(3600, connect=10) with the rationale in the docstring; [cottontail_http_json_server].timeout_s overrides via build_search_engine; config.example.toml documents it. Tests cover the default (read/write/pool 3600, connect 10) and the override; isj suite 140 passed / 1 skipped.
+<!-- SECTION:FINAL_SUMMARY:END -->
