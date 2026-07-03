@@ -655,17 +655,25 @@ bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
   std::vector<std::vector<CoverRanked>> rankings(ranges.size());
   std::vector<long> totals(ranges.size(), 0), unjudgeds(ranges.size(), 0);
   std::vector<std::string> errors(ranges.size());
-  std::vector<bool> okay(ranges.size(), false);
+  // NOT vector<bool>: that is a packed bitfield, and concurrent workers writing
+  // adjacent elements race on the shared word (bits get clobbered, making a
+  // successful worker look failed). vector<char> gives each worker its own byte.
+  std::vector<char> okay(ranges.size(), 0);
   std::vector<std::thread> workers;
   workers.reserve(ranges.size());
   for (size_t i = 0; i < ranges.size(); i++)
     workers.emplace_back(std::thread([&, i] {
       std::shared_ptr<Warren> local = warren->clone(&errors[i]);
-      if (local == nullptr)
+      if (local == nullptr) {
+        errors[i] = "worker warren clone failed: " +
+                    (errors[i].empty() ? "(no error reported)" : errors[i]);
         return;
+      }
       okay[i] = cover_ranking(local, query, depth, exclude, &rankings[i],
                               &totals[i], &unjudgeds[i], &errors[i],
                               ranges[i].first, ranges[i].second);
+      if (!okay[i] && errors[i].empty())
+        errors[i] = "worker cover_ranking failed with no error reported";
     }));
   for (auto &worker : workers)
     worker.join();
