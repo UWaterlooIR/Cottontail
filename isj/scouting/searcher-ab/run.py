@@ -44,6 +44,7 @@ QUESTIONS = {
 
 MAX_JUDGMENTS = 250
 MAX_QUERIES = 50
+JUDGER_CONCURRENCY = 25
 
 
 def arm_config(cls: str) -> str:
@@ -54,6 +55,12 @@ def arm_config(cls: str) -> str:
                r'\g<1>reasoning_effort = "medium"', s, count=1, flags=re.S)
     s = re.sub(r'(\[agents\.searcher\][^[]*?)max_queries = \d+',
                rf'\g<1>max_queries = {MAX_QUERIES}', s, count=1, flags=re.S)
+    # Judger: medium effort (same level playing field as the searchers) and
+    # concurrency 25 (Mark, 2026-07-05).
+    s = re.sub(r'(\[agents\.judger\][^[]*?)reasoning_effort = "[^"]*"',
+               r'\g<1>reasoning_effort = "medium"', s, count=1, flags=re.S)
+    s = re.sub(r'(\[agents\.judger\][^[]*?)concurrency = \d+',
+               rf'\g<1>concurrency = {JUDGER_CONCURRENCY}', s, count=1, flags=re.S)
     s = re.sub(r'base_url = "http://127\.0\.0\.1:8080"',
                'base_url = "http://127.0.0.1:8081"', s)
     if re.search(r'^\s*max_judgments\s*=', s, re.M):
