@@ -91,14 +91,22 @@ def main():
                     continue
                 out = results / arm / qid
                 t0 = time.time()
-                p = subprocess.run(
-                    [sys.executable, "-m", "isj_agent.cli",
-                     "--config", str(cfg_path), "--question", question,
-                     "--out", str(out), "--overwrite"],
-                    cwd=ISJ, capture_output=True, text=True, timeout=3600)
-                rec = {"arm": arm, "qid": qid, "ok": p.returncode == 0,
-                       "wall_s": round(time.time() - t0, 1),
-                       "tail": (p.stdout + p.stderr)[-400:]}
+                try:
+                    p = subprocess.run(
+                        [sys.executable, "-m", "isj_agent.cli",
+                         "--config", str(cfg_path), "--question", question,
+                         "--out", str(out), "--overwrite"],
+                        # Generous safety cap only -- slow runs are data, not
+                        # errors (phrase-pathology turns can exceed an hour);
+                        # a cap hit is RECORDED and the loop continues.
+                        cwd=ISJ, capture_output=True, text=True, timeout=4 * 3600)
+                    rec = {"arm": arm, "qid": qid, "ok": p.returncode == 0,
+                           "wall_s": round(time.time() - t0, 1),
+                           "tail": (p.stdout + p.stderr)[-400:]}
+                except subprocess.TimeoutExpired as te:
+                    rec = {"arm": arm, "qid": qid, "ok": False,
+                           "wall_s": round(time.time() - t0, 1),
+                           "tail": f"HARNESS CAP: exceeded {te.timeout}s"}
                 mf.write(json.dumps(rec) + "\n")
                 mf.flush()
                 print(f"[{arm}/{qid}] ok={rec['ok']} {rec['wall_s']}s", flush=True)
