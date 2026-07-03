@@ -1,11 +1,11 @@
 ---
 id: TASK-24
 title: 'Sync fork with upstream claclark/Cottontail (30 commits, through 328f4d35)'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-03 00:36'
-updated_date: '2026-07-03 01:14'
+updated_date: '2026-07-03 01:16'
 labels: []
 dependencies: []
 priority: high
@@ -44,10 +44,8 @@ Deliverable: PR from claude/sync-with-charlie to main; no direct commits to main
 - [x] #5 bazel test //test:tests //test:hazel_test is green and the isj Python test suite passes
 - [x] #6 Functional smoke: ssr-server + apps/ssr-client.py over Scrapheap/climbmix-1000-utf8-porter.burrow with container/content ':item' and docno ':docno' returns ranked results with REAL docnos (shard_*_*) and the document-by-docno op works. Scale smoke: same over Scrapheap/climbmix-1M-porter.burrow with docno ':item' (degenerate identity expected — cp-native index); wiring and rough timing in task notes. Full cp-native parallel-SSR adoption is TASK-25, not this task
 - [x] #7 docs/design/reference-specs/hazel-format.md defers to ai/hazel.md; CLAUDE.md directory map and Hazel caution updated
-- [ ] #8 PR opened from claude/sync-with-charlie to main; no commits made directly to main
+- [x] #8 PR opened from claude/sync-with-charlie to main; no commits made directly to main
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -99,3 +97,9 @@ Merge of upstream/main committed as 1f27a69 (merged c239bc7 — one docs-only co
 
 SSR smoke complete. Functional (climbmix-1000-utf8-porter.burrow, wiring ':item' ':item' ':docno'): query/next/document ops all work via apps/ssr-client.py, real docnos (e.g. shard_00554_26399). NOTE: that burrow is NOT small — result addresses run to ~23.5B tokens (1000 source shards, not 1000 docs). Scale (climbmix-1M-porter.burrow, docno ':item' degenerate): works, 12-20s/query warm. 100M shard (/share/indexes/...): works, ~50s cold single query. Timing caveat discovered: ssr-server ranks to fixed DEPTH=1000 and builds a fresh ':docno'/docno-GCL hopper (full posting-list load) PER RESULT in make_result/docno_in — that, not parallel_ssr, dominates latency on huge burrows (our own cottontail-jsonl-query --ranker ssr --top-k 3 does the same query in ~2.2s on the same big burrow). Relevant design input for TASK-25 (cp-native adoption avoids the per-result docno lookup entirely). All ssr-server processes stopped; the long-running dev jsonl-server was left untouched.
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Merged upstream claclark/Cottontail main (c239bc7, 31 commits) into claude/sync-with-charlie per the approved resolution policy; PR #8 opened to main (https://github.com/UWaterlooIR/Cottontail/pull/8). Upstream's gcl/ restructure, parallel_ssr, ssr apps, Hazel/Bigwig integration, and unary GCL combinators are in; our AGENTS.md, TASK-7 null-guards (ported into gcl/parse.cc), and all fork code are preserved. ai/ is restored at top level with a CLAUDE.md non-authoritative fence; archive/ai/ removed; hazel-format.md is a pointer stub to ai/hazel.md. Verified: exclusion build clean (zero ripple fixes), bazel //test:all 5/5 pass, isj 118 passed/1 skipped, ssr-server smoke on climbmix-1000-utf8-porter (real :docno identity, all three ops), climbmix-1M, and the 100M shard. Follow-up: TASK-25 (cp-native parallel_ssr in our server; smoke revealed ssr-server's DEPTH=1000 + per-result docno hopper cost, 12-50s/query on big burrows). Final backlog state committed post-push; the PR branch carries the checked-AC file except this finalization edit, which rides on the branch until merged.
+<!-- SECTION:FINAL_SUMMARY:END -->
