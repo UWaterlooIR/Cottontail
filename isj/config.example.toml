@@ -44,6 +44,9 @@ class = "isj_agent.agents.searcher.Searcher"
 llm = "default"
 # To author TIERED precise->broad GCL cascades instead of single covers, swap in:
 #   class = "isj_agent.agents.tiered_searcher.TieredSearcher"
+# Or to author the tiers as a MultiText DSL PROGRAM (macros + @rank; compiled
+# server-side, compile errors bounce back for self-correction -- TASK-22):
+#   class = "isj_agent.agents.mt_tiered_searcher.MultiTextTieredSearcher"
 # It exposes the tiered_query_search tool (needs the cottontail server built after
 # TASK-19); everything else here (llm, reasoning_effort, fetch_k, window, max_queries)
 # applies unchanged. KEEP reasoning_effort = "medium" for the tiered searcher: at

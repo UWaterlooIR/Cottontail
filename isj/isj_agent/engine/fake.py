@@ -62,6 +62,23 @@ class FakeEngine:
         )
         return self._next(set(exclude))
 
+    def multitext_search(
+        self,
+        program: str,
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        # Server-side compilation is faked the same way as the cascade: the next
+        # scripted entry is returned (or raised, for a scripted EngineError whose
+        # message stands in for the compiler diagnostics). Recorded with a
+        # `program` key so tests can tell the three search flavors apart.
+        self.calls.append(
+            {"program": program, "top_k": top_k, "exclude": list(exclude), "window": window}
+        )
+        return self._next(set(exclude))
+
     def _next(self, exclude: set[int]) -> SearchResponse:
         if self._i >= len(self._script):
             # Script exhausted: a dry response so the agent loop terminates.

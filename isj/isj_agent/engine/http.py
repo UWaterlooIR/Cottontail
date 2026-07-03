@@ -98,6 +98,28 @@ class HttpSearchEngine:
             raise EngineError(_server_error(r))
         return SearchResponse.model_validate(r.json())
 
+    def multitext_search(
+        self,
+        program: str,
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        body = {
+            "program": program,
+            "top_k": top_k,
+            "exclude": list(exclude),
+            "window": window,
+        }
+        try:
+            r = self._client.post("/tools/multitext_tiered_search", json=body)
+        except httpx.HTTPError as exc:
+            raise EngineError(f"multitext_tiered_search transport error: {exc}") from exc
+        if r.status_code != 200:
+            raise EngineError(_server_error(r))
+        return SearchResponse.model_validate(r.json())
+
     def read(self, cp: int) -> str | None:
         try:
             r = self._client.post("/tools/get_document", json={"cp": cp})

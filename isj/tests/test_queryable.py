@@ -1,7 +1,7 @@
 import pytest
 
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.queryable import CoverQuery, Queryable, TieredQuery
+from isj_agent.protocol.queryable import CoverQuery, MultiTextProgram, Queryable, TieredQuery
 from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
 
 
@@ -112,3 +112,54 @@ def test_tiered_single_tier_execute_still_uses_tiered_search():
     eng = FakeEngine([resp])
     TieredQuery(("(^ a b)",)).execute(eng, top_k=3, exclude=[], window=75)
     assert eng.calls[0] == {"tiers": ["(^ a b)"], "top_k": 3, "exclude": [], "window": 75}
+
+
+# --- MultiTextProgram (TASK-22) ---------------------------------------------
+
+PROGRAM = 'b0 = "black" <> "bear*"\nq0 = b0\n@rank q0 b0\n'
+
+
+def test_multitext_is_a_queryable():
+    assert issubclass(MultiTextProgram, Queryable)
+
+
+def test_multitext_tool_schema_named_submit_tiered_query():
+    s = MultiTextProgram.tool_schema()
+    assert s["function"]["name"] == "submit_tiered_query"
+    assert MultiTextProgram.tool_name == "submit_tiered_query"
+    assert s["function"]["parameters"]["required"] == ["program"]
+    assert s["function"]["parameters"]["properties"]["program"]["type"] == "string"
+
+
+def test_multitext_from_tool_arguments_roundtrip():
+    q = MultiTextProgram.from_tool_arguments({"program": PROGRAM})
+    assert q == MultiTextProgram(PROGRAM)
+
+
+def test_multitext_from_tool_arguments_missing_key_raises():
+    with pytest.raises(KeyError):
+        MultiTextProgram.from_tool_arguments({"tiers": ["(^ a)"]})
+
+
+@pytest.mark.parametrize("bad", [{"program": ""}, {"program": "   \n"}, {"program": 7}])
+def test_multitext_from_tool_arguments_invalid_shape_raises(bad):
+    with pytest.raises((ValueError, TypeError)):
+        MultiTextProgram.from_tool_arguments(bad)
+
+
+def test_multitext_trace_and_string_forms():
+    q = MultiTextProgram(PROGRAM)
+    assert q.trace_arguments() == {"program": PROGRAM}
+    assert q.query_string() == PROGRAM  # heavy traces: the program verbatim
+
+
+def test_multitext_execute_forwards_program_to_engine_multitext_search():
+    resp = SearchResponse(
+        total_matches=2, unjudged_matches=2,
+        atom_counts=[AtomCount(term="bear*", count=9)],
+        results=[Hit(rank=1, score=1.0, cp=10, summary="s")],
+    )
+    eng = FakeEngine([resp])
+    out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=[3], window=60)
+    assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": [3], "window": 60}
+    assert out.results[0].cp == 10
