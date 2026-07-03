@@ -16,5 +16,6 @@
 - [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
 - [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace
+- [pkill self-match footgun](pkill-self-match-footgun.md) — -f patterns match the wrapper shell itself (exit 143/144); use [b]racket patterns or exact PIDs
 - [Interruption resets consent](interruption-resets-consent.md) — a mid-task question/interrupt pauses work: answer, propose, WAIT; never silently resume
 - [Leave dev server running](leave-dev-server-running.md) — don't ask about killing the 100M cottontail-jsonl-server; leave it up unless something server-side changes
