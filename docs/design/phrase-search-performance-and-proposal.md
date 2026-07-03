@@ -453,3 +453,49 @@ We will not implement until you have weighed in on (1) and the overall approach.
   L_/R_) · `src/gcl.cc:136` (`Containing::rho_`) · `src/gcl.cc:34,38,52`
   (`Combinational` tau_/rho_/ohr_) · `src/array_hopper.cc:14` (`hopping`) ·
   `src/array_hopper.h` (`ArrayHopper::make`).
+
+---
+
+## Addendum (2026-07-04) — `(materialize …)` wrapping tested at 100M scale: rejected
+
+After the upstream sync brought in Clarke's `(materialize X)` operator
+(`gcl/materialize.{h,cc}`: lazily enumerate `X` once, snapshot to an array,
+answer later probes by binary search — his `ai/improvements.md` suggests exactly
+this manual fix for our query shape), we scouted **blanket phrase-wrapping** —
+every multi-atom quoted phrase wrapped in `(materialize …)` — as a candidate
+app-layer fix (backlog TASK-28). A 1M-burrow validation looked promising
+(killer tier 6.0 s → 1.25 s, identical results). **At 100M scale it fails:**
+
+| case (100M, `top_k=200`, `rank_threads=8`) | plain | wrapped |
+|---|---|---|
+| tier1 baseline (no deadly phrase) | 15.1 s | — |
+| `+ "camp placement"` killer | 728.4 s | 353.8 s (2.1×; still 24× over baseline) |
+| tier2 (all three added phrases) | ~712 s (doc.) | 519.5 s |
+| facet with reversed `"selection campsite"` | ~806 s (doc.) | 256.4 s |
+| broad many-results query | **4.0 s** | **127.5 s (32× worse)** |
+| `"camp placement"` standalone | 0.5 s | 3.8 s (7.6× worse) |
+
+(Data: `isj/scouting/multitext-dsl-2/captured/2026-07-04-materialize-100m.jsonl`;
+harness `…/run_materialize_100m.py`. Server freshly restarted per run set;
+client timeouts disabled.)
+
+**Why it fails.** `Materialize` enumerates the wrapped expression over the
+*full shard*, unconditionally — and in our parallel ranking
+(`parallel_cover_ranking`, TASK-25), *once per rank-worker*, since workers build
+their own hoppers. Plain evaluation never pays that: the cover recurrence only
+**probes** the phrase at candidate positions, and the range split already
+confines each worker's re-driving to its slice. So wrapping converts cheap lazy
+probing into mandatory global enumeration — a `"food storage"`-class phrase
+(frequent first word) costs ~2 minutes to enumerate at 100M. Wrapping wins only
+when *this query's* accumulated re-drive cost exceeds the phrase's full
+enumeration cost, which cannot be known in advance: the ρ trigger's denominator
+(phrase occurrence count) is only learned *by* enumerating.
+
+**Consequence for the proposal above.** This strengthens Option A
+(**rarest-term driving** inside `FollowedBy`): it fixes the per-probe cost at
+the source, needs no cost model, adds no global enumeration, and composes with
+parallel ranking. Materialization remains attractive only as a *planner*
+decision for provably-cheap-to-enumerate subexpressions (Clarke's optimizer
+checkpoint reaches the same "not ready to be default-on" conclusion from the
+other direction), or with a range-aware / shared-across-workers `Materialize`,
+which would require engine changes anyway.

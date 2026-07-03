@@ -1,12 +1,12 @@
 ---
 id: TASK-28
 title: >-
-  cover_rewrite: wrap multi-word phrases in (materialize ...) — Charlie's
-  operator kills the phrase re-drive blow-up
-status: To Do
+  REJECTED — cover_rewrite: wrap multi-word phrases in (materialize ...) (100M
+  scout: net loss)
+status: Done
 assignee: []
 created_date: '2026-07-03 13:20'
-updated_date: '2026-07-03 13:35'
+updated_date: '2026-07-03 14:31'
 labels: []
 dependencies: []
 priority: high
@@ -73,3 +73,26 @@ Benefits all three searchers (cover_search, tiered_query_search, multitext_tiere
    5.3 The captured 6-tier A/B request against a throwaway server: completes well under 30s; record timing in task notes.
 6. Finalize: notes, ACs, commit, push (rides PR #9).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+100M SCOUT (2026-07-04, Mark-requested; harness isj/scouting/multitext-dsl-2/run_materialize_100m.py, data captured/2026-07-04-materialize-100m.jsonl; fresh 100M server, rank_threads=8, top_k=200, client timeouts disabled):
+
+  tier1 baseline (no deadly phrase)      plain  15.1s
+  '+camp placement' killer               plain 728.4s   wrapped 353.8s  (2.1x — still 24x worse than tier1)
+  tier2 (all three deadly phrases)       doc  ~712s     wrapped 519.5s
+  reversed-phrase facet                  doc  ~806s     wrapped 256.4s
+  broad many-results query               plain   4.0s   wrapped 127.5s  (32x WORSE)
+  'camp placement' standalone            plain   0.5s   wrapped   3.8s  (7.6x worse)
+
+VERDICT: REJECTED. Blanket wrapping does not extrapolate from the 1M validation. Mechanism: Materialize enumerates the phrase over the FULL shard, unconditionally, once per rank-worker — but plain evaluation only PROBES the phrase at candidate positions, and TASK-25's range split already confines each worker's re-driving to its slice. Wrapping therefore forces expensive global work (a 'food storage'-class phrase costs ~2 min to enumerate on 100M) exactly where lazy evaluation would skip it. It wins only when THIS query's re-drive cost exceeds the phrase's full-enumeration cost — unknowable in advance (the rho trigger's denominator is the phrase count, which requires the enumeration).
+
+Path forward: rarest-term driving inside FollowedBy/Containing (docs/design/phrase-search-performance-and-proposal.md, now carrying a results addendum) — fixes cost at the source with no heuristics, no per-worker enumeration. Decision pending with Mark: send to Charlie / implement in fork / both.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+REJECTED after the 100M scout: materialize-wrapping is a 2x dent on the documented killer (354s vs 728s, still 24x worse than baseline) and a 7-32x REGRESSION on ordinary phrase queries, because Materialize's full-shard per-worker enumeration replaces lazy positional probing. Details in notes; data in isj/scouting/multitext-dsl-2/captured/2026-07-04-materialize-100m.jsonl; addendum added to docs/design/phrase-search-performance-and-proposal.md. Successor direction: rarest-term FollowedBy driving (the existing proposal to Charlie).
+<!-- SECTION:FINAL_SUMMARY:END -->
