@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-03 13:20'
-updated_date: '2026-07-03 13:23'
+updated_date: '2026-07-03 13:29'
 labels: []
 dependencies: []
 priority: high
@@ -41,3 +41,34 @@ Benefits all three searchers (cover_search, tiered_query_search, multitext_tiere
 - [ ] #4 atom_counts/cover_leaves are unaffected (materialize never appears as a term); unit tests cover the wrap shapes, the no-wrap cases, punctuation-split phrases, boundary safety, and parity; bazel //test:all + isj suite green
 - [ ] #5 The tiered/multitext request that timed out the A/B completes well under the 30s engine timeout against a live server, recorded in task notes
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+1. Setup
+   1.1 Mark TASK-28 In Progress. Current branch claude/ssr-parallel-etc.
+
+2. cover_rewrite: tokenizer-based wrapping of QUOTED phrases (apps/jsonl_core.cc)
+   2.1 Space guard first (fixes the glue class once): a tiny emit helper — before appending any '(materialize ...' form, if *out is nonempty and its last char is not whitespace or '(', append ' '. (Regression: input like lipid*\"a b\" without a separator must not emit lipid*(materialize.)
+   2.2 Star-free branch of emit_phrase: atoms = tokenizer->split(phrase); if atoms.size() >= 2 emit (materialize \"<phrase>\") via the guard (the parser lowers the quoted phrase inside the operator); else keep today's quoted pass-through. This catches \"hi-tech\" (hi, tech) and \"u.s.a.\" (u, s, a) — punctuation-split multi-atom phrases.
+   2.3 Star branch: the existing atoms.size() >= 2 arm's emitted (>> (# n) (... atoms)) gets wrapped as (materialize (>> (# n) (... atoms))); the atoms.size() == 1 arm (bare family atom) stays unwrapped.
+   2.4 Export cover_rewrite in jsonl_core.h (it is currently file-internal) so unit tests can assert the REWRITTEN STRING shapes directly, not just end behavior.
+
+3. MultiText tier post-pass: wrap the DSL's <> output (Mark, 2026-07-04: 'Both')
+   3.1 New exported helper materialize_followed_by(s_expression) -> string: a small recursive-descent walk over Mt's well-formed prefix output (balanced parens, quoted strings opaque). Rule: wrap the OUTERMOST pathological unit — a (<< X (# n)) whose X contains a (... ...) wraps WHOLE as (materialize (<< X (# n))); a bare (... ...) group wraps itself. Idempotent: never wrap a node whose parent is already materialize.
+   3.2 compile_multitext applies it to each compiled tier before handing tiers to the cascade. The JSON-tiers path is untouched (its quoted phrases are covered by 2.x; its prompt does not teach raw (... ) forms).
+   3.3 NOTE in code: parallel_cover_ranking workers each materialize their own copy (extra CPU, same wall-clock); sharing is a possible later refinement (upstream's 'substitute bindings' sketch).
+
+4. Unit tests (test/jsonl.cc)
+   4.1 Rewrite shapes via exported cover_rewrite: multi-word phrase -> materialized; \"hi-tech\" and \"u.s.a.\" -> materialized; single-token quoted phrase -> NOT wrapped; starred phrase -> materialized (>> ...); single starred word -> bare atom unwrapped; the lipid*-adjacent glue regression parses (hopper_from_gcl non-null on the rewritten string).
+   4.2 materialize_followed_by shapes: (... a b) wrapped; (<< (... a b) (# 3)) wrapped as a whole; already-materialized input unchanged; non-phrase trees untouched.
+   4.3 Behavior parity on the small fixture: cover_search and multitext_tiered_search results identical before/after the change for phrase queries (build both ways? — the 'before' is the old behavior: assert instead that wrapped queries return the SAME results as the semantically-equal unwrapped GCL run through search_gcl/jsonl_query, plus the existing phrase tests all stay green unchanged — they pin current matching behavior).
+   4.4 atom_counts unaffected: leaves come from the ORIGINAL text; a wrapped query's atom_counts contain no 'materialize' term.
+   4.5 bazel test //test:all + full isj suite.
+
+5. Real-burrow validation (ACs 2/3/5; read-only; throwaway server on a free port — the dev servers stay as Mark left them)
+   5.1 Killer-tier parity + timing via CLI on climbmix-1M (already measured by hand: 6.0s -> 1.25s; re-verify through the real cover_rewrite path with the ORIGINAL quoted-phrase tier text, not my hand-wrapped s-expression).
+   5.2 Punctuation cases on the burrow: \"hi-tech\" / \"u.s.a.\" parity wrapped vs unwrapped.
+   5.3 The captured 6-tier A/B request against a throwaway server: completes well under 30s; record timing in task notes.
+6. Finalize: notes, ACs, commit, push (rides PR #9).
+<!-- SECTION:PLAN:END -->
