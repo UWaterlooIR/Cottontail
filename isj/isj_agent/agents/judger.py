@@ -68,7 +68,7 @@ class Judger:
         model: str,
         *,
         concurrency: int = 15,
-        reasoning_effort: str | None = "high",
+        reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
     ) -> None:
         self.client = client

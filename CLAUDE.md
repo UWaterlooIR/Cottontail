@@ -62,7 +62,7 @@ Rules:
 Cottontail is the C++ reference implementation of **Annotative Indexing**, a
 unified indexing framework (inverted index + column store + object store + graph
 DB) built on annotations of the form `<feature, (p, q), value>`. The full paper
-is in `docs/Annotative-Indexing-IRRJ-Clarke-2025.{md,pdf}` and is the best source
+is in `docs/papers/Annotative-Indexing-IRRJ-Clarke-2025.{md,pdf}` and is the best source
 for the concepts.
 
 ## Prerequisites
@@ -131,7 +131,7 @@ Real binaries (build then run from `bazel-bin/apps/`):
 
 **JSONL search stack (index → query → server → agent).** How to build and run
 these — with copy-paste commands — is in
-[docs/running-the-search-stack.md](docs/running-the-search-stack.md), the **single
+[docs/design/reference-specs/running-the-search-stack.md](docs/design/reference-specs/running-the-search-stack.md), the **single
 source** for running them (it links on to the design specs). Don't duplicate run
 instructions elsewhere; point at that guide.
 
@@ -166,7 +166,7 @@ Warren implementations:
 | `SimpleWarren` | Static flat-file burrow, single-transaction batch update. |
 | `Fiver` | Mutable in-memory transaction shard (an "update Warren"). |
 | `Bigwig` | Dynamic Warren over `Fiver` shards + shared `Fluffle` state. |
-| `Hazel` | Immutable single-file shard built from Fivers (format: `docs/hazel-format.md`). **⚠️ Work in progress — not ready for use** (per Charlie Clarke, 2026-06-12). Don't build features on the Hazel path; prefer `SimpleWarren` or `Bigwig`. |
+| `Hazel` | Immutable single-file shard built from Fivers (format: `docs/design/reference-specs/hazel-format.md`). **⚠️ Work in progress — not ready for use** (per Charlie Clarke, 2026-06-12). Don't build features on the Hazel path; prefer `SimpleWarren` or `Bigwig`. |
 
 `meadowlark/` is a higher-level layer (a "meadow" = Bigwig + UTF-8 tokenizer +
 JSON featurizer + zlib/post compression) with pluggable **foragers** (annotation

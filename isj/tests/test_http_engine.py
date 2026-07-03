@@ -76,6 +76,41 @@ def test_search_transport_error_raises_engine_error():
         _engine(handler).search("(^ bear*)")
 
 
+# --- tiered_search (TASK-19) -----------------------------------------------
+
+def test_tiered_search_posts_tiers_body_and_auth_header():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["auth"] = request.headers.get("authorization")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_COVER_JSON)
+
+    eng = _engine(handler, token="secret")
+    resp = eng.tiered_search(["(>> (# 8) (^ black bear*))", "(^ black bear*)"],
+                             top_k=5, exclude=[100, 200], window=50)
+
+    assert seen["path"] == "/tools/tiered_query_search"
+    assert seen["auth"] == "Bearer secret"
+    assert seen["body"] == {
+        "tiers": ["(>> (# 8) (^ black bear*))", "(^ black bear*)"],
+        "top_k": 5, "exclude": [100, 200], "window": 50,
+    }
+    # the response is the SAME cover_search shape (reused CoverResponse/SearchResponse)
+    assert isinstance(resp, SearchResponse)
+    assert resp.total_matches == 3 and resp.results[0].cp == 100
+
+
+def test_tiered_search_non_2xx_raises_engine_error_with_server_message():
+    # a malformed tier fails the whole request -> the server's message bounces back.
+    def handler(request):
+        return httpx.Response(400, json={"error": "tier 0 ((^ bad): unbalanced", "where": "tiered_query_search"})
+
+    with pytest.raises(EngineError, match="tier 0"):
+        _engine(handler).tiered_search(["(^ bad"])
+
+
 # --- read ------------------------------------------------------------------
 
 def test_read_returns_text_when_found():

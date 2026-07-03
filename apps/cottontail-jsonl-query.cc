@@ -19,8 +19,6 @@ using cottontail::jsonl::CoverHit;
 using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::describe_json;
-using cottontail::jsonl::explain_json;
-using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::get_json;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
@@ -31,7 +29,6 @@ void usage(const char *prog) {
             << "  " << prog << " --burrow <path> --text \"<words>\" [options]\n"
             << "  " << prog << " --burrow <path> --gcl \"<expr>\" [options]\n"
             << "  " << prog << " --burrow <path> --cover \"<cover query>\" [--top-k N] [--window N] [--max-covers N] [--max-words N] [--exclude <cp>]...\n"
-            << "  " << prog << " --burrow <path> --explain --gcl \"<expr>\"\n"
             << "  " << prog << " --burrow <path> --count --text \"<words>\"\n"
             << "  " << prog << " --burrow <path> --get <cp>\n"
             << "  " << prog << " --describe   (print the agent tool schema as JSON)\n"
@@ -61,7 +58,7 @@ void usage(const char *prog) {
 int main(int argc, char **argv) {
   std::string burrow;
   std::string text, gcl, get_cp, cover;
-  bool have_text = false, have_gcl = false, batch = false, explain = false;
+  bool have_text = false, have_gcl = false, batch = false;
   bool have_get = false, count = false, describe = false, have_cover = false;
   std::vector<cottontail::addr> cover_exclude; // --cover: judged cps to skip
   size_t cover_window = 75;               // --cover: summary window in tokens
@@ -104,8 +101,6 @@ int main(int argc, char **argv) {
       describe = true;
     else if (a == "--batch")
       batch = true;
-    else if (a == "--explain")
-      explain = true;
     else if (a == "--ranker")
       base.ranker = next();
     else if (a == "--top-k")
@@ -225,13 +220,6 @@ int main(int argc, char **argv) {
   QuerySpec spec = base;
   spec.is_gcl = have_gcl;
   spec.query = have_gcl ? gcl : text;
-
-  if (explain) {
-    ExplainResult ex = cottontail::jsonl::jsonl_explain(warren, spec);
-    std::cout << explain_json(spec, ex).dump(2) << "\n";
-    warren->end();
-    return ex.parsed_ok ? 0 : 2;
-  }
 
   if (count) {
     long n = 0;

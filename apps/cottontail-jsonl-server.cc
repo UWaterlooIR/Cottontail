@@ -4,7 +4,7 @@
 // docs/cottontail-search-server-spec.md.
 //
 // Endpoints: GET /healthz (public), GET /describe, POST /tools/<name>
-//   for search_text | search_gcl | explain | get_document | count_matches.
+//   for search_text | search_gcl | get_document | count_matches.
 // Auth: a bearer token, optional on loopback, required on a non-loopback bind.
 
 #include <condition_variable>
@@ -26,9 +26,9 @@ namespace {
 using cottontail::jsonl::CoverHit;
 using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
-using cottontail::jsonl::ExplainResult;
 using cottontail::jsonl::Hit;
 using cottontail::jsonl::QuerySpec;
+using cottontail::jsonl::TieredSpec;
 
 // A fixed pool of started read handles (the original Warren + its clones), built
 // once at startup. with() hands one out for the duration of a query and returns
@@ -101,6 +101,18 @@ QuerySpec spec_from(const json &b, bool is_gcl) {
 CoverSpec cover_spec_from(const json &b) {
   CoverSpec s;
   s.query = b.at("query").get<std::string>();
+  s.top_k = b.value("top_k", s.top_k);
+  s.window = b.value("window", s.window);
+  s.max_covers = b.value("max_covers", s.max_covers);
+  s.max_words = b.value("max_words", s.max_words);
+  if (b.contains("exclude"))
+    s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
+  return s;
+}
+
+TieredSpec tiered_spec_from(const json &b) {
+  TieredSpec s;
+  s.tiers = b.at("tiers").get<std::vector<std::string>>();
   s.top_k = b.value("top_k", s.top_k);
   s.window = b.value("window", s.window);
   s.max_covers = b.value("max_covers", s.max_covers);
@@ -353,7 +365,7 @@ int main(int argc, char **argv) {
                              "application/json");
            });
 
-  svr.Post("/tools/explain",
+  svr.Post("/tools/tiered_query_search",
            [&](const httplib::Request &req, httplib::Response &res) {
              log_req(req);
              json b;
@@ -362,17 +374,23 @@ int main(int argc, char **argv) {
              } catch (...) {
                return fail(res, 400, "bad JSON body", "request");
              }
-             QuerySpec spec;
+             TieredSpec spec;
              try {
-               spec = spec_from(b, b.value("is_gcl", false));
+               spec = tiered_spec_from(b);
              } catch (...) {
-               return fail(res, 400, "missing/invalid 'query'", "request");
+               return fail(res, 400, "missing/invalid 'tiers'", "request");
              }
-             ExplainResult ex = provider.with(
+             CoverResponse resp;
+             std::string e;
+             bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
-                   return cottontail::jsonl::jsonl_explain(w, spec);
+                   return cottontail::jsonl::jsonl_tiered_query_search(w, spec,
+                                                                      &resp, &e);
                  });
-             res.set_content(cottontail::jsonl::explain_json(spec, ex).dump(),
+             if (!ok)
+               return fail(res, 400, e, "tiered_query_search");
+             // Reuse the cover_search response shape (identical CoverResponse).
+             res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
                              "application/json");
            });
 

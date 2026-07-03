@@ -1,0 +1,24 @@
+=== per (prompt, query, tool): done/total, timeouts, mean & max terms among completed ===
+prompt query   tool      done/tot  timeout  meanT  maxT
+scout  keyword faceted        4/4        0   18.2    20
+scout  keyword list           4/4        0   15.2    24
+scout  trec    faceted        4/4        0   18.2    25
+scout  trec    list           4/4        0   17.5    23
+task20 keyword faceted        3/4        1   15.7    29
+task20 keyword list           3/4        1   12.3    22
+task20 trec    faceted        4/4        0   22.8    36
+task20 trec    list           1/4        3   15.0    15
+
+=== PROMPT marginal ===
+  scout                done 16/16  timeouts 0  mean_terms 17.3  max 25
+  task20               done 11/16  timeouts 5  mean_terms 17.3  max 36
+
+=== prompt x tool (the interaction) ===
+  scout / list         done 8/8  timeouts 0  mean_terms 16.4  max 24
+  scout / faceted      done 8/8  timeouts 0  mean_terms 18.2  max 25
+  task20 / list        done 4/8  timeouts 4  mean_terms 13.0  max 22
+  task20 / faceted     done 7/8  timeouts 1  mean_terms 19.7  max 36
+
+=== entity-drop (quebec need) ===
+  scout: 4/4 completed quebec runs dropped the entity
+  task20: 4/4 completed quebec runs dropped the entity

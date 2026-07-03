@@ -13,7 +13,7 @@
 // docno/text naming, doc-7).
 //
 // NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
-// jsonl_explain / jsonl_cover_search) still reads ":docno" and is therefore
+// jsonl_cover_search) still reads ":docno" and is therefore
 // INCOMPATIBLE with the cp-native burrow -- it is pending the cp-native query
 // cutover (TASK-5.12 / A3) and is left in source unchanged for now.
 
@@ -138,6 +138,36 @@ struct CoverResponse {
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
                         CoverResponse *out, std::string *error = nullptr);
 
+// ---- tiered_query_search: an ordered cascade of cover tiers (TASK-19) ------
+// The ISJ agent's SECOND search tool. `tiers` is an ordered list of GCL cover
+// queries, most precise first and broadest last, run as a de-duplicated CASCADE:
+// each tier ranks the collection, cross-tier duplicates are dropped, and tighter
+// tiers outrank broader ones. Same word*/summary rules as cover_search, and the
+// SAME CoverResponse shape (reuse cover_results_json). Built entirely from the
+// cover_search helpers -- no new ranking math, no native src/ranking.cc call.
+struct TieredSpec {
+  std::vector<std::string> tiers;  // ordered cover queries, tightest first
+  size_t top_k = 10;
+  std::vector<addr> exclude; // judged/consumed cp integers to skip (cp post-filter)
+  size_t window = 75;        // summary window in tokens
+  size_t max_covers = 1;     // summary is built from the best K covers
+  size_t max_words = 150;    // cap the whole summary to this many tokens (0 = uncapped)
+};
+
+// Run the tiers as a de-duplicated cascade and return the merged ranked list with,
+// per document, a summary built against the TIER THAT SURFACED IT (faithful
+// per-tier biasing). atom_counts is the UNION of every tier's leaves; total_matches
+// / unjudged_matches are the EXACT distinct union across tiers (0 iff every tier is
+// dry). The merged score is tier-monotonic so precise->broad order survives the
+// caller's later (grade, score) tiebreak; a single-tier cascade reduces exactly to
+// cover_search. Returns false (with *error, NAMING the offending tier) on a
+// malformed tier, or a word* tier against a burrow with no stemmed stream --
+// WHOLE-REQUEST-FAIL: one bad tier rejects the whole call (a count-0 atom does not,
+// it simply goes dry).
+bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
+                               const TieredSpec &spec, CoverResponse *out,
+                               std::string *error = nullptr);
+
 // Fetch the full body of the document at `cp` (the :item container start, as
 // returned by search). Sets *found=false (not an error) when `cp` is not an :item
 // start. Returns false only on a hard error. cp-native: no docno, no map.
@@ -149,23 +179,6 @@ bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
 // a hard error (malformed gcl, or --stem against a non-stemmed burrow).
 bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
                  long *count, std::string *error = nullptr);
-
-struct ExplainLeaf {
-  std::string term;
-  addr df = 0;
-  std::string stream = "exact"; // which stream df came from: "exact" | "stemmed"
-};
-
-struct ExplainResult {
-  bool parsed_ok = false;
-  std::string error;
-  std::vector<ExplainLeaf> leaves;
-};
-
-// Dry run: validate the query and return per-leaf document frequencies. Cheap
-// (no ranking); df comes from idx()->count().
-ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
-                            const QuerySpec &spec);
 
 } // namespace jsonl
 } // namespace cottontail

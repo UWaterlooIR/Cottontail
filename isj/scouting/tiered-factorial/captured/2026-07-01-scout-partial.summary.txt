@@ -1,0 +1,24 @@
+
+=== per-cell mean max_terms_per_facet (averaged over needs) -- lower is more disciplined ===
+prompt  query    tool       mean   max   n
+scout   keyword  faceted    18.2    20   4
+scout   keyword  list       15.2    24   4
+scout   trec     faceted    18.2    25   4
+scout   trec     list       17.5    23   4
+task20  trec     list       21.0    21   1
+
+=== marginal mean max_terms_per_facet per factor level (averaged over the other two) ===
+  prompt:
+     scout     mean=  17.3  (n=16)
+     task20    mean=  21.0  (n=1)
+  query:
+     keyword   mean=  16.8  (n=8)
+     trec      mean=  18.2  (n=9)
+  tool:
+     faceted   mean=  18.2  (n=8)
+     list      mean=  16.9  (n=9)
+
+=== entity-drop: 4/4 entity-anchored runs produced a transferable tier ===
+
+=== 1 errored records ===
+  task20/trec/list/quebec_independence: APITimeoutError: Request timed out.

@@ -2,7 +2,7 @@
 
 This is the implementation of the agentic ISJ (Interactive Searching and
 Judging) system described in
-[`docs/agentic-isj-investigation-planner.md`](../docs/agentic-isj-investigation-planner.md).
+[`docs/design/archive/agentic-isj-investigation-planner.md`](../docs/design/archive/agentic-isj-investigation-planner.md).
 Read that document first — it is the authoritative specification.
 
 This is a TREC RAG 2026 primary-system deliverable, not an example or demo.
@@ -90,7 +90,7 @@ uv run --directory isj python -m isj_agent.cli \
 It needs **both** a running vLLM (the `[llm.*]` endpoint) and a running
 `cottontail-jsonl-server` over a `--stem porter` burrow (the
 `[cottontail_http_json_server]` endpoint) — see
-[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md) for
+[`docs/design/reference-specs/running-the-search-stack.md`](../docs/design/reference-specs/running-the-search-stack.md) for
 starting the server. The server is a **local** loopback service (fine to run); an
 off-loopback or external endpoint needs explicit go-ahead.
 
@@ -180,13 +180,14 @@ A thin query author (like the `Analyst`). `Searcher(client, model).propose(messa
 makes one LLM round-trip offering a **single `search` tool** with
 `tool_choice="required"`, and returns the chosen GCL `query` plus the assistant
 message to append. There is **no judge tool and no relevance scale** — the Searcher
-only writes queries. `reasoning_effort` defaults to `"high"` (forwarded via
-`extra_body`). It sees each query's judged outcome as the `search` tool result, so
+only writes queries. `reasoning_effort` defaults to `"medium"` (forwarded via
+`extra_body`; every agent takes it and it is config-overridable). It sees each
+query's judged outcome as the `search` tool result, so
 its conversation *is* its history.
 
 ### Judger — `agents/judger.py` + `judger.md`
 Pointwise full-document judging. `Judger(client, model, *, concurrency=15,
-reasoning_effort="high").judge(intent, docs)` grades each `(summary, full document)`
+reasoning_effort="medium").judge(intent, docs)` grades each `(summary, full document)`
 in its own LLM call — guided-decoded to `Verdict{reason, grade 0-3}` — running a wave
 of up to `concurrency` calls in parallel over a `ThreadPoolExecutor`. The **cp is
 never sent to the model**; the controller pairs each verdict (returned in input
@@ -281,8 +282,9 @@ and the run-total judgment budget split across intents. The engine contract — 
 scripted `FakeEngine` — backs them. The live `HttpSearchEngine` (validated against a
 real server), the run-output writer, and the `Orchestrator` + CLI that wire Analyst →
 per-intent Controller (over `HttpSearchEngine`) → `write_run` are all in place; the
-CLI is the full real-LLM live gate. The judge-serving defaults (`concurrency=15`,
-`reasoning_effort="high"`, `max_doc_chars=50000`) come from the `scout_judger.py`
-serving scout (decode-bound; KV is not the constraint). The earlier proof-of-concept
+CLI is the full real-LLM live gate. The judge-serving knobs (`concurrency=15`,
+`max_doc_chars=50000`, and `reasoning_effort` as the throughput lever — the scout ran
+`"high"`) come from the `scout_judger.py` serving scout (decode-bound; KV is not the
+constraint); `reasoning_effort` now defaults to `"medium"` like every agent. The earlier proof-of-concept
 agent is archived under `archive/example-agent/`, and the full run/usage flow lives in
-[`docs/running-the-search-stack.md`](../docs/running-the-search-stack.md).
+[`docs/design/reference-specs/running-the-search-stack.md`](../docs/design/reference-specs/running-the-search-stack.md).

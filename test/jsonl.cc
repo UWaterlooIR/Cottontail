@@ -63,20 +63,6 @@ bool any_body_has(std::shared_ptr<cottontail::Warren> w,
   return false;
 }
 
-cottontail::addr df_of(const ExplainResult &ex, const std::string &term) {
-  for (const auto &l : ex.leaves)
-    if (l.term == term)
-      return l.df;
-  return -1;
-}
-
-const ExplainLeaf *leaf_of(const ExplainResult &ex, const std::string &term) {
-  for (const auto &l : ex.leaves)
-    if (l.term == term)
-      return &l;
-  return nullptr;
-}
-
 // Write rows (one JSON object per line) into a fresh input dir and index it,
 // optionally with a stemmer. Keeps the stemming fixtures inline (no committed
 // fixture files needed).
@@ -322,38 +308,6 @@ TEST(JsonlQuery, FullText) {
   w->end();
 }
 
-TEST(JsonlExplain, TextDocumentFrequencies) {
-  std::string error;
-  IndexSummary s;
-  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e1"), &s, &error)) << error;
-  auto w = open_burrow(tmp_burrow("e1"), &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec spec;
-  spec.query = "quick fox";
-  ExplainResult ex = jsonl_explain(w, spec);
-  EXPECT_TRUE(ex.parsed_ok);
-  EXPECT_EQ(df_of(ex, "quick"), 2); // doc-001, doc-002
-  EXPECT_EQ(df_of(ex, "fox"), 2);   // doc-001, doc-002
-  w->end();
-}
-
-TEST(JsonlExplain, GclParse) {
-  std::string error;
-  IndexSummary s;
-  ASSERT_TRUE(build("test/jsonl/plain", tmp_burrow("e2"), &s, &error)) << error;
-  auto w = open_burrow(tmp_burrow("e2"), &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec good;
-  good.is_gcl = true;
-  good.query = "(^ quick fox)";
-  EXPECT_TRUE(jsonl_explain(w, good).parsed_ok);
-  QuerySpec bad;
-  bad.is_gcl = true;
-  bad.query = "(^ quick";
-  EXPECT_FALSE(jsonl_explain(w, bad).parsed_ok);
-  w->end();
-}
-
 // --- Stemming (docs/stemming.md) ------------------------------------------
 
 TEST(JsonlStem, StemmedRecallExactDoesNot) {
@@ -465,28 +419,6 @@ TEST(JsonlStem, MissingStreamIsAnError) {
   std::string qerr;
   EXPECT_FALSE(jsonl_query(w, spec, &hits, &qerr)); // no silent fallback
   EXPECT_FALSE(qerr.empty());
-  w->end();
-}
-
-TEST(JsonlStem, DISABLED_ExplainStreamLabeling) {
-  std::string error, burrow;
-  ASSERT_TRUE(build_rows("stem_explain", kStemRows, "porter", &burrow, &error))
-      << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  QuerySpec spec;
-  spec.query = "elephant ox";
-  spec.stem = true;
-  ExplainResult ex = jsonl_explain(w, spec);
-  ASSERT_TRUE(ex.parsed_ok);
-  const ExplainLeaf *el = leaf_of(ex, "elephant");
-  const ExplainLeaf *ox = leaf_of(ex, "ox");
-  ASSERT_NE(el, nullptr);
-  ASSERT_NE(ox, nullptr);
-  EXPECT_EQ(el->stream, "stemmed"); // elephant -> stemmed stream
-  EXPECT_GT(el->df, 0);
-  EXPECT_EQ(ox->stream, "exact"); // ox unstemmable -> exact stream
-  EXPECT_GT(ox->df, 0);
   w->end();
 }
 
@@ -825,6 +757,96 @@ TEST(JsonlCover, AtomCounts) {
   w->end();
 }
 
+// TASK-23: a star-containing quoted phrase whose NON-star word is hyphenated (the
+// utf8 tokenizer splits the hyphen) must still match. Before the fix it compiled to
+// the dead adjacency (>> (# 2) (... hi-tech porter:gear)) and returned 0, because
+// the non-star word "hi-tech" was passed raw instead of tokenizer-split.
+TEST(JsonlCover, StarPhraseTokenizesNonStarWords) {
+  const std::vector<std::string> rows = {
+      R"({"docid":"h-1","contents":"the hi-tech gear was on sale"})",
+      R"({"docid":"h-2","contents":"low tech sandals only"})",
+  };
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("star_phrase", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // hyphenated non-star word + a word* family: must match h-1 (regression: was 0).
+  CoverResponse resp;
+  CoverSpec spec;
+  spec.query = "\"hi-tech gear*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(resp.total_matches, 0);
+
+  // Parity: the space-separated spelling compiles identically and matches the same.
+  CoverResponse resp2;
+  spec.query = "\"hi tech gear*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp2, &error)) << error;
+  EXPECT_EQ(resp.total_matches, resp2.total_matches);
+
+  // Parity with the star-FREE hyphenated phrase (which already tokenized correctly).
+  CoverResponse resp3;
+  spec.query = "\"hi-tech gear\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp3, &error)) << error;
+  EXPECT_GT(resp3.total_matches, 0);
+  w->end();
+}
+
+// TASK-21: a quoted phrase leaf is decomposed with the TOKENIZER (case-fold +
+// punctuation split), not whitespace-split-then-raw, so atom_counts reports the
+// resolved atom (never a spurious 0). Bare terms stay raw; word* stays "word*";
+// the porter: form is never a displayed term.
+TEST(JsonlCover, AtomCountsPhraseTokenized) {
+  const std::vector<std::string> rows = {
+      R"({"docid":"a-1","contents":"yellowstone national park in winter"})",
+      R"({"docid":"a-2","contents":"the hi-tech gear on the u.s.a. trip"})",
+      R"({"docid":"a-3","contents":"a dog sled race across the snow"})",
+  };
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("atoms_phrase", rows, "porter", &burrow, &error)) << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  CoverSpec spec;
+
+  // A capitalized phrase folds to its lowercased atom (was reported as 0).
+  spec.query = "\"Yellowstone\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "yellowstone"), 0);   // resolved (folded) atom, > 0
+  EXPECT_EQ(atom_count(resp, "Yellowstone"), -1);  // never the as-written form
+
+  // A hyphenated phrase word splits into its true tokens (both real, both > 0).
+  spec.query = "\"hi-tech\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(resp.atom_counts.size(), 2u);
+  EXPECT_GT(atom_count(resp, "hi"), 0);
+  EXPECT_GT(atom_count(resp, "tech"), 0);
+
+  // A period-punctuated phrase splits into single-letter tokens.
+  spec.query = "\"u.s.a.\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "u"), 0);
+  EXPECT_GT(atom_count(resp, "s"), 0);
+  EXPECT_GT(atom_count(resp, "a"), 0);
+
+  // A word* INSIDE a phrase stays the "sled*" marker (family count), plain word folds.
+  spec.query = "\"dog sled*\"";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "dog"), 0);
+  EXPECT_GT(atom_count(resp, "sled*"), 0);
+  EXPECT_EQ(atom_count(resp, "porter:sled"), -1); // never the porter: form
+
+  // A BARE capitalized term stays raw -> a genuinely dead atom still reports 0.
+  spec.query = "Yellowstone";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(atom_count(resp, "Yellowstone"), 0);
+
+  // No displayed term is ever the internal porter: form (across any query above).
+  for (const auto &a : resp.atom_counts)
+    EXPECT_EQ(a.term.rfind("porter:", 0), std::string::npos) << a.term;
+  w->end();
+}
+
 // AC#13 / AC#14: a larger window yields a longer summary; rank and score are
 // unchanged (window affects only the summary text, not ranking).
 TEST(JsonlCover, WindowOverrideLongerSummary) {
@@ -1115,5 +1137,220 @@ TEST(JsonlCover, MaxWordsCap) {
   EXPECT_NE(full.find("beta"), std::string::npos);
   EXPECT_EQ(full.find(" ..."), std::string::npos);
   EXPECT_GT(full.size(), capped.size());
+  w->end();
+}
+
+// --- tiered_query_search: an ordered de-duplicated cascade of covers (TASK-19) ---
+
+namespace {
+// A long two-anchor doc: "alpha" near the start and "omega" near the end, far
+// apart, so a small-window summary reveals WHICH tier's cover it was built around.
+const std::vector<std::string> kTierRows = {
+    R"({"docid":"t-1","contents":"alpha one two three four five six seven eight nine ten omega"})",
+};
+
+// The first result hit whose body contains `needle`, or nullptr.
+const CoverHit *tier_hit(std::shared_ptr<cottontail::Warren> w,
+                         const std::vector<CoverHit> &hits,
+                         const std::string &needle) {
+  for (const auto &h : hits)
+    if (body_at(w, h.cp).find(needle) != std::string::npos)
+      return &h;
+  return nullptr;
+}
+} // namespace
+
+// AC#8: a single-tier cascade is byte-for-byte the same as cover_search -- same
+// counts, atom_counts, and per-hit rank/cp/score/summary (the base case).
+TEST(JsonlTiered, SingleTierEqualsCoverSearch) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_base", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  CoverResponse cover;
+  CoverSpec cs;
+  cs.query = "(^ black bear*)";
+  ASSERT_TRUE(jsonl_cover_search(w, cs, &cover, &error)) << error;
+
+  CoverResponse tiered;
+  TieredSpec ts;
+  ts.tiers = {"(^ black bear*)"};
+  ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &tiered, &error)) << error;
+
+  EXPECT_EQ(cover.total_matches, tiered.total_matches);
+  EXPECT_EQ(cover.unjudged_matches, tiered.unjudged_matches);
+  ASSERT_EQ(cover.atom_counts.size(), tiered.atom_counts.size());
+  for (size_t i = 0; i < cover.atom_counts.size(); i++) {
+    EXPECT_EQ(cover.atom_counts[i].term, tiered.atom_counts[i].term);
+    EXPECT_EQ(cover.atom_counts[i].count, tiered.atom_counts[i].count);
+  }
+  ASSERT_EQ(cover.results.size(), tiered.results.size());
+  for (size_t i = 0; i < cover.results.size(); i++) {
+    EXPECT_EQ(cover.results[i].rank, tiered.results[i].rank);
+    EXPECT_EQ(cover.results[i].cp, tiered.results[i].cp);
+    EXPECT_DOUBLE_EQ(cover.results[i].score, tiered.results[i].score);
+    EXPECT_EQ(cover.results[i].summary, tiered.results[i].summary);
+  }
+  w->end();
+}
+
+// AC#2: the cascade de-dups across tiers (a cp from a tighter tier never reappears)
+// and tighter tiers outrank looser ones (tier-monotonic score).
+TEST(JsonlTiered, CascadeDedupAndTierOrder) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_dedup", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  TieredSpec ts;
+  ts.tiers = {"(^ black bear*)", "bear*"}; // tier 0 subset of tier 1
+  CoverResponse r;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &r, &error)) << error;
+
+  EXPECT_TRUE(cover_has(w, r.results, "hikers"));  // c-1 black bear
+  EXPECT_TRUE(cover_has(w, r.results, "grizzly")); // c-4 black bear
+  EXPECT_TRUE(cover_has(w, r.results, "roam"));    // c-5 black bears
+  EXPECT_TRUE(cover_has(w, r.results, "camp"));    // c-2 bears (tier 1 only)
+  EXPECT_FALSE(cover_has(w, r.results, "cart"));   // c-3 neither
+
+  // c-1 is matched by BOTH tiers but appears exactly once (merge-skip de-dup).
+  int hikers = 0;
+  for (const auto &h : r.results)
+    if (body_at(w, h.cp).find("hikers") != std::string::npos)
+      hikers++;
+  EXPECT_EQ(hikers, 1);
+
+  // the tier-1-only doc (camp) ranks below, and scores below, every tier-0 doc.
+  const CoverHit *camp = tier_hit(w, r.results, "camp");
+  const CoverHit *hik = tier_hit(w, r.results, "hikers");
+  ASSERT_NE(camp, nullptr);
+  ASSERT_NE(hik, nullptr);
+  EXPECT_GT(camp->rank, hik->rank);
+  EXPECT_LT(camp->score, hik->score);
+  w->end();
+}
+
+// AC#3: cps in the incoming exclude never appear in the results.
+TEST(JsonlTiered, ExcludeIsHonored) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_exclude", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  TieredSpec ts;
+  ts.tiers = {"(^ black bear*)", "bear*"};
+  CoverResponse r0;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &r0, &error)) << error;
+  cottontail::addr cp_c1 = cover_cp(w, r0.results, "hikers");
+
+  ts.exclude = {cp_c1};
+  CoverResponse r1;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &r1, &error)) << error;
+  EXPECT_FALSE(cover_has(w, r1.results, "hikers")); // the excluded cp is gone
+  EXPECT_TRUE(cover_has(w, r1.results, "camp"));     // others remain
+  w->end();
+}
+
+// AC#6: total/unjudged are the EXACT distinct union across tiers (not the per-tier
+// sum, which would double-count the overlap), and are 0 iff every tier is dry.
+TEST(JsonlTiered, ExactUnionCountsNotSum) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_counts", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // tier 0 matches {c-1,c-4,c-5} (3); tier 1 matches {c-1,c-2,c-4,c-5} (4).
+  // Distinct union = 4; the per-tier SUM would be 7.
+  TieredSpec ts;
+  ts.tiers = {"(^ black bear*)", "bear*"};
+  CoverResponse r;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &r, &error)) << error;
+  EXPECT_EQ(r.total_matches, 4);
+  EXPECT_EQ(r.unjudged_matches, 4);
+
+  // all tiers dry -> 0; a count-0 atom is NOT an error, it just goes dry.
+  TieredSpec dry;
+  dry.tiers = {"zzzznope", "qqqxxx"};
+  CoverResponse rd;
+  std::string derr;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, dry, &rd, &derr)) << derr;
+  EXPECT_EQ(rd.total_matches, 0);
+  EXPECT_EQ(rd.unjudged_matches, 0);
+  EXPECT_TRUE(rd.results.empty());
+  ASSERT_EQ(rd.atom_counts.size(), 2u); // atoms present + deterministic ...
+  for (const auto &a : rd.atom_counts)
+    EXPECT_EQ(a.count, 0); // ... each 0 => a diagnosable dead atom
+
+  // one live tier among dead ones -> not dry (0 iff ALL dry).
+  TieredSpec mix;
+  mix.tiers = {"zzzznope", "bear*"};
+  CoverResponse rm;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, mix, &rm, &error)) << error;
+  EXPECT_GT(rm.total_matches, 0);
+  w->end();
+}
+
+// AC#7: each summary is built against the SPECIFIC tier that surfaced the document.
+// The same doc, with the tier order flipped, is summarized around the other anchor.
+TEST(JsonlTiered, PerTierSummaryBiasing) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_summary", kTierRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // "omega" is the tighter (first) tier -> the summary is biased to omega.
+  TieredSpec a;
+  a.tiers = {"omega", "alpha"};
+  a.window = 3;
+  a.max_covers = 1;
+  CoverResponse ra;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, a, &ra, &error)) << error;
+  ASSERT_EQ(ra.results.size(), 1u);
+  EXPECT_NE(ra.results[0].summary.find("omega"), std::string::npos);
+  EXPECT_EQ(ra.results[0].summary.find("alpha"), std::string::npos);
+
+  // flip the order -> "alpha" now surfaces the doc, and the summary follows it.
+  TieredSpec b;
+  b.tiers = {"alpha", "omega"};
+  b.window = 3;
+  b.max_covers = 1;
+  CoverResponse rb;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, b, &rb, &error)) << error;
+  ASSERT_EQ(rb.results.size(), 1u);
+  EXPECT_NE(rb.results[0].summary.find("alpha"), std::string::npos);
+  EXPECT_EQ(rb.results[0].summary.find("omega"), std::string::npos);
+  w->end();
+}
+
+// AC#15: a malformed tier fails the WHOLE request (whole-request-fail), and the
+// error NAMES the offending tier (by index) so the agent fixes the right one.
+TEST(JsonlTiered, MalformedTierFailsWholeRequestNamingTier) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("tiered_bad", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // a GCL syntax error in tier 1 rejects the whole call, naming "tier 1".
+  TieredSpec unbalanced;
+  unbalanced.tiers = {"(^ black bear*)", "(^ unbalanced"};
+  CoverResponse r1;
+  std::string e1;
+  EXPECT_FALSE(jsonl_tiered_query_search(w, unbalanced, &r1, &e1));
+  EXPECT_NE(e1.find("tier 1"), std::string::npos) << e1;
+
+  // a bad mid-token '*' in tier 0 is likewise named.
+  TieredSpec badstar;
+  badstar.tiers = {"bad*star*mid"};
+  CoverResponse r0;
+  std::string e0;
+  EXPECT_FALSE(jsonl_tiered_query_search(w, badstar, &r0, &e0));
+  EXPECT_NE(e0.find("tier 0"), std::string::npos) << e0;
   w->end();
 }

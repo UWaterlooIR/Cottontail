@@ -7,7 +7,7 @@ design spec — keep run instructions here so the README and `CLAUDE.md` can lin
 without drifting.
 
 **Prerequisites:** a working build. The toolchain (bazelisk/Bazel, a C++ compiler,
-zlib) and the build/test basics are in [`CLAUDE.md`](../CLAUDE.md) (*Prerequisites*
+zlib) and the build/test basics are in [`CLAUDE.md`](../../../CLAUDE.md) (*Prerequisites*
 and *Build*).
 
 The pieces fit together in a line:
@@ -53,9 +53,6 @@ bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --text "climbing ro
 # structured GCL search (full operator set: Boolean, phrase, proximity, containment, negation)
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --gcl '(^ carabiner belay)'
 
-# dry-run term diagnostics (document frequency per term) — cheap, no ranking
-bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --explain --text "carabiner belay"
-
 # other actions
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --count --text "carabiner belay"
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --get shard_00016_68307
@@ -99,7 +96,7 @@ token) is not. Lines from concurrent workers are serialized so they don't
 interleave.
 
 **Endpoints:** `GET /healthz` (public), `GET /describe`, and `POST /tools/<name>`
-for `search_text` · `search_gcl` · `explain` · `get_document` · `count_matches`.
+for `search_text` · `search_gcl` · `get_document` · `count_matches`.
 
 ```sh
 curl http://127.0.0.1:8080/healthz
@@ -112,12 +109,12 @@ Full contract: [server-spec](cottontail-search-server-spec.md). Concurrency desi
 
 ## 4. Run the ISJ Searcher — `isj/`
 
-The maintained agent is the **ISJ Searcher** under [`isj/`](../isj/): an Analyst
+The maintained agent is the **ISJ Searcher** under [`isj/`](../../../isj/): an Analyst
 splits the question into interpretations, then a per-intent Searcher drives the
 server's **`cover_search`** tool (search → read cover summaries → judge →
 reformulate) and the CLI writes a run-output directory. One-time setup — the `uv`
 project, `config.toml`, and serving the model with vLLM — is in
-**[`isj/README.md`](../isj/README.md)** (its single source).
+**[`isj/README.md`](../../../isj/README.md)** (its single source).
 
 Prerequisites: a **`--stem porter`** burrow (§1 — `cover_search`'s `word*` family
 marker needs the stemmed stream), the **server** running over it (§3), and a
@@ -145,7 +142,7 @@ the served burrow whose `docno-cp.sqlite` maps `cp`→`docno`).
 - `errors.log` — present **only if something failed**; its **absence means the whole
   run succeeded**. The CLI exits non-zero iff it was written.
 
-Contract and internals: [`isj/README.md`](../isj/README.md). (The earlier
+Contract and internals: [`isj/README.md`](../../../isj/README.md). (The earlier
 proof-of-concept agent has been archived to
-[`archive/example-agent/`](../archive/example-agent/) and is no longer maintained;
-its design notes live in [search-agent-spec](cottontail-search-agent-spec.md).)
+[`archive/example-agent/`](../../../archive/example-agent/) and is no longer maintained;
+its design notes live in [search-agent-spec](../archive/cottontail-search-agent-spec.md).)

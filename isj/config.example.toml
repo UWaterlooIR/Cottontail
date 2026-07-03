@@ -37,12 +37,21 @@ model = "gpt.oss.120b"
 [agents.analyst]
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
+# reasoning_effort = "medium"   # default; forwarded via extra_body
 
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"
 llm = "default"
-# The Searcher authors GCL queries; high reasoning helps. Defaults shown:
-# reasoning_effort = "high"   # gpt-oss-120b top tier (forwarded via extra_body)
+# To author TIERED precise->broad GCL cascades instead of single covers, swap in:
+#   class = "isj_agent.agents.tiered_searcher.TieredSearcher"
+# It exposes the tiered_query_search tool (needs the cottontail server built after
+# TASK-19); everything else here (llm, reasoning_effort, fetch_k, window, max_queries)
+# applies unchanged. KEEP reasoning_effort = "medium" for the tiered searcher: at
+# "high", gpt-oss-120b falls into pathological reasoning loops (repetition /
+# compulsive quote-verification) that time out or bloat reasoning ~14-28x with no
+# quality gain -- see isj/scouting/multitext-dsl/captured/FINDINGS.md.
+# Defaults shown (reasoning_effort defaults to "medium" for every agent):
+# reasoning_effort = "medium"  # default; forwarded via extra_body
 # fetch_k = 200               # the LARGE per-request ranking batch the controller pulls
 # window = 75                 # cover_search summary window (tokens)
 # max_queries = 100           # per-intent backstop on the number of queries
@@ -53,7 +62,8 @@ llm = "default"
 # Pointwise full-document judging (0-3 + reason). Defaults from the serving scout
 # (decode-bound on the dev GPU; concurrency 15 is the throughput peak):
 # concurrency = 15            # in-flight judge calls AND the controller's wave width
-# reasoning_effort = "high"   # the dominant throughput/cost lever; forwarded via extra_body
+# reasoning_effort = "medium" # default; raising to "high" is a throughput/cost lever
+#                             # (the scout_judger.py serving scout ran high) -- forwarded via extra_body
 
 # ---------------------------------------------------------------------------
 # [loop]

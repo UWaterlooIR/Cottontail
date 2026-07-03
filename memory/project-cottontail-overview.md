@@ -6,7 +6,7 @@ metadata:
 ---
 
 Cottontail is the C++20 reference implementation of **Annotative Indexing** (paper:
-docs/Annotative-Indexing-IRRJ-Clarke-2025.{md,pdf}). This is a **fork** of Charles
+docs/papers/Annotative-Indexing-IRRJ-Clarke-2025.{md,pdf}). This is a **fork** of Charles
 L. A. Clarke's repo, now owned by the user (see [[user-mark-smucker]]). Goal: get
 *this* version building/tested/running cleanly — **not** continuing Clarke's
 in-progress Fiver/Hazel `PostingIterator` integration.
@@ -16,7 +16,7 @@ top-level `AGENTS.md` is just a pointer to it. Clarke's old agent material
 (his `AGENTS.md`, the whole `ai/` dir: architecture/plan/log/notes/hazel-* /
 improvements) was moved to `archive/` and is **non-authoritative** — do not treat
 `archive/ai/plan.md` as a task list. The one kept technical reference is the Hazel
-on-disk format spec at `docs/hazel-format.md`.
+on-disk format spec at `docs/design/reference-specs/hazel-format.md`.
 
 Build/test (verified 2026-06-11, bazel 9.1.1 via bazelisk + gcc 13.3;
 `.bazelversion` pins 9.1.1; deps nlohmann_json/googletest/rules_cc via MODULE.bazel;

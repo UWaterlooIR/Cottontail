@@ -1,0 +1,7 @@
+=== TRIGGER TEST: same cover, vary only the phrase (parallel, warm) ===
+  DONE FLOOR (no phrase)                 9.83s  matches=5681  
+  DONE site selection  [r=171]          13.20s  matches=5731  
+  DONE campsite selection [r=99]        15.23s  matches=5718  
+  DONE camp placement  [r=15875]       651.23s  matches=5681  
+  DONE selection campsite [REV]        806.11s  matches=5681  
+DONE

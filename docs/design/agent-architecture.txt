@@ -1,0 +1,121 @@
+ISJ FRAMEWORK: COMPONENTS AND RESPONSIBILITIES
+==============================================
+
+
+DESIGN GOAL: PLUGGABLE AGENTS OVER A STABLE BACKBONE
+----------------------------------------------------
+- The Analyst, Searcher, and Judger are AGENT ROLES. Each role is a fixed
+  INTERFACE (a contract of inputs and outputs). Any implementation that meets
+  the contract can be plugged in.
+- The role -> implementation binding is configuration: [agents.<role>] names a
+  class and an LLM profile. Swapping an agent (e.g. a single-query Searcher for
+  a tiered Searcher) is a config change, not a controller change.
+- The CONTROLLER and the QUERYABLE abstraction are the stable backbone the
+  pluggable agents talk through. The Controller runs the loop and owns ALL
+  interaction with Cottontail; the agents never touch the search system
+  directly, and they do not produce the trace.
+
+The interfaces at a glance:
+    Analyst : user statement                                -> [intents]
+    Searcher: (intent, judged history, search stats, tools) -> queryable
+    Judger  : (intent, document summary, document text)     -> (reason, grade)
+
+
+ANALYST AGENT
+-------------
+- Interface: a user statement -> an ordered list of search intents (information
+  needs).
+- Each intent is explored independently and ultimately produces its own final
+  ranked list.
+- Implementations are interchangeable as long as they return a list of intents.
+
+
+SEARCHER AGENT
+--------------
+- Interface: (intent, judged history, search statistics, available search
+  tools) -> a queryable (a query request handed to the Controller as a tool
+  call).
+- Does NOT run the query itself and never touches Cottontail directly.
+- May produce any of the system's valid query types; the type is not fixed in
+  advance, but is always one of the approved tool usages (see QUERY TYPES).
+- First call: given only the intent plus the available search tools (e.g.
+  cover_search and/or tiered_query_search).
+- Subsequent calls: given the intent plus the judged results of its prior
+  searches (returned via the Controller) so it can reformulate intelligently.
+- Searcher implementations differ only in strategy and in which query types
+  they emit; all satisfy the same interface, so they are interchangeable.
+
+
+JUDGER AGENT
+------------
+- Interface: (intent, document summary, document text) -> (reason for the grade, 
+  relevance grade).
+- Uses relevance grades 0, 1, 2, 3 (per UMBRELA).
+- Judges one document at a time; it has no view of the loop, the budget, or the
+  other documents. Implementations are interchangeable.
+
+
+CONTROLLER (THE STABLE BACKBONE)
+--------------------------------
+- Receives the Searcher's queryable and EXECUTES it against Cottontail (the
+  Searcher does not). Specifies the top-k (the Searcher does not).
+- Fetches each candidate document's full text (by cp) and uses the Judger to
+  grade the document + its summary against the intent. (The Judger never touches
+  Cottontail; the Controller supplies the document text.)
+- JUDGE-DEPTH / STOPPING POLICY: decides how far down a result list to judge and
+  when a Searcher's loop terminates (e.g. a non-relevant streak, a query or
+  judgement budget). The Searcher and Judger do not own stopping.
+- DEDUP: holds the judged set and excludes it from new searches, so the judged
+  results handed back never repeat an already-judged document.
+- Hands back to the Searcher each round:
+    - the original search intent,
+    - the history of queries issued and their judged results, and
+    - search statistics (atom counts, etc.).
+  Each judged result displays:
+    - rank,
+    - score,
+    - document summary,
+    - reason for being relevant or not, and
+    - relevance grade.
+- FINAL LIST: compiles each intent's final ranked list from the accumulated
+  judged results. (Whether and how multiple intents' lists are combined is TBD.)
+- TRACE: the Controller is the single point that observes every interaction
+  (LLM calls with token usage, queries issued, documents judged, bounces,
+  stops) and produces the heavy, detailed trace. The agents do NOT produce the
+  trace -- being trace-agnostic is part of what keeps them pluggable. (The CLI /
+  run-output writer persists the trace to disk.)
+
+
+RANKED LIST OF RESULTS
+----------------------
+- A ranked list is a JSON record containing the intent and a list of entries
+  (the ranked documents).
+- Ordering: descending by relevance grade; ties broken by score (higher score
+  better); tied scores broken by descending docno string.
+- Each entry has: rank, relevance grade, score, document summary, reason for the
+  grade, the query that first surfaced the document, and the docno.
+- (The in-loop "judged results" the Controller returns to the Searcher are the
+  same per-document shape minus the docno and surfacing-query: the loop works in
+  cp; docno is materialized only for the final list.)
+
+
+QUERY TYPES (QUERYABLES)
+------------------------
+- A generic "queryable" abstraction captures any of the system's valid query
+  types and is executed by the queryable itself when the Controller invokes it
+  (passing the engine, top-k, exclude, and window).
+- This abstraction is what lets a Searcher emit different query types and the
+  Controller execute any of them without knowing the specific type in advance --
+  the seam that makes the Searcher role pluggable across query strategies.
+- Two concrete types currently exist:
+    - Cover search: a single GCL query.
+    - Tiered query search: an ordered series of GCL query tiers (run as a
+      cascade with de-duplication).
+
+
+COTTONTAIL HTTP JSON SERVER
+---------------------------
+- The search system that executes GCL queries. Only the Controller talks to it.
+- Runs a given query and returns the top-k results, each with a query-biased
+  summary.
+- Can also fetch a document's full text given its cp (location in collection).

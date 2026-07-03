@@ -1,15 +1,21 @@
-"""The Searcher: a thin GCL query author (TASK-16).
+"""The Searcher: a thin query author over a pluggable set of query types (TASK-16, TASK-18).
 
 INPUT: the running conversation (its prior queries and their judged outcomes, which
-the CONTROLLER builds). OUTPUT: exactly ONE GCL cover query per turn, via a single
-`search` tool with `tool_choice="required"` -- so the Searcher always issues a query;
-there is no decline / finish / no-tool-call path.
+the CONTROLLER builds). OUTPUT: exactly ONE `Queryable` per turn -- the query the
+Controller will execute.
 
-The Searcher does NOT judge and has no relevance scale: judging is the Judger's job,
-and the loop, paging, de-duplication, budget, and trace are the controller's. This
-class is deliberately as thin as the Analyst -- one LLM round-trip that returns the
-chosen query plus the assistant message to append. The controller owns the message
-list and the trace, and feeds each query's judged outcome back as the tool result.
+`BaseSearcher` is generic: it holds a `system_prompt` and a list of `query_types`
+(Queryable subclasses), offers their tool schemas to the LLM with
+`tool_choice="required"`, and routes the returned tool call BY NAME to the matching
+query type's `from_tool_arguments`. A concrete searcher is just a subclass that sets
+`system_prompt` + `query_types` -- e.g. `Searcher` (cover queries) here, and
+`TieredSearcher` (tiered queries) in TASK-20 -- so neither needs base changes.
+
+The Searcher does NOT judge and has no relevance scale, and never runs the query or
+touches Cottontail: the loop, paging, de-duplication, budget, execution, and trace
+are the Controller's. If the model returns no proper tool call (or a malformed /
+unknown one), `propose` yields `queryable=None`; the Controller bounces it and the
+model retries (an inline-JSON emission is rare, so it is bounced, not recovered).
 """
 
 from __future__ import annotations
@@ -20,44 +26,24 @@ from importlib.resources import files
 
 import openai
 
+from isj_agent.protocol.queryable import CoverQuery, Queryable
+
 _PROMPT: str = (
     files("isj_agent.agents").joinpath("searcher.md").read_text(encoding="utf-8")
 )
 
-# One tool: the model writes only the GCL `query`; the controller injects everything
-# else (exclude/top_k/window) when it runs the query. tool_choice="required" forces a
-# call -- with a single tool offered that is always `search`.
-_TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "search",
-            "description": (
-                "Run a GCL cover query over the collection. Returns the NEW documents it "
-                "surfaces, each already graded (0-3) with a reason, plus a count of results "
-                "at those ranks that were already judged by earlier queries."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {"query": {"type": "string"}},
-                "required": ["query"],
-            },
-        },
-    },
-]
-
 
 @dataclass
 class ProposeResult:
-    """One Searcher round-trip: the chosen query + what the controller needs to continue.
+    """One Searcher round-trip: the chosen queryable + what the controller needs to continue.
 
-    `query` is None only in the defensive case where the model returned no tool call
-    despite tool_choice="required" (the controller bounces it back). `assistant_message`
-    is appended verbatim to the conversation; `tool_call_id` keys the matching tool
-    result the controller appends next.
+    `queryable` is None only in the defensive case where the model returned no usable
+    tool call (no tool_calls, or a malformed / unknown tool call) -- the controller
+    bounces it back. `assistant_message` is appended verbatim to the conversation;
+    `tool_call_id` keys the matching tool result the controller appends next.
     """
 
-    query: str | None
+    queryable: Queryable | None
     content: str | None  # the assistant's reasoning text (for the trace)
     tool_call_id: str | None
     assistant_message: dict
@@ -66,18 +52,22 @@ class ProposeResult:
     n_tool_calls: int = 0
 
 
-class Searcher:
-    """Proposes one GCL query per call, given the running conversation."""
+class BaseSearcher:
+    """Proposes one Queryable per call over a configured set of query types.
 
-    prompt: str = _PROMPT
-    system_prompt: str = _PROMPT  # alias; the controller seeds msgs from this
+    Subclasses set `system_prompt` and `query_types`; the round-trip, tool exposure,
+    and tool-call routing are generic here.
+    """
+
+    system_prompt: str = ""
+    query_types: list[type[Queryable]] = []
 
     def __init__(
         self,
         client: openai.OpenAI,
         model: str,
         *,
-        reasoning_effort: str | None = "high",
+        reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
     ) -> None:
         self.client = client
@@ -88,13 +78,14 @@ class Searcher:
     def propose(self, messages: list[dict]) -> ProposeResult:
         """One LLM round-trip. May RAISE on an LLM/transport failure -- the controller
         catches it and returns a partial result (it owns persist-on-failure)."""
+        by_name = {qt.tool_name: qt for qt in self.query_types}
         extra = (
             {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
         )
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
-            tools=_TOOLS,
+            tools=[qt.tool_schema() for qt in self.query_types],
             tool_choice="required",
             temperature=self.temperature,
             extra_body=extra,
@@ -107,19 +98,25 @@ class Searcher:
             "completion_tokens": getattr(usage, "completion_tokens", None),
             "total_tokens": getattr(usage, "total_tokens", None),
         }
+        finish_reason = getattr(choice, "finish_reason", None)
         tool_calls = message.tool_calls or []
-        if not tool_calls:  # defensive: required should guarantee one
+        if not tool_calls:  # defensive: required should guarantee one -> bounce
             return ProposeResult(
-                query=None, content=message.content, tool_call_id=None,
+                queryable=None, content=message.content, tool_call_id=None,
                 assistant_message={"role": "assistant", "content": message.content or ""},
-                usage=usage_d, finish_reason=getattr(choice, "finish_reason", None),
-                n_tool_calls=0,
+                usage=usage_d, finish_reason=finish_reason, n_tool_calls=0,
             )
         call = tool_calls[0]
-        try:
-            args = json.loads(call.function.arguments or "{}")
-        except json.JSONDecodeError:
-            args = {}
+        # Route the tool call by name to its query type; a malformed / unknown / bad-shape
+        # call yields queryable=None so the controller bounces it (no inline-JSON recovery).
+        queryable: Queryable | None = None
+        qt = by_name.get(call.function.name)
+        if qt is not None:
+            try:
+                args = json.loads(call.function.arguments or "{}")
+                queryable = qt.from_tool_arguments(args)
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                queryable = None
         assistant_message = {
             "role": "assistant",
             "content": message.content or "",
@@ -135,11 +132,19 @@ class Searcher:
             ],
         }
         return ProposeResult(
-            query=args.get("query"),
+            queryable=queryable,
             content=message.content,
             tool_call_id=call.id,
             assistant_message=assistant_message,
             usage=usage_d,
-            finish_reason=getattr(choice, "finish_reason", None),
+            finish_reason=finish_reason,
             n_tool_calls=len(tool_calls),
         )
+
+
+class Searcher(BaseSearcher):
+    """The cover-query searcher: one GCL cover per turn (the default searcher)."""
+
+    prompt: str = _PROMPT
+    system_prompt: str = _PROMPT  # alias; the controller seeds msgs from this
+    query_types: list[type[Queryable]] = [CoverQuery]

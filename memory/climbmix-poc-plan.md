@@ -9,7 +9,7 @@ Goal: rework `apps/climbmix-poc.cc` (uncommitted scratch) to build a **static
 SimpleWarren** over the gzip'd ClimbMix shards ([[climbmix-corpus-location]]) and
 judge whether it scales to ~**6500** shards. Pivoted OFF the Bigwig→Hazel path
 because [[hazel-not-ready]]. The JSONL CLI spec
-(`docs/cottontail-jsonl-cli-spec.md`) already targets SimpleWarren; see
+(`docs/design/reference-specs/cottontail-jsonl-cli-spec.md`) already targets SimpleWarren; see
 [[project-cottontail-overview]].
 
 Machine: **512 GB RAM** (Mark, 2026-06-12) → can tune large build buffers.

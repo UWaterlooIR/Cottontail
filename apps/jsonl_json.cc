@@ -50,27 +50,6 @@ json results_json(const QuerySpec &spec, const std::vector<Hit> &hits,
   return o;
 }
 
-json explain_json(const QuerySpec &spec, const ExplainResult &ex) {
-  json o;
-  o["query"] = spec.query;
-  o["query_mode"] = spec.is_gcl ? "gcl" : "text";
-  o["parsed_ok"] = ex.parsed_ok;
-  if (!ex.parsed_ok) {
-    o["error"] = ex.error;
-  } else {
-    json leaves = json::array();
-    for (const auto &l : ex.leaves) {
-      json le;
-      le["term"] = l.term;
-      le["df"] = l.df;
-      le["stream"] = l.stream;
-      leaves.push_back(le);
-    }
-    o["leaves"] = leaves;
-  }
-  return o;
-}
-
 json get_json(addr cp, bool found, const std::string &text) {
   json o;
   o["cp"] = cp;
@@ -217,17 +196,6 @@ json describe_json() {
       "cover-biased extractive summary to read and judge. Use the word* family "
       "marker for ordinary content words so you need not enumerate inflections.",
       cs, {"query"}));
-
-  json ex;
-  ex["query"] = strp("The query to analyze.");
-  ex["is_gcl"] = boolp("Treat the query as a GCL expression.");
-  ex["stem"] = boolp("Resolve terms against the stemmed stream.");
-  tools.push_back(tool(
-      "explain",
-      "Dry-run a query WITHOUT ranking: returns each term's document frequency "
-      "(df) and which stream it hit (exact|stemmed). Use to check a term isn't "
-      "zero-hit before spending a real search.",
-      ex, {"query"}));
 
   json gd;
   gd["cp"] = intp("A cp from a prior search result.");

@@ -194,29 +194,6 @@ bool build_match_gcl(std::shared_ptr<Warren> warren, const QuerySpec &spec,
   return true;
 }
 
-// Candidate term atoms in a GCL expression: drop operators, parens, and
-// structural tags (":...") so --explain can report leaf document frequencies.
-std::vector<std::string> gcl_terms(const std::string &gcl) {
-  std::vector<std::string> out;
-  std::string tok;
-  auto flush = [&]() {
-    if (tok.empty())
-      return;
-    if (tok != "^" && tok != "+" && tok != "..." && tok != "<>" &&
-        tok != "<<" && tok != ">>" && tok[0] != ':')
-      out.push_back(tok);
-    tok.clear();
-  };
-  for (char c : gcl) {
-    if (c == '(' || c == ')' || c == ' ' || c == '\t' || c == '\n')
-      flush();
-    else
-      tok.push_back(c);
-  }
-  flush();
-  return out;
-}
-
 // ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
 
 // The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
@@ -254,15 +231,54 @@ bool emit_cover_term(const std::string &t, std::shared_ptr<Stemmer> stemmer,
   return false;
 }
 
+// Decompose a quoted phrase into its ordered GCL atoms, mirroring the MATCH path:
+// split on WHITESPACE (so a trailing '*' survives), then PER WORD -- a valid word*
+// becomes its stem-family atom (via emit_cover_term); any other word is normalized
+// with the burrow tokenizer (case-fold + punctuation split, exactly like the
+// star-free expand_phrases pass), so e.g. "hi-tech" -> hi, tech and "Dog" -> dog.
+// Returns false on a malformed '*'.
+bool phrase_atoms(const std::string &phrase, std::shared_ptr<Stemmer> stemmer,
+                  std::shared_ptr<Tokenizer> tokenizer,
+                  std::vector<std::string> *atoms, std::string *error) {
+  std::string w;
+  auto take = [&]() -> bool {
+    if (w.empty())
+      return true;
+    if (w.find('*') != std::string::npos) {
+      std::string a; // a valid word* -> its family atom (emit_cover_term validates)
+      if (!emit_cover_term(w, stemmer, &a, error))
+        return false;
+      if (!a.empty())
+        atoms->push_back(a);
+    } else {
+      for (const auto &t : tokenizer->split(w)) // fold + punctuation split
+        atoms->push_back(t);
+    }
+    w.clear();
+    return true;
+  };
+  for (char c : phrase) {
+    if (c == ' ' || c == '\t' || c == '\n') {
+      if (!take())
+        return false;
+    } else {
+      w.push_back(c);
+    }
+  }
+  return take();
+}
+
 // Rewrite a cover query, translating word* markers to stemmed-stream atoms. Bare
 // terms stay exact; operators/:tags are untouched. A quoted phrase that uses
 // word* is desugared HERE (before the normal expand_phrases pass) into the
-// explicit (>> (# n) (... ...)) form with each word translated -- splitting the
-// phrase on WHITESPACE so a trailing '*' survives (the tokenizer would drop it).
-// A star-free phrase is left quoted for the standard pass. Returns false on a
+// explicit (>> (# n) (... ...)) form: split on WHITESPACE so a trailing '*'
+// survives, then normalize each NON-star word with the tokenizer (fold + split)
+// so it addresses the index exactly as the star-free expand_phrases pass would.
+// A star-free phrase is left quoted for that standard pass. Returns false on a
 // malformed '*' or an unterminated phrase.
 bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
-                   std::string *out, std::string *error) {
+                   std::shared_ptr<Tokenizer> tokenizer, std::string *out,
+                   std::string *error) {
   out->clear();
   std::string tok, phrase;
   bool in_phrase = false;
@@ -272,39 +288,23 @@ bool cover_rewrite(const std::string &gcl, std::shared_ptr<Stemmer> stemmer,
     return ok;
   };
   auto emit_phrase = [&]() -> bool {
-    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted
-      *out += '"';
+    if (phrase.find('*') == std::string::npos) { // star-free: keep quoted for the
+      *out += '"';                               // standard expand_phrases pass
       *out += phrase;
       *out += '"';
       return true;
     }
-    std::vector<std::string> words;
-    std::string w;
-    for (char c : phrase) {
-      if (c == ' ' || c == '\t' || c == '\n') {
-        if (!w.empty()) {
-          words.push_back(w);
-          w.clear();
-        }
-      } else {
-        w.push_back(c);
-      }
-    }
-    if (!w.empty())
-      words.push_back(w);
     std::vector<std::string> atoms;
-    for (const auto &word : words) {
-      std::string a;
-      if (!emit_cover_term(word, stemmer, &a, error))
-        return false;
-      atoms.push_back(a);
-    }
+    if (!phrase_atoms(phrase, stemmer, tokenizer, &atoms, error))
+      return false;
     if (atoms.empty())
       return true;
     if (atoms.size() == 1) {
       *out += atoms[0];
       return true;
     }
+    // width = TOTAL atoms after tokenizing (e.g. "hi-tech gear*" -> 3 atoms), so a
+    // hyphenated non-star word no longer collapses the adjacency to a dead atom.
     *out += "(>> (# " + std::to_string(atoms.size()) + ") (...";
     for (const auto &a : atoms)
       *out += " " + a;
@@ -513,11 +513,17 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
   return true;
 }
 
-// The query's content-term LEAVES (bare words and word* markers), AS WRITTEN,
-// deduped first-seen. Operators / parens / :tags are skipped; each word inside a
-// quoted phrase is its own leaf. Used to build atom_counts. The query has already
-// been validated by cover_rewrite, so no mid-token '*' reaches here.
-std::vector<std::string> cover_leaves(const std::string &gcl) {
+// The query's content-term LEAVES for atom_counts, deduped first-seen. Operators /
+// parens / :tags are skipped. A BARE word (including a word* marker) is kept AS
+// WRITTEN; a QUOTED phrase is decomposed like the match path -- whitespace-split so a
+// trailing '*' survives, then PER WORD a word* marker is kept as-is, else the word is
+// normalized with the tokenizer (case-fold + punctuation split) into its true index
+// token(s). So "Yellowstone" -> yellowstone, "hi-tech" -> hi, tech, "dog sled*" ->
+// dog, sled*. The query was validated by cover_rewrite, so no mid-token '*' reaches
+// here. The atom loop resolves each leaf: a trailing '*' -> its stem family, else the
+// exact feature (a bare capitalized/punctuated term stays raw and may report 0).
+std::vector<std::string> cover_leaves(const std::string &gcl,
+                                      std::shared_ptr<Tokenizer> tokenizer) {
   std::vector<std::string> out;
   std::set<std::string> seen;
   auto add = [&](const std::string &t) {
@@ -525,6 +531,18 @@ std::vector<std::string> cover_leaves(const std::string &gcl) {
       return;
     if (seen.insert(t).second)
       out.push_back(t);
+  };
+  // A word from inside a quoted phrase: a word* marker stays as-is (the atom loop
+  // resolves it to its family); any other word is tokenizer-normalized (fold +
+  // punctuation split) into its true index token(s), matching the query path.
+  auto add_phrase_word = [&](const std::string &w) {
+    if (w.empty())
+      return;
+    if (w.find('*') != std::string::npos)
+      add(w);
+    else
+      for (const auto &t : tokenizer->split(w))
+        add(t);
   };
   std::string tok, phrase;
   bool in_phrase = false;
@@ -539,16 +557,13 @@ std::vector<std::string> cover_leaves(const std::string &gcl) {
         std::string w;
         for (char pc : phrase) {
           if (pc == ' ' || pc == '\t' || pc == '\n') {
-            if (!w.empty()) {
-              add(w);
-              w.clear();
-            }
+            add_phrase_word(w);
+            w.clear();
           } else {
             w.push_back(pc);
           }
         }
-        if (!w.empty())
-          add(w);
+        add_phrase_word(w);
         in_phrase = false;
       }
     } else if (in_phrase) {
@@ -821,7 +836,7 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
     }
   }
   std::string rewritten;
-  if (!cover_rewrite(spec.query, stemmer, &rewritten, error))
+  if (!cover_rewrite(spec.query, stemmer, warren->tokenizer(), &rewritten, error))
     return false;
   if (rewritten.empty())
     return true; // nothing to search -> no hits, zero counts, no atoms
@@ -831,7 +846,7 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
     return false;
   // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
   // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
-  for (const auto &leaf : cover_leaves(spec.query)) {
+  for (const auto &leaf : cover_leaves(spec.query, warren->tokenizer())) {
     std::string atom;
     auto star = leaf.find('*');
     if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
@@ -898,6 +913,191 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   return true;
 }
 
+// tiered_query_search: run an ordered list of cover tiers as a de-duplicated
+// cascade, reusing the cover_search helpers (cover_rewrite / cover_leaves /
+// cover_ranking / cover_summary) -- no new ranking math, no native src/ranking.cc
+// call. atom_counts is the UNION of every tier's leaves; total/unjudged are the
+// EXACT distinct union across tiers; each summary is built against the tier that
+// surfaced its document; the merged score is tier-monotonic. A single-tier cascade
+// reduces exactly to cover_search.
+bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
+                               const TieredSpec &spec, CoverResponse *out,
+                               std::string *error) {
+  out->results.clear();
+  out->atom_counts.clear();
+  out->total_matches = 0;
+  out->unjudged_matches = 0;
+  if (spec.tiers.empty())
+    return true; // no tiers -> empty response (parity with an empty cover query)
+
+  // A stemmer is needed if ANY tier uses the word* family marker.
+  std::shared_ptr<Stemmer> stemmer;
+  bool need_stem = false;
+  for (const auto &t : spec.tiers)
+    if (t.find('*') != std::string::npos) {
+      need_stem = true;
+      break;
+    }
+  if (need_stem) {
+    stemmer = burrow_stemmer(warren);
+    if (stemmer == nullptr) {
+      safe_error(error) =
+          "tiered_query_search uses the word* family marker but this burrow has "
+          "no stemmed stream (rebuild the index with --stem porter)";
+      return false;
+    }
+  }
+
+  // WHOLE-REQUEST-FAIL: rewrite + validate EVERY tier up front. A GCL syntax error
+  // (or a bad '*') in ANY tier rejects the whole request, NAMING the tier, so the
+  // agent fixes the right one. (A count-0 atom is NOT an error: it parses and the
+  // tier simply goes dry -- that is what atom_counts=0 diagnoses.)
+  std::vector<std::string> rewritten(spec.tiers.size());
+  for (size_t i = 0; i < spec.tiers.size(); i++) {
+    std::string rw, inner;
+    if (!cover_rewrite(spec.tiers[i], stemmer, warren->tokenizer(), &rw, &inner)) {
+      safe_error(error) =
+          "tier " + std::to_string(i) + " (" + spec.tiers[i] + "): " + inner;
+      return false;
+    }
+    if (!rw.empty()) {
+      auto check = warren->hopper_from_gcl(rw, &inner);
+      if (check == nullptr) {
+        safe_error(error) =
+            "tier " + std::to_string(i) + " (" + spec.tiers[i] + "): " + inner;
+        return false;
+      }
+    }
+    rewritten[i] = rw;
+  }
+
+  // atom_counts: the UNION of every tier's content-term leaves, deduped by term
+  // (first-seen order), each with its corpus occurrence count. Present on every
+  // call regardless of results, so a count of 0 unambiguously means a dead atom.
+  std::set<std::string> seen_terms;
+  for (const auto &tier : spec.tiers) {
+    for (const auto &leaf : cover_leaves(tier, warren->tokenizer())) {
+      if (!seen_terms.insert(leaf).second)
+        continue;
+      std::string atom;
+      auto star = leaf.find('*');
+      if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
+          stemmer != nullptr)
+        atom = resolve_family_atom(stemmer, leaf.substr(0, star));
+      else
+        atom = leaf;
+      AtomCount ac;
+      ac.term = leaf;
+      ac.count =
+          (long)warren->idx()->count(warren->featurizer()->featurize(atom));
+      out->atom_counts.push_back(std::move(ac));
+    }
+  }
+
+  std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
+
+  // total_matches / unjudged_matches = the EXACT distinct union across tiers: one
+  // depth=0 counting pass over the OR of the (non-empty) rewritten tiers. 0 iff
+  // every tier is dry. (Not the per-tier sum, which double-counts overlap.)
+  std::vector<std::string> nonempty;
+  for (const auto &rw : rewritten)
+    if (!rw.empty())
+      nonempty.push_back(rw);
+  if (!nonempty.empty()) {
+    std::string orq;
+    if (nonempty.size() == 1) {
+      orq = nonempty[0];
+    } else {
+      orq = "(+";
+      for (const auto &rw : nonempty)
+        orq += " " + rw;
+      orq += ")";
+    }
+    std::vector<CoverRanked> discard;
+    long tm = 0, um = 0;
+    if (!cover_ranking(warren, orq, 0, exclude, &discard, &tm, &um, error))
+      return false;
+    out->total_matches = tm;
+    out->unjudged_matches = um;
+  }
+
+  // The CASCADE: run each tier in order; drop cps in `exclude` and cross-tier
+  // duplicates; keep the surfacing tier + that tier's own density per survivor.
+  struct Surfaced {
+    addr cp = 0;
+    addr cq = 0;
+    size_t tier = 0;
+    double density = 0.0; // the surfacing tier's ssr cover-density score
+  };
+  std::vector<Surfaced> merged;
+  std::unordered_set<addr> merged_cps;
+  for (size_t ti = 0; ti < rewritten.size(); ti++) {
+    const std::string &rw = rewritten[ti];
+    if (rw.empty())
+      continue;
+    // Over-fetch depth = top_k + |exclude| so the cp post-filter still fills top_k
+    // (parity with cover_search paging). Per-tier counts are discarded (the exact
+    // union counts were computed above). ALL tiers run every call -- the caller
+    // pages by re-invoking with a grown exclude, and atom_counts must stay complete.
+    std::vector<CoverRanked> ranked;
+    long tm = 0, um = 0;
+    if (!cover_ranking(warren, rw, spec.top_k + exclude.size(), exclude, &ranked,
+                       &tm, &um, error))
+      return false;
+    for (const auto &r : ranked) {
+      if (exclude.find(r.cp) != exclude.end())
+        continue;
+      if (!merged_cps.insert(r.cp).second)
+        continue; // cross-tier duplicate: an earlier (tighter) tier already had it
+      merged.push_back({r.cp, r.cq, ti, r.score});
+    }
+  }
+
+  // Cap to top_k, then build each hit with a tier-monotonic score and a summary
+  // biased to the SURFACING tier's covers (faithful per-tier). Score = density +
+  // (last_tier - tier) * TIER_STRIDE, with TIER_STRIDE far larger than any real
+  // density, so tier order dominates (tighter tiers score higher) and precise->broad
+  // survives the caller's (grade, score) tiebreak; within a tier the density orders
+  // docs. A single tier reduces to exactly the density -> identical to cover_search.
+  const double TIER_STRIDE = 1e6; // >> any ssr density (a sum of 1/(42+span) terms)
+  size_t last = spec.tiers.size() - 1;
+  int rank = 1;
+  size_t n = std::min(merged.size(), spec.top_k);
+  for (size_t i = 0; i < n; i++) {
+    const Surfaced &s = merged[i];
+    CoverHit h;
+    h.rank = rank++;
+    h.cp = s.cp;
+    h.score = s.density + (double)(last - s.tier) * TIER_STRIDE;
+    // Recover the surfacing tier's covers within [cp,cq] (a localized re-walk over
+    // this survivor only, NOT a corpus pass) -- exactly cover_search's phase 2.
+    std::vector<std::pair<addr, addr>> covers;
+    auto qh = warren->hopper_from_gcl(rewritten[s.tier], error);
+    if (qh != nullptr) {
+      addr p, q;
+      for (qh->tau(s.cp, &p, &q); p < maxfinity && q <= s.cq;
+           qh->tau(p + 1, &p, &q))
+        if (p >= s.cp)
+          covers.emplace_back(p, q);
+    }
+    size_t k = std::max<size_t>(1, spec.max_covers);
+    if (covers.size() > k) {
+      auto tighter = [](const std::pair<addr, addr> &a,
+                        const std::pair<addr, addr> &b) {
+        addr sa = a.second - a.first, sb = b.second - b.first;
+        return sa != sb ? sa < sb : a.first < b.first;
+      };
+      std::nth_element(covers.begin(), covers.begin() + k, covers.end(), tighter);
+      covers.resize(k);
+      std::sort(covers.begin(), covers.end());
+    }
+    h.summary = cover_summary(warren, covers, s.cp, s.cq, (addr)spec.window,
+                              (addr)spec.max_words);
+    out->results.push_back(std::move(h));
+  }
+  return true;
+}
+
 bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,
                bool *found, std::string *error) {
   *found = false;
@@ -935,53 +1135,6 @@ bool jsonl_count(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     n++;
   *count = n;
   return true;
-}
-
-ExplainResult jsonl_explain(std::shared_ptr<Warren> warren,
-                            const QuerySpec &spec) {
-  ExplainResult out;
-  std::vector<std::string> terms;
-  if (spec.is_gcl) {
-    std::string err;
-    auto check = warren->hopper_from_gcl(spec.query, &err);
-    if (check == nullptr) {
-      out.parsed_ok = false;
-      out.error = err;
-      return out;
-    }
-    out.parsed_ok = true;
-    terms = gcl_terms(spec.query);
-  } else {
-    out.parsed_ok = true;
-    terms = warren->tokenizer()->split(spec.query);
-  }
-  std::shared_ptr<Stemmer> stemmer;
-  if (spec.stem) {
-    stemmer = burrow_stemmer(warren);
-    if (stemmer == nullptr) {
-      out.parsed_ok = false;
-      out.error = "--stem requested but this burrow has no stemmed stream "
-                  "(rebuild the index with --stem)";
-      return out;
-    }
-  }
-  for (const auto &t : terms) {
-    ExplainLeaf leaf;
-    leaf.term = t;
-    if (spec.stem) {
-      // The stemmed atom addresses the stemmed stream; if the term is
-      // unstemmable the stemmer returns the surface form (exact stream).
-      bool stemmed = false;
-      std::string atom = stemmer->stem(t, &stemmed);
-      leaf.stream = stemmed ? "stemmed" : "exact";
-      leaf.df = warren->idx()->count(warren->featurizer()->featurize(atom));
-    } else {
-      leaf.stream = "exact";
-      leaf.df = warren->idx()->count(warren->featurizer()->featurize(t));
-    }
-    out.leaves.push_back(leaf);
-  }
-  return out;
 }
 
 } // namespace jsonl

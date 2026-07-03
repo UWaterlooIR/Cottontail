@@ -8,7 +8,7 @@ Charles L. A. Clarke. 2025. Annotative Indexing. *Information Retrieval Research
 
 To build an index from JSONL, search it from the command line, serve it over HTTP,
 or drive it with an LLM agent, follow the
-**[search-stack run guide](docs/running-the-search-stack.md)** — the single,
+**[search-stack run guide](docs/design/reference-specs/running-the-search-stack.md)** — the single,
 copy-paste-runnable source for how to run these tools. It links out to the design
 specs for detail.
 

@@ -108,25 +108,27 @@ class Controller:
             last_usage = pr.usage
             emit("llm_call", t0, llm_ms, purpose="searcher_turn", turn=queries + 1,
                  request=request, content=pr.content,
-                 calls=([{"name": "search", "arguments": json.dumps({"query": pr.query})}]
-                        if pr.query is not None else []),
-                 finish_reason=pr.finish_reason, tool=("search" if pr.query is not None else None),
+                 calls=([{"name": pr.queryable.tool_name,
+                          "arguments": json.dumps(pr.queryable.trace_arguments())}]
+                        if pr.queryable is not None else []),
+                 finish_reason=pr.finish_reason,
+                 tool=(pr.queryable.tool_name if pr.queryable is not None else None),
                  tool_calls=pr.n_tool_calls, **pr.usage)
             msgs.append(pr.assistant_message)
             queries += 1
 
-            if pr.query is None:  # defensive: tool_choice=required should prevent this
+            if pr.queryable is None:  # defensive: tool_choice=required should prevent this
                 emit("bounce", time.time(), 0.0, kind="no_query",
-                     message="no GCL query produced")
+                     message="no usable query produced")
                 if pr.tool_call_id is not None:
-                    self._tool(msgs, pr.tool_call_id, {"error": "emit a search tool call with a GCL query"})
+                    self._tool(msgs, pr.tool_call_id, {"error": "emit a valid search tool call with a query"})
                 else:
-                    msgs.append({"role": "user", "content": "Call the search tool with a GCL query."})
+                    msgs.append({"role": "user", "content": "Call the provided search tool with a query."})
                 continue
 
-            emit("propose", time.time(), 0.0, query=pr.query)
+            emit("propose", time.time(), 0.0, query=pr.queryable.query_string())
             try:
-                outcome = self._descend(intent, pr.query, judged, recorded, events, emit, intent_budget)
+                outcome = self._descend(intent, pr.queryable, judged, recorded, events, emit, intent_budget)
             except _JudgeFailure as jf:
                 emit("error", time.time(), 0.0, error_type="JudgeFailure",
                      message=str(jf), turn=queries, request=None, **last_usage)
@@ -138,12 +140,14 @@ class Controller:
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
         )
 
-    def _descend(self, intent, query, judged, recorded, events, emit, intent_budget) -> dict:
+    def _descend(self, intent, queryable, judged, recorded, events, emit, intent_budget) -> dict:
         """Descend ONE query's true ranked list in waves; return the Searcher's history payload.
 
         Returns {"error": msg} on a malformed query (-> Searcher reformulates), otherwise the
-        summarize payload. RAISES _JudgeFailure on a failed judge call.
+        summarize payload. RAISES _JudgeFailure on a failed judge call. `queryable.execute()`
+        runs the query (a cover, or a tiered cascade) each refill; the controller only pages it.
         """
+        qs = queryable.query_string()  # display string for the trace events + surfacing_query
         streak = 0
         seen: set[int] = set()   # cps consumed THIS query -> the engine exclude (NOT global judged)
         depth = 0                # K: ranks descended this query
@@ -158,20 +162,20 @@ class Controller:
             if not buffer:  # REFILL: fetch the next batch (exclude = this query's consumed cps)
                 exclude = sorted(seen)
                 ts = time.time()
-                emit("search_request", ts, 0.0, query=query, top_k=self.fetch_k,
+                emit("search_request", ts, 0.0, query=qs, top_k=self.fetch_k,
                      window=self.window, exclude=exclude)
                 try:
-                    resp = self.engine.search(query, top_k=self.fetch_k, exclude=exclude,
-                                              window=self.window)
+                    resp = queryable.execute(self.engine, top_k=self.fetch_k, exclude=exclude,
+                                             window=self.window)
                 except EngineError as e:  # malformed query -> bounce back to the Searcher
-                    emit("bounce", time.time(), 0.0, kind="engine_error", query=query, message=str(e))
+                    emit("bounce", time.time(), 0.0, kind="engine_error", query=qs, message=str(e))
                     return {"error": str(e)}
                 eng_ms = (time.time() - ts) * 1000.0
                 total_matches = resp.total_matches
                 fetch_atoms = [a.model_dump() for a in resp.atom_counts]
                 if not atom_counts:  # representative = the query's first fetch (atoms are identical across fetches)
                     atom_counts = fetch_atoms
-                emit("search", ts, eng_ms, query=query, total_matches=resp.total_matches,
+                emit("search", ts, eng_ms, query=qs, total_matches=resp.total_matches,
                      unjudged_matches=resp.unjudged_matches,
                      atom_counts=fetch_atoms,
                      returned=len(resp.results),
@@ -205,7 +209,7 @@ class Controller:
                     judged[h.cp] = v
                     recorded.append(RankedEntry(rank=0, cp=h.cp, grade=v.grade, score=h.score,
                                                 summary=h.summary, reason=v.reason,
-                                                surfacing_query=query))
+                                                surfacing_query=qs))
                     fresh.append((h, v))
                     emit("judge", time.time(), 0.0, cp=h.cp, grade=v.grade, reason=v.reason)
                     g = v.grade
@@ -215,21 +219,22 @@ class Controller:
                     streak += 1
                     if streak >= self.nonrelevant_streak and not exhausted:
                         exhausted = True       # stop AFTER this wave; keep recording its remaining docs
-                        emit("list_exhausted", time.time(), 0.0, query=query, depth=depth, streak=streak)
+                        emit("list_exhausted", time.time(), 0.0, query=qs, depth=depth, streak=streak)
 
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        return self._summarize(query, atom_counts, total_matches, depth, again, fresh)
+        return self._summarize(queryable, atom_counts, total_matches, depth, again, fresh)
 
-    def _summarize(self, query, atom_counts, total_matches, depth, again, fresh) -> dict:
+    def _summarize(self, queryable, atom_counts, total_matches, depth, again, fresh) -> dict:
         # Field order is deliberate -- it is what the Searcher reads top-to-bottom:
-        # diagnostics first (atom_counts up top so a count-0 dead atom is caught early),
-        # the content last; and per result rank/score then summary BEFORE reason BEFORE
-        # grade, so the agent reads the passage before it sees the assessor's verdict.
+        # the queryable's own field(s) first (cover -> "query"; tiered -> "tiers"), then
+        # diagnostics (atom_counts up top so a count-0 dead atom is caught early), the
+        # content last; and per result rank/score then summary BEFORE reason BEFORE grade,
+        # so the agent reads the passage before it sees the assessor's verdict.
         x = sum(1 for _, g in again if self._relevant(g))
         return {
-            "query": query,
+            **queryable.trace_arguments(),
             "atom_counts": atom_counts,
             "total_matches": total_matches,
             "depth_judged": depth,

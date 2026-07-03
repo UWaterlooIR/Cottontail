@@ -1,0 +1,7 @@
+=== mechanism discrimination (parallel, warm, top_k=200) ===
+  DONE D = phrase ONLY                 0.14s  matches=1  
+  DONE baseline tier1                 18.76s  matches=5765  
+  DONE D = wildcards + phrase        631.08s  matches=5681  
+  DONE D2 reordered FIRST            648.65s  matches=5765  
+  DONE D2 as-is (culprit)            658.54s  matches=5765  
+DONE

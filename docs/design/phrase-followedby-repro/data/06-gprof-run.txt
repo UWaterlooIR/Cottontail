@@ -1,0 +1,9 @@
+launching instrumented tier2 (top_k=200); gmon prefix: /tmp/claude-1002/-home-smucker-git-repos-Cottontail/d0a817e3-d74d-4407-a9a9-6a09ee1f9b33/scratchpad/gmon
+=== exit: 0 ===
+=== total_matches ===
+"total_matches":
+=== wall time ===
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 36:04.99
+	Maximum resident set size (kbytes): 4730256
+=== gmon file ===
+(no gmon produced)

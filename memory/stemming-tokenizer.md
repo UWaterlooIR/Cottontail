@@ -1,6 +1,6 @@
 ---
 name: stemming-tokenizer
-description: StemmingTokenizer merged to main (PR #2); query-side --stem CLI work still TODO, specced in docs/stemming.md
+description: StemmingTokenizer merged to main (PR #2); query-side --stem CLI work still TODO, specced in docs/design/reference-specs/stemming.md
 metadata:
   type: project
 ---
@@ -20,7 +20,7 @@ round-trips through dna.
 **Query/CLI side is now BUILT** (open PR #3 on `claude/tool-agent`): the JSONL
 indexer takes `--stem porter` (builds with the `stemming` tokenizer) and
 `--tokenizer ascii|utf8`; the query tool takes `--stem` (stems terms into
-`porter:` GCL atoms, ranks via ssr). See `docs/stemming.md`. Note the implemented
+`porter:` GCL atoms, ranks via ssr). See `docs/design/reference-specs/stemming.md`. Note the implemented
 mechanism does NOT use `warren->stemmer()` — that path only stems in
 `icover_ranking`, and `Warren::set_stemmer()` persists to dna; instead jsonl_core
 stems the query and targets the stemmed features directly.

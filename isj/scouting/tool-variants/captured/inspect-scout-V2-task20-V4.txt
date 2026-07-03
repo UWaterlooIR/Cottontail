@@ -1,0 +1,354 @@
+================================================================================================
+[1] scout + V2_labeled  ::  quebec_independence   (18.2s)
+NEED: What are the prospects of the Quebec separatists achieving independence from the rest of
+      Canada?
+entity=quebec   entity_dropped=True
+METRICS: n_tiers=5  max_terms_per_facet=9  max_phrases_per_facet=6  total_quoted_phrases=40  tier0_proximity=True
+USAGE: completion=3298  prompt=1175  total=4473
+
+TIERS:
+  [tight window (all facets)]
+        (>> (# 50) (^ (+ "quebec separatist*" "quebec independence movement"
+        "quebec sovereignty movement" "quebec nationalist*" "quebec nationalist movement"
+        "quebec") (+ canada "rest of canada") (+ independence* secession* sovereignty*
+        "self-determination") (+ outlook* future* chance* likelihood* probability* forecast*
+        prospect* "possibility" "potential")))
+  [all facets (no window)]
+        (^ (+ "quebec separatist*" "quebec independence movement"
+        "quebec sovereignty movement" "quebec nationalist*" "quebec nationalist movement"
+        "quebec") (+ canada "rest of canada") (+ independence* secession* sovereignty*
+        "self-determination") (+ outlook* future* chance* likelihood* probability* forecast*
+        prospect* "possibility" "potential"))
+  [drop Canada facet]
+        (^ (+ "quebec separatist*" "quebec independence movement"
+        "quebec sovereignty movement" "quebec nationalist*" "quebec nationalist movement"
+        "quebec") (+ independence* secession* sovereignty* "self-determination") (+ outlook*
+        future* chance* likelihood* probability* forecast* prospect* "possibility"
+        "potential"))
+  [drop prospects facet]
+        (^ (+ "quebec separatist*" "quebec independence movement"
+        "quebec sovereignty movement" "quebec nationalist*" "quebec nationalist movement"
+        "quebec") (+ canada "rest of canada") (+ independence* secession* sovereignty*
+        "self-determination"))
+  [transferable (no entity facets)]
+        (^ (+ independence* secession* sovereignty* "self-determination") (+ outlook* future*
+        chance* likelihood* probability* forecast* prospect* "possibility" "potential"))
+
+================================================================================================
+[2] scout + V2_labeled  ::  self_hypnosis   (34.1s)
+NEED: What are the different techniques used to create self-induced hypnosis?
+entity=None   entity_dropped=None
+METRICS: n_tiers=5  max_terms_per_facet=16  max_phrases_per_facet=12  total_quoted_phrases=36  tier0_proximity=True
+USAGE: completion=6185  prompt=1170  total=7355
+
+TIERS:
+  [tight_window]
+        (>> (# 40) (^ (+ self-hypnosis "self hypnosis" auto-hypnosis "auto hypnosis"
+        "self induced hypnosis" "self-induced hypnosis" self-hypnotic "self hypnotic"
+        "self-hypnotic induction" "self hypnotic induction" "self trance" self-trance) (+
+        technique* method* approach* strategy* procedure* induction* step* process*
+        practice*)))
+  [no_window]
+        (^ (+ self-hypnosis "self hypnosis" auto-hypnosis "auto hypnosis"
+        "self induced hypnosis" "self-induced hypnosis" self-hypnotic "self hypnotic"
+        "self-hypnotic induction" "self hypnotic induction" "self trance" self-trance) (+
+        technique* method* approach* strategy* procedure* induction* step* process*
+        practice*))
+  [broaden_technique]
+        (^ (+ self-hypnosis "self hypnosis" auto-hypnosis "auto hypnosis"
+        "self induced hypnosis" "self-induced hypnosis" self-hypnotic "self hypnotic"
+        "self-hypnotic induction" "self hypnotic induction" "self trance" self-trance) (+
+        technique* method* approach* strategy* procedure* induction* step* process* practice*
+        exercise* training* skill* methodology*))
+  [broaden_self_hypnosis]
+        (^ (+ self-hypnosis "self hypnosis" auto-hypnosis "auto hypnosis"
+        "self induced hypnosis" "self-induced hypnosis" self-hypnotic "self hypnotic"
+        "self-hypnotic induction" "self hypnotic induction" "self trance" self-trance
+        "self-hypnosis induction" "self-hypnosis training" "self-hypnosis practice"
+        "self-hypnosis method") (+ technique* method* approach* strategy* procedure*
+        induction* step* process* practice*))
+  [transferable]
+        (^ (+ technique* method* approach* strategy* procedure* induction* step* process*
+        practice* exercise* training* skill* methodology*) (+ hypnosis* hypnotic* trance*))
+
+================================================================================================
+[3] scout + V2_labeled  ::  blood_pressure   (20.8s)
+NEED: What can be done to lower blood pressure for people diagnosed with high blood pressure?
+      Include benefits and side effects.
+entity=None   entity_dropped=None
+METRICS: n_tiers=5  max_terms_per_facet=37  max_phrases_per_facet=20  total_quoted_phrases=120  tier0_proximity=True
+USAGE: completion=3808  prompt=1180  total=4988
+
+TIERS:
+  [tightest-window]
+        (>> (# 50) (^ (+ "high blood pressure" hypertension "elevated blood pressure"
+        "hypertensive") (+ medication* drug* antihypertensive* "blood pressure medication*"
+        "blood pressure drug*" "ACE inhibitor*" "beta blocker*" "calcium channel blocker*"
+        diuretic* lifestyle* diet* exercise* "physical activity*" "weight loss*"
+        "salt reduction*" "DASH diet*" "stress reduction*" "sleep hygiene*"
+        "smoking cessation*" "alcohol reduction*" treatment* therapy* management*
+        "lower blood pressure" "reduce blood pressure" "decrease blood pressure") (+ benefit*
+        advantage* improvement* "positive effect*" "health benefit*" "risk*" "side effect*"
+        "adverse effect*" "adverse reaction*" complication*)))
+  [no-window]
+        (^ (+ "high blood pressure" hypertension "elevated blood pressure" "hypertensive") (+
+        medication* drug* antihypertensive* "blood pressure medication*"
+        "blood pressure drug*" "ACE inhibitor*" "beta blocker*" "calcium channel blocker*"
+        diuretic* lifestyle* diet* exercise* "physical activity*" "weight loss*"
+        "salt reduction*" "DASH diet*" "stress reduction*" "sleep hygiene*"
+        "smoking cessation*" "alcohol reduction*" treatment* therapy* management*
+        "lower blood pressure" "reduce blood pressure" "decrease blood pressure") (+ benefit*
+        advantage* improvement* "positive effect*" "health benefit*" "risk*" "side effect*"
+        "adverse effect*" "adverse reaction*" complication*))
+  [expanded-intervention]
+        (^ (+ "high blood pressure" hypertension "elevated blood pressure" "hypertensive") (+
+        medication* drug* antihypertensive* "blood pressure medication*"
+        "blood pressure drug*" "ACE inhibitor*" "beta blocker*" "calcium channel blocker*"
+        diuretic* lifestyle* diet* exercise* "physical activity*" "weight loss*"
+        "salt reduction*" "DASH diet*" "stress reduction*" "sleep hygiene*"
+        "smoking cessation*" "alcohol reduction*" treatment* therapy* management*
+        "lower blood pressure" "reduce blood pressure" "decrease blood pressure" remedy* cure*
+        approach* method* strategy* "pharmacologic*" "non-pharmacologic*" supplement* herb*
+        "natural remedy*" "alternative therapy*")) (+ benefit* advantage* improvement*
+        "positive effect*" "health benefit*" "risk*" "side effect*" "adverse effect*"
+        "adverse reaction*" complication*))
+  [drop-outcome]
+        (^ (+ "high blood pressure" hypertension "elevated blood pressure" "hypertensive") (+
+        medication* drug* antihypertensive* "blood pressure medication*"
+        "blood pressure drug*" "ACE inhibitor*" "beta blocker*" "calcium channel blocker*"
+        diuretic* lifestyle* diet* exercise* "physical activity*" "weight loss*"
+        "salt reduction*" "DASH diet*" "stress reduction*" "sleep hygiene*"
+        "smoking cessation*" "alcohol reduction*" treatment* therapy* management*
+        "lower blood pressure" "reduce blood pressure" "decrease blood pressure")))
+  [transferable-no-condition]
+        (^ (+ medication* drug* antihypertensive* "blood pressure medication*"
+        "blood pressure drug*" "ACE inhibitor*" "beta blocker*" "calcium channel blocker*"
+        diuretic* lifestyle* diet* exercise* "physical activity*" "weight loss*"
+        "salt reduction*" "DASH diet*" "stress reduction*" "sleep hygiene*"
+        "smoking cessation*" "alcohol reduction*" treatment* therapy* management*
+        "lower blood pressure" "reduce blood pressure" "decrease blood pressure") (+ benefit*
+        advantage* improvement* "positive effect*" "health benefit*" "risk*" "side effect*"
+        "adverse effect*" "adverse reaction*" complication*))
+
+================================================================================================
+[4] scout + V2_labeled  ::  rainforest_weather   (26.8s)
+NEED: How has the depletion or destruction of the rain forest effected the worlds weather?
+entity=None   entity_dropped=None
+METRICS: n_tiers=5  max_terms_per_facet=15  max_phrases_per_facet=8  total_quoted_phrases=55  tier0_proximity=True
+USAGE: completion=4835  prompt=1173  total=6008
+
+TIERS:
+  [tightest-window]
+        (>> (# 50) (^ (+ "rain forest" rainforest* "tropical forest*" "tropical rainforest*"
+        jungle*) (+ deforest* clearcut* "clear-cut*" logging "forest loss" "forest degrad*")
+        (+ weather climate "global climate" "global weather" "weather pattern*"
+        "climatic pattern*" "climate change" precipitat* rainfall temperature storm*
+        drought*)))
+  [no-window]
+        (^ (+ "rain forest" rainforest* "tropical forest*" "tropical rainforest*" jungle*) (+
+        deforest* clearcut* "clear-cut*" logging "forest loss" "forest degrad*") (+ weather
+        climate "global climate" "global weather" "weather pattern*" "climatic pattern*"
+        "climate change" precipitat* rainfall temperature storm* drought*))
+  [expanded-synonyms]
+        (^ (+ "rain forest" rainforest* "tropical forest*" "tropical rainforest*" jungle*) (+
+        deforest* clearcut* "clear-cut*" logging "forest loss" "forest degrad*"
+        "clear-felling" "tree removal" "forest clearing") (+ weather climate "global climate"
+        "global weather" "weather pattern*" "climatic pattern*" "climate change" precipitat*
+        rainfall temperature storm* drought* "hydrologic* cycle" "climatic shift"
+        "weather shift"))
+  [drop-action-facet]
+        (^ (+ "rain forest" rainforest* "tropical forest*" "tropical rainforest*" jungle*) (+
+        weather climate "global climate" "global weather" "weather pattern*"
+        "climatic pattern*" "climate change" precipitat* rainfall temperature storm*
+        drought*))
+  [transferable-drop-entity]
+        (^ (+ deforest* clearcut* "clear-cut*" logging "forest loss" "forest degrad*") (+
+        weather climate "global climate" "global weather" "weather pattern*"
+        "climatic pattern*" "climate change" precipitat* rainfall temperature storm*
+        drought*))
+
+================================================================================================
+[5] task20 + V4_facets_tiers  ::  quebec_independence   (35.4s)
+NEED: What are the prospects of the Quebec separatists achieving independence from the rest of
+      Canada?
+entity=quebec   entity_dropped=True
+METRICS: n_tiers=6  max_terms_per_facet=0  max_phrases_per_facet=0  total_quoted_phrases=0  tier0_proximity=True
+USAGE: completion=6198  prompt=2210  total=8408
+
+FACETS:
+  [movement]
+        (+ "Quebec separatist" "Quebec separatists" "Quebec independence"
+        "Quebec independence movement" "Quebec sovereignty" "Quebec sovereignty movement"
+        "Quebec secession" "Parti Québécois" "Bloc Québécois" "Québec separatist"
+        "Québec separatists" "Québec independence" "Québec independence movement"
+        "Québec sovereignty" "Québec sovereignty movement" "Québec secession")
+  [prospects]
+        (+ prospect* outlook* chance* likelihood* probability* forecast* prediction*
+        assessment* analysis* viability* feasibility* possibility* potential* future*
+        scenario* "future prospects" "future outlook")
+  [canada]
+        (+ Canada "Canadian federation" "rest of Canada" "Canada's federal government")
+
+TIERS:
+  [tight_window]
+        (>> (# 30) (^ movement prospects canada))
+  [no_window]
+        (^ movement prospects canada)
+  [drop_canada_window]
+        (>> (# 30) (^ movement prospects))
+  [drop_canada]
+        (^ movement prospects)
+  [transferable_window]
+        (>> (# 30) (^ prospects canada))
+  [transferable]
+        (^ prospects canada)
+
+================================================================================================
+[6] task20 + V4_facets_tiers  ::  self_hypnosis   (39.1s)
+NEED: What are the different techniques used to create self-induced hypnosis?
+entity=None   entity_dropped=None
+METRICS: n_tiers=3  max_terms_per_facet=30  max_phrases_per_facet=12  total_quoted_phrases=50  tier0_proximity=True
+USAGE: completion=6856  prompt=2205  total=9061
+
+FACETS:
+  [self_hypnosis]
+        (+ "self-hypnosis" "self hypnosis" "self-hypnotic" "self-hypnotise" "self-hypnotize"
+        "auto-hypnosis" "auto hypnosis" "auto-hypnotic" "auto hypnotic"
+        "self-induced hypnosis" "self induction" "self-induction")
+  [technique]
+        (+ technique* method* approach* strategy* practice* procedure* step* tip* guide*
+        instruction* process* methodology* routine* exercise* script* audio* recording*
+        visualization* imagery* induction* training* learning* session* "self-hypnosis script"
+        "self-hypnosis audio" "self-hypnosis routine" "self-hypnosis guide"
+        "self-hypnosis steps" "self-hypnosis practice" "self-hypnosis induction")
+
+TIERS:
+  [tight_window]
+        (>> (# 30) (^ (+ "self-hypnosis" "self hypnosis" "self-hypnotic" "self-hypnotise"
+        "self-hypnotize" "auto-hypnosis" "auto hypnosis" "auto-hypnotic" "auto hypnotic"
+        "self-induced hypnosis" "self induction" "self-induction") (+ technique* method*
+        approach* strategy* practice* procedure* step* tip* guide* instruction* process*
+        methodology* routine* exercise* script* audio* recording* visualization* imagery*
+        induction* training* learning* session* "self-hypnosis script" "self-hypnosis audio"
+        "self-hypnosis routine" "self-hypnosis guide" "self-hypnosis steps"
+        "self-hypnosis practice" "self-hypnosis induction")))
+  [no_window]
+        (^ (+ "self-hypnosis" "self hypnosis" "self-hypnotic" "self-hypnotise"
+        "self-hypnotize" "auto-hypnosis" "auto hypnosis" "auto-hypnotic" "auto hypnotic"
+        "self-induced hypnosis" "self induction" "self-induction") (+ technique* method*
+        approach* strategy* practice* procedure* step* tip* guide* instruction* process*
+        methodology* routine* exercise* script* audio* recording* visualization* imagery*
+        induction* training* learning* session* "self-hypnosis script" "self-hypnosis audio"
+        "self-hypnosis routine" "self-hypnosis guide" "self-hypnosis steps"
+        "self-hypnosis practice" "self-hypnosis induction"))
+  [self_hypnosis_only]
+        (+ "self-hypnosis" "self hypnosis" "self-hypnotic" "self-hypnotise" "self-hypnotize"
+        "auto-hypnosis" "auto hypnosis" "auto-hypnotic" "auto hypnotic"
+        "self-induced hypnosis" "self induction" "self-induction")
+
+================================================================================================
+[7] task20 + V4_facets_tiers  ::  blood_pressure   (45.4s)
+NEED: What can be done to lower blood pressure for people diagnosed with high blood pressure?
+      Include benefits and side effects.
+entity=None   entity_dropped=None
+METRICS: n_tiers=5  max_terms_per_facet=0  max_phrases_per_facet=0  total_quoted_phrases=0  tier0_proximity=True
+USAGE: completion=7910  prompt=2215  total=10125
+
+FACETS:
+  [condition]
+        (+ "high blood pressure" hypertension "elevated blood pressure" "high BP"
+        "essential hypertension" "primary hypertension")
+  [intervention]
+        (+ "lower blood pressure" "lowering blood pressure" "reduce blood pressure"
+        "reducing blood pressure" "blood pressure reduction" "blood pressure control"
+        treatment* therapy* management* intervention* "lifestyle modification" diet* exercise*
+        "weight loss" "salt reduction" "DASH diet" "physical activity" medication* drug*
+        "pharmacologic therapy" antihypertensive* "ACE inhibitor" "ACE inhibitors"
+        "angiotensin converting enzyme inhibitor" "angiotensin converting enzyme inhibitors"
+        "beta blocker" "beta blockers" "calcium channel blocker" "calcium channel blockers"
+        diuretic* "angiotensin receptor blocker" "angiotensin receptor blockers" ARB*
+        "renin inhibitor" "renin inhibitors" "stress reduction" "smoking cessation"
+        "alcohol reduction" "sleep improvement")
+  [benefit]
+        (+ benefit* advantage* "risk reduction" "stroke prevention" "heart attack prevention"
+        "cardiovascular disease prevention" "mortality reduction" "kidney protection"
+        "quality of life" "improved health" "improved outcomes" "positive effect"
+        "positive outcomes" "reduced risk")
+  [side_effect]
+        (+ "side effects" "adverse effects" "adverse events" "adverse reaction"
+        "adverse reactions" complication* risk* "tolerability" safety* "negative effects"
+        "negative effect")
+
+TIERS:
+  [tight_window]
+        (>> (# 50) (^ condition intervention benefit side_effect))
+  [no_window]
+        (^ condition intervention benefit side_effect)
+  [no_side_effect]
+        (^ condition intervention benefit)
+  [no_benefit]
+        (^ condition intervention side_effect)
+  [condition_intervention]
+        (^ condition intervention)
+
+================================================================================================
+[8] task20 + V4_facets_tiers  ::  rainforest_weather   (35.4s)
+NEED: How has the depletion or destruction of the rain forest effected the worlds weather?
+entity=None   entity_dropped=None
+METRICS: n_tiers=6  max_terms_per_facet=18  max_phrases_per_facet=8  total_quoted_phrases=90  tier0_proximity=True
+USAGE: completion=6218  prompt=2208  total=8426
+
+FACETS:
+  [rainforest]
+        (+ "rain forest*" rainforest* "tropical forest*" "tropical rain forest*" amazon
+        "jungle*")
+  [depletion]
+        (+ deforest* "forest loss" "forest clearing" logging* "clearcut*" "slash-and-burn"
+        "forest degradation" "forest removal" "forest conversion" "land clearing")
+  [weather]
+        (+ weather* climat* "climate change" "global warming" precipitat* rainfall*
+        "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather" temperature*
+        "heat wave*" monsoon* "atmospheric circulation" global* world* planetary*)
+
+TIERS:
+  [tight_window_all]
+        (>> (# 30) (^ (+ "rain forest*" rainforest* "tropical forest*" "tropical rain forest*"
+        amazon "jungle*") (+ deforest* "forest loss" "forest clearing" logging* "clearcut*"
+        "slash-and-burn" "forest degradation" "forest removal" "forest conversion"
+        "land clearing") (+ weather* climat* "climate change" "global warming" precipitat*
+        rainfall* "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather"
+        temperature* "heat wave*" monsoon* "atmospheric circulation" global* world*
+        planetary*)))
+  [no_window_all]
+        (^ (+ "rain forest*" rainforest* "tropical forest*" "tropical rain forest*" amazon
+        "jungle*") (+ deforest* "forest loss" "forest clearing" logging* "clearcut*"
+        "slash-and-burn" "forest degradation" "forest removal" "forest conversion"
+        "land clearing") (+ weather* climat* "climate change" "global warming" precipitat*
+        rainfall* "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather"
+        temperature* "heat wave*" monsoon* "atmospheric circulation" global* world*
+        planetary*))
+  [tight_window_rainforest_weather]
+        (>> (# 30) (^ (+ "rain forest*" rainforest* "tropical forest*" "tropical rain forest*"
+        amazon "jungle*") (+ weather* climat* "climate change" "global warming" precipitat*
+        rainfall* "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather"
+        temperature* "heat wave*" monsoon* "atmospheric circulation" global* world*
+        planetary*)))
+  [no_window_rainforest_weather]
+        (^ (+ "rain forest*" rainforest* "tropical forest*" "tropical rain forest*" amazon
+        "jungle*") (+ weather* climat* "climate change" "global warming" precipitat* rainfall*
+        "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather" temperature*
+        "heat wave*" monsoon* "atmospheric circulation" global* world* planetary*))
+  [tight_window_depletion_weather]
+        (>> (# 30) (^ (+ deforest* "forest loss" "forest clearing" logging* "clearcut*"
+        "slash-and-burn" "forest degradation" "forest removal" "forest conversion"
+        "land clearing") (+ weather* climat* "climate change" "global warming" precipitat*
+        rainfall* "rainfall pattern*" "storm pattern*" drought* flood* "extreme weather"
+        temperature* "heat wave*" monsoon* "atmospheric circulation" global* world*
+        planetary*)))
+  [no_window_depletion_weather]
+        (^ (+ deforest* "forest loss" "forest clearing" logging* "clearcut*" "slash-and-burn"
+        "forest degradation" "forest removal" "forest conversion" "land clearing") (+ weather*
+        climat* "climate change" "global warming" precipitat* rainfall* "rainfall pattern*"
+        "storm pattern*" drought* flood* "extreme weather" temperature* "heat wave*" monsoon*
+        "atmospheric circulation" global* world* planetary*))
+

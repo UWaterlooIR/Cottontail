@@ -76,6 +76,28 @@ class HttpSearchEngine:
             raise EngineError(_server_error(r))
         return SearchResponse.model_validate(r.json())
 
+    def tiered_search(
+        self,
+        tiers: Sequence[str],
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        body = {
+            "tiers": list(tiers),
+            "top_k": top_k,
+            "exclude": list(exclude),
+            "window": window,
+        }
+        try:
+            r = self._client.post("/tools/tiered_query_search", json=body)
+        except httpx.HTTPError as exc:
+            raise EngineError(f"tiered_query_search transport error: {exc}") from exc
+        if r.status_code != 200:
+            raise EngineError(_server_error(r))
+        return SearchResponse.model_validate(r.json())
+
     def read(self, cp: int) -> str | None:
         try:
             r = self._client.post("/tools/get_document", json={"cp": cp})

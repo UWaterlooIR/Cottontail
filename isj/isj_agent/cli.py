@@ -116,7 +116,11 @@ def main(argv: list[str] | None = None) -> None:
         cls = load_class(cfg["class"])
         return cls(client=clients[cfg["llm"]], model=llm_configs[cfg["llm"]]["model"], **extra)
 
-    analyst = _build_agent("analyst")
+    analyst_cfg = agent_configs["analyst"]
+    analyst = _build_agent(
+        "analyst",
+        **{k: analyst_cfg[k] for k in ("reasoning_effort",) if k in analyst_cfg},
+    )
     searcher_cfg = agent_configs["searcher"]
     judger_cfg = agent_configs["judger"]
     searcher = _build_agent(

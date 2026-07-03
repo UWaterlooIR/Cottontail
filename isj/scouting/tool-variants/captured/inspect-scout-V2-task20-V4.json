@@ -1,0 +1,546 @@
+[
+{
+  "prompt": "scout",
+  "tool": "V2_labeled",
+  "query": "trec",
+  "need": "quebec_independence",
+  "need_text": "What are the prospects of the Quebec separatists achieving independence from the rest of Canada?",
+  "entity": "quebec",
+  "tiers": [
+    "(>> (# 50) (^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\")))",
+    "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))",
+    "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))",
+    "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\"))",
+    "(^ (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))"
+  ],
+  "metrics": {
+    "n_tiers": 5,
+    "n_facets": 16,
+    "max_terms_per_facet": 9,
+    "mean_terms_per_facet": 5.38,
+    "max_phrases_per_facet": 6,
+    "total_quoted_phrases": 40,
+    "total_gcl_chars": 1418,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": true,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 3298,
+      "prompt_tokens": 1175,
+      "total_tokens": 4473,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "tiers": [
+        {
+          "label": "tight window (all facets)",
+          "gcl": "(>> (# 50) (^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\")))"
+        },
+        {
+          "label": "all facets (no window)",
+          "gcl": "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))"
+        },
+        {
+          "label": "drop Canada facet",
+          "gcl": "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))"
+        },
+        {
+          "label": "drop prospects facet",
+          "gcl": "(^ (+ \"quebec separatist*\" \"quebec independence movement\" \"quebec sovereignty movement\" \"quebec nationalist*\" \"quebec nationalist movement\" \"quebec\") (+ canada \"rest of canada\") (+ independence* secession* sovereignty* \"self-determination\"))"
+        },
+        {
+          "label": "transferable (no entity facets)",
+          "gcl": "(^ (+ independence* secession* sovereignty* \"self-determination\") (+ outlook* future* chance* likelihood* probability* forecast* prospect* \"possibility\" \"potential\"))"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 18.2
+},
+{
+  "prompt": "scout",
+  "tool": "V2_labeled",
+  "query": "trec",
+  "need": "self_hypnosis",
+  "need_text": "What are the different techniques used to create self-induced hypnosis?",
+  "entity": null,
+  "tiers": [
+    "(>> (# 40) (^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice*)))",
+    "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice*))",
+    "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice* exercise* training* skill* methodology*))",
+    "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance \"self-hypnosis induction\" \"self-hypnosis training\" \"self-hypnosis practice\" \"self-hypnosis method\") (+ technique* method* approach* strategy* procedure* induction* step* process* practice*))",
+    "(^ (+ technique* method* approach* strategy* procedure* induction* step* process* practice* exercise* training* skill* methodology*) (+ hypnosis* hypnotic* trance*))"
+  ],
+  "metrics": {
+    "n_tiers": 5,
+    "n_facets": 10,
+    "max_terms_per_facet": 16,
+    "mean_terms_per_facet": 10.8,
+    "max_phrases_per_facet": 12,
+    "total_quoted_phrases": 36,
+    "total_gcl_chars": 1572,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 6185,
+      "prompt_tokens": 1170,
+      "total_tokens": 7355,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "tiers": [
+        {
+          "label": "tight_window",
+          "gcl": "(>> (# 40) (^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice*)))"
+        },
+        {
+          "label": "no_window",
+          "gcl": "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice*))"
+        },
+        {
+          "label": "broaden_technique",
+          "gcl": "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance) (+ technique* method* approach* strategy* procedure* induction* step* process* practice* exercise* training* skill* methodology*))"
+        },
+        {
+          "label": "broaden_self_hypnosis",
+          "gcl": "(^ (+ self-hypnosis \"self hypnosis\" auto-hypnosis \"auto hypnosis\" \"self induced hypnosis\" \"self-induced hypnosis\" self-hypnotic \"self hypnotic\" \"self-hypnotic induction\" \"self hypnotic induction\" \"self trance\" self-trance \"self-hypnosis induction\" \"self-hypnosis training\" \"self-hypnosis practice\" \"self-hypnosis method\") (+ technique* method* approach* strategy* procedure* induction* step* process* practice*))"
+        },
+        {
+          "label": "transferable",
+          "gcl": "(^ (+ technique* method* approach* strategy* procedure* induction* step* process* practice* exercise* training* skill* methodology*) (+ hypnosis* hypnotic* trance*))"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 34.1
+},
+{
+  "prompt": "scout",
+  "tool": "V2_labeled",
+  "query": "trec",
+  "need": "blood_pressure",
+  "need_text": "What can be done to lower blood pressure for people diagnosed with high blood pressure? Include benefits and side effects.",
+  "entity": null,
+  "tiers": [
+    "(>> (# 50) (^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*)))",
+    "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))",
+    "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\" remedy* cure* approach* method* strategy* \"pharmacologic*\" \"non-pharmacologic*\" supplement* herb* \"natural remedy*\" \"alternative therapy*\")) (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))",
+    "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\")))",
+    "(^ (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))"
+  ],
+  "metrics": {
+    "n_tiers": 5,
+    "n_facets": 13,
+    "max_terms_per_facet": 37,
+    "mean_terms_per_facet": 15.15,
+    "max_phrases_per_facet": 20,
+    "total_quoted_phrases": 120,
+    "total_gcl_chars": 3288,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 3808,
+      "prompt_tokens": 1180,
+      "total_tokens": 4988,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "tiers": [
+        {
+          "label": "tightest-window",
+          "gcl": "(>> (# 50) (^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*)))"
+        },
+        {
+          "label": "no-window",
+          "gcl": "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))"
+        },
+        {
+          "label": "expanded-intervention",
+          "gcl": "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\" remedy* cure* approach* method* strategy* \"pharmacologic*\" \"non-pharmacologic*\" supplement* herb* \"natural remedy*\" \"alternative therapy*\")) (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))"
+        },
+        {
+          "label": "drop-outcome",
+          "gcl": "(^ (+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"hypertensive\") (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\")))"
+        },
+        {
+          "label": "transferable-no-condition",
+          "gcl": "(^ (+ medication* drug* antihypertensive* \"blood pressure medication*\" \"blood pressure drug*\" \"ACE inhibitor*\" \"beta blocker*\" \"calcium channel blocker*\" diuretic* lifestyle* diet* exercise* \"physical activity*\" \"weight loss*\" \"salt reduction*\" \"DASH diet*\" \"stress reduction*\" \"sleep hygiene*\" \"smoking cessation*\" \"alcohol reduction*\" treatment* therapy* management* \"lower blood pressure\" \"reduce blood pressure\" \"decrease blood pressure\") (+ benefit* advantage* improvement* \"positive effect*\" \"health benefit*\" \"risk*\" \"side effect*\" \"adverse effect*\" \"adverse reaction*\" complication*))"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 20.8
+},
+{
+  "prompt": "scout",
+  "tool": "V2_labeled",
+  "query": "trec",
+  "need": "rainforest_weather",
+  "need_text": "How has the depletion or destruction of the rain forest effected the worlds weather?",
+  "entity": null,
+  "tiers": [
+    "(>> (# 50) (^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*)))",
+    "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))",
+    "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\" \"clear-felling\" \"tree removal\" \"forest clearing\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought* \"hydrologic* cycle\" \"climatic shift\" \"weather shift\"))",
+    "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))",
+    "(^ (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))"
+  ],
+  "metrics": {
+    "n_tiers": 5,
+    "n_facets": 13,
+    "max_terms_per_facet": 15,
+    "mean_terms_per_facet": 8.46,
+    "max_phrases_per_facet": 8,
+    "total_quoted_phrases": 55,
+    "total_gcl_chars": 1552,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 4835,
+      "prompt_tokens": 1173,
+      "total_tokens": 6008,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "tiers": [
+        {
+          "label": "tightest-window",
+          "gcl": "(>> (# 50) (^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*)))"
+        },
+        {
+          "label": "no-window",
+          "gcl": "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))"
+        },
+        {
+          "label": "expanded-synonyms",
+          "gcl": "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\" \"clear-felling\" \"tree removal\" \"forest clearing\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought* \"hydrologic* cycle\" \"climatic shift\" \"weather shift\"))"
+        },
+        {
+          "label": "drop-action-facet",
+          "gcl": "(^ (+ \"rain forest\" rainforest* \"tropical forest*\" \"tropical rainforest*\" jungle*) (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))"
+        },
+        {
+          "label": "transferable-drop-entity",
+          "gcl": "(^ (+ deforest* clearcut* \"clear-cut*\" logging \"forest loss\" \"forest degrad*\") (+ weather climate \"global climate\" \"global weather\" \"weather pattern*\" \"climatic pattern*\" \"climate change\" precipitat* rainfall temperature storm* drought*))"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 26.8
+},
+{
+  "prompt": "task20",
+  "tool": "V4_facets_tiers",
+  "query": "trec",
+  "need": "quebec_independence",
+  "need_text": "What are the prospects of the Quebec separatists achieving independence from the rest of Canada?",
+  "entity": "quebec",
+  "tiers": [
+    "(>> (# 30) (^ movement prospects canada))",
+    "(^ movement prospects canada)",
+    "(>> (# 30) (^ movement prospects))",
+    "(^ movement prospects)",
+    "(>> (# 30) (^ prospects canada))",
+    "(^ prospects canada)"
+  ],
+  "metrics": {
+    "n_tiers": 6,
+    "n_facets": 0,
+    "max_terms_per_facet": 0,
+    "mean_terms_per_facet": 0,
+    "max_phrases_per_facet": 0,
+    "total_quoted_phrases": 0,
+    "total_gcl_chars": 183,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": true,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 6198,
+      "prompt_tokens": 2210,
+      "total_tokens": 8408,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "facets": [
+        {
+          "name": "movement",
+          "gcl": "(+ \"Quebec separatist\" \"Quebec separatists\" \"Quebec independence\" \"Quebec independence movement\" \"Quebec sovereignty\" \"Quebec sovereignty movement\" \"Quebec secession\" \"Parti Québécois\" \"Bloc Québécois\" \"Québec separatist\" \"Québec separatists\" \"Québec independence\" \"Québec independence movement\" \"Québec sovereignty\" \"Québec sovereignty movement\" \"Québec secession\")"
+        },
+        {
+          "name": "prospects",
+          "gcl": "(+ prospect* outlook* chance* likelihood* probability* forecast* prediction* assessment* analysis* viability* feasibility* possibility* potential* future* scenario* \"future prospects\" \"future outlook\")"
+        },
+        {
+          "name": "canada",
+          "gcl": "(+ Canada \"Canadian federation\" \"rest of Canada\" \"Canada's federal government\")"
+        }
+      ],
+      "tiers": [
+        {
+          "label": "tight_window",
+          "gcl": "(>> (# 30) (^ movement prospects canada))"
+        },
+        {
+          "label": "no_window",
+          "gcl": "(^ movement prospects canada)"
+        },
+        {
+          "label": "drop_canada_window",
+          "gcl": "(>> (# 30) (^ movement prospects))"
+        },
+        {
+          "label": "drop_canada",
+          "gcl": "(^ movement prospects)"
+        },
+        {
+          "label": "transferable_window",
+          "gcl": "(>> (# 30) (^ prospects canada))"
+        },
+        {
+          "label": "transferable",
+          "gcl": "(^ prospects canada)"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 35.4
+},
+{
+  "prompt": "task20",
+  "tool": "V4_facets_tiers",
+  "query": "trec",
+  "need": "self_hypnosis",
+  "need_text": "What are the different techniques used to create self-induced hypnosis?",
+  "entity": null,
+  "tiers": [
+    "(>> (# 30) (^ (+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\") (+ technique* method* approach* strategy* practice* procedure* step* tip* guide* instruction* process* methodology* routine* exercise* script* audio* recording* visualization* imagery* induction* training* learning* session* \"self-hypnosis script\" \"self-hypnosis audio\" \"self-hypnosis routine\" \"self-hypnosis guide\" \"self-hypnosis steps\" \"self-hypnosis practice\" \"self-hypnosis induction\")))",
+    "(^ (+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\") (+ technique* method* approach* strategy* practice* procedure* step* tip* guide* instruction* process* methodology* routine* exercise* script* audio* recording* visualization* imagery* induction* training* learning* session* \"self-hypnosis script\" \"self-hypnosis audio\" \"self-hypnosis routine\" \"self-hypnosis guide\" \"self-hypnosis steps\" \"self-hypnosis practice\" \"self-hypnosis induction\"))",
+    "(+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\")"
+  ],
+  "metrics": {
+    "n_tiers": 3,
+    "n_facets": 5,
+    "max_terms_per_facet": 30,
+    "mean_terms_per_facet": 19.2,
+    "max_phrases_per_facet": 12,
+    "total_quoted_phrases": 50,
+    "total_gcl_chars": 1423,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 6856,
+      "prompt_tokens": 2205,
+      "total_tokens": 9061,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "facets": [
+        {
+          "name": "self_hypnosis",
+          "gcl": "(+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\")"
+        },
+        {
+          "name": "technique",
+          "gcl": "(+ technique* method* approach* strategy* practice* procedure* step* tip* guide* instruction* process* methodology* routine* exercise* script* audio* recording* visualization* imagery* induction* training* learning* session* \"self-hypnosis script\" \"self-hypnosis audio\" \"self-hypnosis routine\" \"self-hypnosis guide\" \"self-hypnosis steps\" \"self-hypnosis practice\" \"self-hypnosis induction\")"
+        }
+      ],
+      "tiers": [
+        {
+          "label": "tight_window",
+          "gcl": "(>> (# 30) (^ (+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\") (+ technique* method* approach* strategy* practice* procedure* step* tip* guide* instruction* process* methodology* routine* exercise* script* audio* recording* visualization* imagery* induction* training* learning* session* \"self-hypnosis script\" \"self-hypnosis audio\" \"self-hypnosis routine\" \"self-hypnosis guide\" \"self-hypnosis steps\" \"self-hypnosis practice\" \"self-hypnosis induction\")))"
+        },
+        {
+          "label": "no_window",
+          "gcl": "(^ (+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\") (+ technique* method* approach* strategy* practice* procedure* step* tip* guide* instruction* process* methodology* routine* exercise* script* audio* recording* visualization* imagery* induction* training* learning* session* \"self-hypnosis script\" \"self-hypnosis audio\" \"self-hypnosis routine\" \"self-hypnosis guide\" \"self-hypnosis steps\" \"self-hypnosis practice\" \"self-hypnosis induction\"))"
+        },
+        {
+          "label": "self_hypnosis_only",
+          "gcl": "(+ \"self-hypnosis\" \"self hypnosis\" \"self-hypnotic\" \"self-hypnotise\" \"self-hypnotize\" \"auto-hypnosis\" \"auto hypnosis\" \"auto-hypnotic\" \"auto hypnotic\" \"self-induced hypnosis\" \"self induction\" \"self-induction\")"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 39.1
+},
+{
+  "prompt": "task20",
+  "tool": "V4_facets_tiers",
+  "query": "trec",
+  "need": "blood_pressure",
+  "need_text": "What can be done to lower blood pressure for people diagnosed with high blood pressure? Include benefits and side effects.",
+  "entity": null,
+  "tiers": [
+    "(>> (# 50) (^ condition intervention benefit side_effect))",
+    "(^ condition intervention benefit side_effect)",
+    "(^ condition intervention benefit)",
+    "(^ condition intervention side_effect)",
+    "(^ condition intervention)"
+  ],
+  "metrics": {
+    "n_tiers": 5,
+    "n_facets": 0,
+    "max_terms_per_facet": 0,
+    "mean_terms_per_facet": 0,
+    "max_phrases_per_facet": 0,
+    "total_quoted_phrases": 0,
+    "total_gcl_chars": 206,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 7910,
+      "prompt_tokens": 2215,
+      "total_tokens": 10125,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "facets": [
+        {
+          "name": "condition",
+          "gcl": "(+ \"high blood pressure\" hypertension \"elevated blood pressure\" \"high BP\" \"essential hypertension\" \"primary hypertension\")"
+        },
+        {
+          "name": "intervention",
+          "gcl": "(+ \"lower blood pressure\" \"lowering blood pressure\" \"reduce blood pressure\" \"reducing blood pressure\" \"blood pressure reduction\" \"blood pressure control\" treatment* therapy* management* intervention* \"lifestyle modification\" diet* exercise* \"weight loss\" \"salt reduction\" \"DASH diet\" \"physical activity\" medication* drug* \"pharmacologic therapy\" antihypertensive* \"ACE inhibitor\" \"ACE inhibitors\" \"angiotensin converting enzyme inhibitor\" \"angiotensin converting enzyme inhibitors\" \"beta blocker\" \"beta blockers\" \"calcium channel blocker\" \"calcium channel blockers\" diuretic* \"angiotensin receptor blocker\" \"angiotensin receptor blockers\" ARB* \"renin inhibitor\" \"renin inhibitors\" \"stress reduction\" \"smoking cessation\" \"alcohol reduction\" \"sleep improvement\")"
+        },
+        {
+          "name": "benefit",
+          "gcl": "(+ benefit* advantage* \"risk reduction\" \"stroke prevention\" \"heart attack prevention\" \"cardiovascular disease prevention\" \"mortality reduction\" \"kidney protection\" \"quality of life\" \"improved health\" \"improved outcomes\" \"positive effect\" \"positive outcomes\" \"reduced risk\")"
+        },
+        {
+          "name": "side_effect",
+          "gcl": "(+ \"side effects\" \"adverse effects\" \"adverse events\" \"adverse reaction\" \"adverse reactions\" complication* risk* \"tolerability\" safety* \"negative effects\" \"negative effect\")"
+        }
+      ],
+      "tiers": [
+        {
+          "label": "tight_window",
+          "gcl": "(>> (# 50) (^ condition intervention benefit side_effect))"
+        },
+        {
+          "label": "no_window",
+          "gcl": "(^ condition intervention benefit side_effect)"
+        },
+        {
+          "label": "no_side_effect",
+          "gcl": "(^ condition intervention benefit)"
+        },
+        {
+          "label": "no_benefit",
+          "gcl": "(^ condition intervention side_effect)"
+        },
+        {
+          "label": "condition_intervention",
+          "gcl": "(^ condition intervention)"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 45.4
+},
+{
+  "prompt": "task20",
+  "tool": "V4_facets_tiers",
+  "query": "trec",
+  "need": "rainforest_weather",
+  "need_text": "How has the depletion or destruction of the rain forest effected the worlds weather?",
+  "entity": null,
+  "tiers": [
+    "(>> (# 30) (^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))",
+    "(^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))",
+    "(>> (# 30) (^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))",
+    "(^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))",
+    "(>> (# 30) (^ (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))",
+    "(^ (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))"
+  ],
+  "metrics": {
+    "n_tiers": 6,
+    "n_facets": 14,
+    "max_terms_per_facet": 18,
+    "mean_terms_per_facet": 12.29,
+    "max_phrases_per_facet": 8,
+    "total_quoted_phrases": 90,
+    "total_gcl_chars": 2465,
+    "tier0_has_proximity": true
+  },
+  "entity_dropped": null,
+  "raw": {
+    "content": null,
+    "usage": {
+      "completion_tokens": 6218,
+      "prompt_tokens": 2208,
+      "total_tokens": 8426,
+      "completion_tokens_details": null,
+      "prompt_tokens_details": null
+    },
+    "arguments": {
+      "facets": [
+        {
+          "name": "rainforest",
+          "gcl": "(+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\")"
+        },
+        {
+          "name": "depletion",
+          "gcl": "(+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\")"
+        },
+        {
+          "name": "weather",
+          "gcl": "(+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)"
+        }
+      ],
+      "tiers": [
+        {
+          "label": "tight_window_all",
+          "gcl": "(>> (# 30) (^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))"
+        },
+        {
+          "label": "no_window_all",
+          "gcl": "(^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))"
+        },
+        {
+          "label": "tight_window_rainforest_weather",
+          "gcl": "(>> (# 30) (^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))"
+        },
+        {
+          "label": "no_window_rainforest_weather",
+          "gcl": "(^ (+ \"rain forest*\" rainforest* \"tropical forest*\" \"tropical rain forest*\" amazon \"jungle*\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))"
+        },
+        {
+          "label": "tight_window_depletion_weather",
+          "gcl": "(>> (# 30) (^ (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*)))"
+        },
+        {
+          "label": "no_window_depletion_weather",
+          "gcl": "(^ (+ deforest* \"forest loss\" \"forest clearing\" logging* \"clearcut*\" \"slash-and-burn\" \"forest degradation\" \"forest removal\" \"forest conversion\" \"land clearing\") (+ weather* climat* \"climate change\" \"global warming\" precipitat* rainfall* \"rainfall pattern*\" \"storm pattern*\" drought* flood* \"extreme weather\" temperature* \"heat wave*\" monsoon* \"atmospheric circulation\" global* world* planetary*))"
+        }
+      ]
+    }
+  },
+  "elapsed_s": 35.4
+}
+]

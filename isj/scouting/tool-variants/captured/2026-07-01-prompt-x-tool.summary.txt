@@ -1,0 +1,31 @@
+prompt tool             done/tot timeout tierMaxT combMaxT
+scout  V2_labeled            4/4       0       37       37
+scout  V3_angle_why          3/4       1       39       39
+scout  V4_facets_tiers       1/4       3       20       20
+task20 V2_labeled            0/4       4        0        0
+task20 V3_angle_why          2/4       2       37       37
+task20 V4_facets_tiers       4/4       0       30       39
+
+per-need detail (completed cells): tierMax / combinedMax
+  scout  V2_labeled      quebec_independence  tiers=  9  combined=  9  n_tiers=5
+  scout  V2_labeled      self_hypnosis        tiers= 16  combined= 16  n_tiers=5
+  scout  V2_labeled      blood_pressure       tiers= 37  combined= 37  n_tiers=5
+  scout  V2_labeled      rainforest_weather   tiers= 15  combined= 15  n_tiers=5
+  scout  V3_angle_why    quebec_independence  tiers= 18  combined= 18  n_tiers=5
+  scout  V3_angle_why    self_hypnosis        tiers= 16  combined= 16  n_tiers=4
+  scout  V3_angle_why    blood_pressure       tiers= 39  combined= 39  n_tiers=5
+  scout  V4_facets_tiers quebec_independence  tiers= 20  combined= 20  n_tiers=5
+  task20 V3_angle_why    blood_pressure       tiers= 37  combined= 37  n_tiers=4
+  task20 V3_angle_why    rainforest_weather   tiers= 18  combined= 18  n_tiers=4
+  task20 V4_facets_tiers quebec_independence  tiers=  0  combined= 17  n_tiers=6
+  task20 V4_facets_tiers self_hypnosis        tiers= 30  combined= 30  n_tiers=3
+  task20 V4_facets_tiers blood_pressure       tiers=  0  combined= 39  n_tiers=5
+  task20 V4_facets_tiers rainforest_weather   tiers= 18  combined= 18  n_tiers=6
+
+=== timeout rate by (prompt,tool) -- the interaction ===
+  scout  V2_labeled       0/4 timeout
+  scout  V3_angle_why     1/4 timeout
+  scout  V4_facets_tiers  3/4 timeout
+  task20 V2_labeled       4/4 timeout
+  task20 V3_angle_why     2/4 timeout
+  task20 V4_facets_tiers  0/4 timeout
