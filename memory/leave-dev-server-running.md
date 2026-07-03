@@ -5,9 +5,13 @@ metadata:
   type: feedback
 ---
 
-Do not offer to kill or ask about restarting the running `cottontail-jsonl-server` (currently the
-100M burrow `/share/indexes/climbmix-100M-porter.burrow` on port 8080). Assume it persists across
-turns and keep using it for live probes.
+Do not offer to kill or ask about restarting the running `cottontail-jsonl-server` instances.
+Assume they persist across turns and keep using them for live probes. Currently TWO (restarted
+2026-07-03 on the TASK-25 binary, `--threads 8` → auto `rank_threads=8`, logs appended to
+`Scrapheap/server-<port>.log`):
+
+- port 8080 — the 100M burrow `/share/indexes/climbmix-100M-porter.burrow`
+- port 8081 — `Scrapheap/climbmix-1M-porter.burrow`
 
 **Why:** Mark runs a long-lived dev server on purpose; repeated "want me to kill it?" prompts are
 friction.
