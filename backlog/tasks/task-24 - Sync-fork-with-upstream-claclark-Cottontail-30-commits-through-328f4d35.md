@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-03 00:36'
-updated_date: '2026-07-03 00:55'
+updated_date: '2026-07-03 01:13'
 labels: []
 dependencies: []
 priority: high
@@ -40,9 +40,9 @@ Deliverable: PR from claude/sync-with-charlie to main; no direct commits to main
 - [ ] #1 claude/sync-with-charlie contains a merge of upstream/main (328f4d35) with all conflicts resolved per the policy in the description
 - [ ] #2 AGENTS.md still points to CLAUDE.md with no upstream dev-notes content; ai/ exists at top level matching upstream; archive/ai/ is removed; CLAUDE.md carries the ai/ non-authoritative fence
 - [ ] #3 gcl/parse.cc contains the TASK-7 null-child guards (Link and binary operators propagate nullptr operands) alongside upstream's unary-combinator support, and test/gcl.cc keeps both sides' tests
-- [ ] #4 Exclusion build passes: bazel build -c dbg --cxxopt=-Og -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example (walk/Boost remains a known issue)
-- [ ] #5 bazel test //test:tests //test:hazel_test is green and the isj Python test suite passes
-- [ ] #6 Functional smoke: ssr-server + apps/ssr-client.py over Scrapheap/climbmix-1000-utf8-porter.burrow with container/content ':item' and docno ':docno' returns ranked results with REAL docnos (shard_*_*) and the document-by-docno op works. Scale smoke: same over Scrapheap/climbmix-1M-porter.burrow with docno ':item' (degenerate identity expected — cp-native index); wiring and rough timing in task notes. Full cp-native parallel-SSR adoption is TASK-25, not this task
+- [x] #4 Exclusion build passes: bazel build -c dbg --cxxopt=-Og -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example (walk/Boost remains a known issue)
+- [x] #5 bazel test //test:tests //test:hazel_test is green and the isj Python test suite passes
+- [x] #6 Functional smoke: ssr-server + apps/ssr-client.py over Scrapheap/climbmix-1000-utf8-porter.burrow with container/content ':item' and docno ':docno' returns ranked results with REAL docnos (shard_*_*) and the document-by-docno op works. Scale smoke: same over Scrapheap/climbmix-1M-porter.burrow with docno ':item' (degenerate identity expected — cp-native index); wiring and rough timing in task notes. Full cp-native parallel-SSR adoption is TASK-25, not this task
 - [ ] #7 docs/design/reference-specs/hazel-format.md defers to ai/hazel.md; CLAUDE.md directory map and Hazel caution updated
 - [ ] #8 PR opened from claude/sync-with-charlie to main; no commits made directly to main
 <!-- AC:END -->
@@ -89,3 +89,11 @@ Deliverable: PR from claude/sync-with-charlie to main; no direct commits to main
    7.1 Append task notes (ripple fixes, smoke timings, anything off-plan noticed but not acted on); check ACs as they become true.
    7.2 Push claude/sync-with-charlie; open PR to main (never commit to main directly); PR body summarizes the resolution policy and ripple fixes. Follow backlog instructions task-finalization.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Merge of upstream/main committed as 1f27a69 (merged c239bc7 — one docs-only commit past the analyzed 328f4d35; Mark approved). Conflict resolution went per plan; notably git's rename detection auto-carried our TASK-7 guards into gcl/parse.cc, and only the unary-condition hunk needed manual resolution (took upstream's superset, refreshed the stale '(^ x)' comment example). ZERO compile-ripple fixes needed: the exclusion build passed first try (only pre-existing simple_posting operator== warning remains). All 5 bazel test targets pass (tests, hazel_test, optimizer_test, jsonl_test, jsonl_server_test); isj suite 118 passed / 1 skipped (usual live-LLM skip).
+
+SSR smoke complete. Functional (climbmix-1000-utf8-porter.burrow, wiring ':item' ':item' ':docno'): query/next/document ops all work via apps/ssr-client.py, real docnos (e.g. shard_00554_26399). NOTE: that burrow is NOT small — result addresses run to ~23.5B tokens (1000 source shards, not 1000 docs). Scale (climbmix-1M-porter.burrow, docno ':item' degenerate): works, 12-20s/query warm. 100M shard (/share/indexes/...): works, ~50s cold single query. Timing caveat discovered: ssr-server ranks to fixed DEPTH=1000 and builds a fresh ':docno'/docno-GCL hopper (full posting-list load) PER RESULT in make_result/docno_in — that, not parallel_ssr, dominates latency on huge burrows (our own cottontail-jsonl-query --ranker ssr --top-k 3 does the same query in ~2.2s on the same big burrow). Relevant design input for TASK-25 (cp-native adoption avoids the per-result docno lookup entirely). All ssr-server processes stopped; the long-running dev jsonl-server was left untouched.
+<!-- SECTION:NOTES:END -->

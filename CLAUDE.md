@@ -1,11 +1,15 @@
 # CLAUDE.md
 
 Authoritative guide for working in this repository. This is a **fork** of Charles
-L. A. Clarke's Cottontail, now maintained independently. The original author's
-agent notes and forward plans have been moved under `archive/` and are **not**
-authoritative — do not treat them as a task list. The immediate goal of this fork
-is to get *this* version building, tested, and running cleanly; it is **not**
-continuing Clarke's in-progress Fiver/Hazel integration work.
+L. A. Clarke's Cottontail (`claclark/Cottontail`, the `upstream` remote), now
+maintained independently but periodically synced with upstream.
+
+**Upstream material is not authoritative for agents.** The top-level `ai/`
+directory is Clarke's own working notes, tracked from upstream and refreshed
+wholesale on each sync — treat it (and everything under `archive/`) as read-only
+background, never as a task list, plan, or binding convention. The root
+`AGENTS.md` is ours and just points here; upstream's edits to it are always
+discarded on sync. Fork-side plans live in Backlog (`backlog/`), nowhere else.
 
 ## Boundaries — read this first (hard rule)
 
@@ -107,13 +111,16 @@ Convenience targets live in the `Makefile`: `make building` (debug, `-Og`),
 Verified green:
 
 ```sh
-bazel test -c dbg //test:tests //test:hazel_test
+bazel test -c dbg //test:all
 ```
 
 - `//test:tests` — aggregate googletest suite (~40s).
 - `//test:hazel_test` — dedicated Hazel shard regression. **A passing
-  `hazel_test` is a narrow regression check, not a sign Hazel is ready — Hazel is
-  a work in progress and not ready for use (see the Warren table below).**
+  `hazel_test` is a narrow regression check — see the Hazel caution in the
+  Warren table below.**
+- `//test:optimizer_test` — upstream's GCL optimizer scaffold tests.
+- `//test:jsonl_test`, `//test:jsonl_server_test` — the fork's JSONL CLI and
+  server end-to-end tests.
 
 `test/BUILD` defines the targets. The Makefile's `make testing` runs `bazel test
 ...` (all test targets).
@@ -126,8 +133,14 @@ Real binaries (build then run from `bazel-bin/apps/`):
 - `//apps:rank` — batch TREC-style ranking (BM25); `--statistics`, `--verbose`.
 - `//apps:fluffy` — interactive GCL query shell over a burrow or Hazel shard.
 - `//apps:fiver2hazel` — convert live Fiver shards to immutable Hazel shards
-  (`--convert` / `--merge`). **Hazel is a work in progress and not ready for use
-  — don't build on this path (see the Warren table below).**
+  (`--convert` / `--merge`). See the Hazel caution in the Warren table below.
+- `//apps:ssr-server` / `//apps:ssr-client` (+ `apps/ssr-client.py`) — upstream's
+  TCP/JSON shortest-substring-ranking server and clients; wraps `parallel_ssr()`
+  (`src/ranking.cc`), which parallelizes SSR within a single shard. Usage:
+  `ssr-server [--fields fields] container content docno burrow [burrow...]`.
+  Note: its per-result docno comes from a `docno` GCL evaluated inside the
+  container, so cp-native burrows (doc-8) have no real docno to report;
+  cp-native parallel SSR in our own server is backlog TASK-25.
 
 **JSONL search stack (index → query → server → agent).** How to build and run
 these — with copy-paste commands — is in
@@ -166,7 +179,7 @@ Warren implementations:
 | `SimpleWarren` | Static flat-file burrow, single-transaction batch update. |
 | `Fiver` | Mutable in-memory transaction shard (an "update Warren"). |
 | `Bigwig` | Dynamic Warren over `Fiver` shards + shared `Fluffle` state. |
-| `Hazel` | Immutable single-file shard built from Fivers (format: `docs/design/reference-specs/hazel-format.md`). **⚠️ Work in progress — not ready for use** (per Charlie Clarke, 2026-06-12). Don't build features on the Hazel path; prefer `SimpleWarren` or `Bigwig`. |
+| `Hazel` | Immutable single-file shard built from Fivers (format: `ai/hazel.md`, upstream's live spec). **⚠️ Caution** — upstream landed the Hazel/Bigwig integration in June 2026, but Charlie Clarke has not declared it ready for use; the fork still builds no features on the Hazel path. Prefer `SimpleWarren` or `Bigwig`. |
 
 `meadowlark/` is a higher-level layer (a "meadow" = Bigwig + UTF-8 tokenizer +
 JSON featurizer + zlib/post compression) with pluggable **foragers** (annotation
@@ -174,9 +187,13 @@ passes). Ranking lives in `src/ranking.cc` / `src/ranker.cc`.
 
 Directory map:
 
-- `src/` — core library. `meadowlark/` — meadow layer. `apps/` — CLIs and dataset
-  drivers. `test/` — googletest suites. `docs/` — the paper + `hazel-format.md`.
-  `archive/` — prior author's non-authoritative notes (see `archive/README.md`).
+- `src/` — core library. `gcl/` — GCL operators, S-expression parser, MultiText
+  compiler, and optimizer scaffold (moved out of `src/` upstream, June 2026).
+  `meadowlark/` — meadow layer. `apps/` — CLIs and dataset drivers. `test/` —
+  googletest suites. `docs/` — the paper, design specs, and notes. `ai/` —
+  upstream's (Clarke's) working notes, refreshed wholesale on each sync;
+  non-authoritative (see the top of this file). `archive/` — retired material
+  (see `archive/README.md`).
 
 ## Contributing
 
