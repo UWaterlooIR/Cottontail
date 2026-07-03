@@ -124,6 +124,8 @@ Full contract: [server-spec](cottontail-search-server-spec.md). Concurrency desi
 ## 4. Run the ISJ Searcher — `isj/`
 
 The maintained agent is the **ISJ Searcher** under [`isj/`](../../../isj/): an Analyst
+(three interchangeable Searcher classes — plain cover, JSON tiered, and the
+MultiText-DSL program searcher — selected in `config.toml`; see the README)
 splits the question into interpretations, then a per-intent Searcher drives the
 server's **`cover_search`** tool (search → read cover summaries → judge →
 reformulate) and the CLI writes a run-output directory. One-time setup — the `uv`

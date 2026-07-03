@@ -175,6 +175,24 @@ authors queries; the Judger reads full documents and grades them, in parallel; t
 controller (not the model) owns paging, the stop rules, the budget, de-duplication,
 and the trace. The motivation and full spec are in TASK-16 (`backlog/tasks/`).
 
+### The three interchangeable Searchers
+
+`BaseSearcher` (in `agents/searcher.py`) is generic over a list of `Queryable`
+query types (TASK-18); a concrete searcher just picks its prompt + query type
+and is selected via `[agents.searcher].class` in `config.toml` — no controller
+or base changes:
+
+| class | tool | emits per turn |
+|---|---|---|
+| `agents.searcher.Searcher` (default) | `cover_search` | one GCL cover query |
+| `agents.tiered_searcher.TieredSearcher` (TASK-20) | `tiered_query_search` | a JSON list of GCL tiers, precise→broad |
+| `agents.mt_tiered_searcher.MultiTextTieredSearcher` (TASK-22) | `submit_tiered_query` | a **MultiText DSL program** (macros + `@rank`), compiled server-side; compile diagnostics bounce back for self-correction |
+
+The two tiered searchers run the same server-side cascade; they differ only in
+how the model authors the tiers. **Keep `reasoning_effort = "medium"` for the
+tiered/MultiText searchers** — at `"high"`, gpt-oss-120b falls into pathological
+reasoning loops (validated in `scouting/multitext-dsl*/captured/FINDINGS.md`).
+
 ### Searcher — `agents/searcher.py` + `searcher.md`
 A thin query author (like the `Analyst`). `Searcher(client, model).propose(messages)`
 makes one LLM round-trip offering a **single `search` tool** with

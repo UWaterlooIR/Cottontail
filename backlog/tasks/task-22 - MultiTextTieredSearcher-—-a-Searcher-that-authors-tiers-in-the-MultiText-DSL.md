@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-02 16:10'
-updated_date: '2026-07-03 04:07'
+updated_date: '2026-07-03 04:50'
 labels:
   - enhancement
 dependencies:
@@ -42,7 +42,7 @@ Architecture (settled during TASK-26 study): a new server endpoint /tools/multit
 - [ ] #3 The program is compiled server-side by a new /tools/multitext_tiered_search handler using a fresh cottontail::Mt per request (statement walk like apps/mt-compile.cc); any compile error returns HTTP 400 whose body carries the per-statement diagnostics, and the controller's existing EngineError bounce delivers them to the model as the tool result (verified self-repair in TASK-26); //apps:mt-compile is the warren-free oracle in unit tests
 - [ ] #4 The compiled tiers feed the SAME jsonl_tiered_query_search cascade (ranking, summaries, cascade semantics, and atom_counts identical to the JSON TieredSearcher — the (# N) width-operand leaf fix already landed at the source in cover_leaves, 2026-07-03, so no handler-side filtering)
 - [ ] #5 The prompt is the TASK-26-validated multi-turn prompt (isj/scouting/multitext-dsl-2/prompt-turns.md) carrying the no-underscore macro rule and the word* rule, plus a proximity-join idiom example; reasoning_effort defaults to medium
-- [ ] #6 A live end-to-end smoke: the isj CLI runs one real question with [agents.searcher].class set to MultiTextTieredSearcher against the 1M dev server, producing a normal run-output directory with valid traces
+- [x] #6 A live end-to-end smoke: the isj CLI runs one real question with [agents.searcher].class set to MultiTextTieredSearcher against the 1M dev server, producing a normal run-output directory with valid traces
 - [ ] #7 An A/B procedure compares MultiTextTieredSearcher vs the JSON TieredSearcher vs the plain Searcher on the same scoped needs (query validity, retrieval quality via judged grades, latency) and reports results; the question set and run budget are checkpointed with Mark before the runs
 - [ ] #8 Unit tests cover the new Queryable (schema/args/execute/trace), the searcher class, the C++ handler (valid program parity with tiered_query_search, compile-error diagnostics, underscore diagnostic), and the compile-bounce path; bazel test //test:all and the full isj pytest suite pass
 <!-- AC:END -->
@@ -79,3 +79,9 @@ Architecture (settled during TASK-26 study): a new server endpoint /tools/multit
 5. Docs + finalize
    5.1 isj/README.md: the three searcher classes and how to select them; brief pointer in running-the-search-stack.md's isj section. backlog notes/ACs; PR from the feature branch to main.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Live smoke (AC6) PASSED: full isj pipeline (Analyst -> MultiTextTieredSearcher -> Judger) on 'health effects of intermittent fasting on adults' vs the 1M dev server: 142 judged ranked entries, 6 searcher turns at medium effort (300-1300 completion tokens/turn, scouting-range), 0 compile bounces, 2 defensive no-tool-call bounces recovered by the inherited BaseSearcher path. Turn-1 program was idiomatic faceted MultiText with stem stars. Two operational findings en route: (1) the first smoke attempt 404'd because the dev servers predated the endpoint — server/agent version skew surfaces as 'HTTP 404:' bounces, and the model responds by needlessly simplifying its programs; (2) Mark's live config sets searcher reasoning_effort=high, which reproduces the known reasoning-bloat mode on this searcher (26K-token turns) — the config MUST say medium when class is switched to tiered/multitext.
+<!-- SECTION:NOTES:END -->
