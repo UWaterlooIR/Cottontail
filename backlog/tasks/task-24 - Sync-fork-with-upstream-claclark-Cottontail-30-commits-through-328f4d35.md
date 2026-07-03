@@ -5,7 +5,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-03 00:36'
-updated_date: '2026-07-03 01:13'
+updated_date: '2026-07-03 01:14'
 labels: []
 dependencies: []
 priority: high
@@ -37,15 +37,17 @@ Deliverable: PR from claude/sync-with-charlie to main; no direct commits to main
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 claude/sync-with-charlie contains a merge of upstream/main (328f4d35) with all conflicts resolved per the policy in the description
-- [ ] #2 AGENTS.md still points to CLAUDE.md with no upstream dev-notes content; ai/ exists at top level matching upstream; archive/ai/ is removed; CLAUDE.md carries the ai/ non-authoritative fence
-- [ ] #3 gcl/parse.cc contains the TASK-7 null-child guards (Link and binary operators propagate nullptr operands) alongside upstream's unary-combinator support, and test/gcl.cc keeps both sides' tests
+- [x] #1 claude/sync-with-charlie contains a merge of upstream/main (328f4d35) with all conflicts resolved per the policy in the description
+- [x] #2 AGENTS.md still points to CLAUDE.md with no upstream dev-notes content; ai/ exists at top level matching upstream; archive/ai/ is removed; CLAUDE.md carries the ai/ non-authoritative fence
+- [x] #3 gcl/parse.cc contains the TASK-7 null-child guards (Link and binary operators propagate nullptr operands) alongside upstream's unary-combinator support, and test/gcl.cc keeps both sides' tests
 - [x] #4 Exclusion build passes: bazel build -c dbg --cxxopt=-Og -- //... -//apps:walk -//apps:dynamic-test -//apps:simple -//apps:trec-example (walk/Boost remains a known issue)
 - [x] #5 bazel test //test:tests //test:hazel_test is green and the isj Python test suite passes
 - [x] #6 Functional smoke: ssr-server + apps/ssr-client.py over Scrapheap/climbmix-1000-utf8-porter.burrow with container/content ':item' and docno ':docno' returns ranked results with REAL docnos (shard_*_*) and the document-by-docno op works. Scale smoke: same over Scrapheap/climbmix-1M-porter.burrow with docno ':item' (degenerate identity expected — cp-native index); wiring and rough timing in task notes. Full cp-native parallel-SSR adoption is TASK-25, not this task
-- [ ] #7 docs/design/reference-specs/hazel-format.md defers to ai/hazel.md; CLAUDE.md directory map and Hazel caution updated
+- [x] #7 docs/design/reference-specs/hazel-format.md defers to ai/hazel.md; CLAUDE.md directory map and Hazel caution updated
 - [ ] #8 PR opened from claude/sync-with-charlie to main; no commits made directly to main
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
