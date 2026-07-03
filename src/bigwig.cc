@@ -2,23 +2,30 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <map>
 #include <memory>
 #include <regex>
 #include <set>
+#include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "src/annotator.h"
 #include "src/appender.h"
+#include "src/array_hopper.h"
 #include "src/compressor.h"
 #include "src/core.h"
 #include "src/featurizer.h"
 #include "src/fluffle.h"
+#include "src/hazel.h"
 #include "src/hopper.h"
 #include "src/recipe.h"
-#include "src/vector_hopper.h"
 #include "src/warren.h"
 
 namespace cottontail {
@@ -90,11 +97,20 @@ private:
 class BigwigIdx final : public Idx {
 public:
   static std::shared_ptr<Idx>
-  make(const std::vector<std::shared_ptr<Fiver>> &warrens) {
+  make(const std::vector<std::shared_ptr<Owsla>> &warrens,
+       std::shared_ptr<OwslaCache> cache,
+       std::shared_ptr<SimplePostingFactory> posting_factory,
+       addr text_chunk_feature) {
     std::shared_ptr<BigwigIdx> idx =
         std::shared_ptr<BigwigIdx>(new BigwigIdx());
     assert(idx != nullptr);
     idx->warrens_ = warrens;
+    if (cache == nullptr)
+      cache = std::make_shared<OwslaCache>();
+    idx->cache_ = cache;
+    assert(posting_factory != nullptr);
+    idx->posting_factory_ = posting_factory;
+    idx->text_chunk_feature_ = text_chunk_feature;
     idx->erasing_ = false;
     for (auto &&warren : warrens)
       if (warren->idx()->count(null_feature)) {
@@ -116,10 +132,9 @@ private:
   std::unique_ptr<Hopper> hopper_(addr feature) final {
     if (erasing_ && feature != null_feature) {
       return std::make_unique<cottontail::gcl::NotContainedIn>(
-          std::move(Fiver::merge(warrens_, feature, nullptr, &cache_)),
-          std::move(Fiver::merge(warrens_, null_feature, nullptr, &cache_)));
+          std::move(raw_hopper(feature)), std::move(raw_hopper(null_feature)));
     } else {
-      return Fiver::merge(warrens_, feature, nullptr, &cache_);
+      return raw_hopper(feature);
     }
   };
   addr count_(addr feature) final {
@@ -136,15 +151,75 @@ private:
         n += warren->idx()->vocab();
     return n;
   }
-  SafeMap<addr, std::shared_ptr<SimplePosting>> cache_;
-  std::vector<std::shared_ptr<Fiver>> warrens_;
+  std::vector<std::shared_ptr<Owsla>> contributors(addr feature) {
+    std::vector<std::shared_ptr<Owsla>> contributing;
+    for (auto &warren : warrens_)
+      if (warren != nullptr && warren->idx()->count(feature) > 0)
+        contributing.push_back(warren);
+    return contributing;
+  }
+
+  static void
+  fill_posting(std::shared_ptr<SimplePosting> posting,
+               std::shared_ptr<SimplePostingFactory> posting_factory,
+               std::vector<std::shared_ptr<Owsla>> contributing, addr feature) {
+    std::vector<std::shared_ptr<SimplePosting>> postings;
+    addr n = 0;
+    for (auto &warren : contributing) {
+      n += warren->idx()->count(feature);
+      auto child = warren->posting(feature);
+      if (child != nullptr)
+        postings.push_back(child);
+    }
+    std::shared_ptr<SimplePosting> merged =
+        posting_factory->posting_from_merge(postings);
+    if (merged != nullptr) {
+      posting->append(merged);
+      posting->release();
+      return;
+    }
+    assert(false);
+    for (addr i = 0; i < n; i++)
+      posting->push(minfinity + 1 + i, minfinity + 2 + i, 0.0);
+    posting->release();
+  }
+
+  std::unique_ptr<Hopper> raw_hopper(addr feature) {
+    std::vector<std::shared_ptr<Owsla>> contributing = contributors(feature);
+    if (contributing.size() == 0)
+      return std::make_unique<EmptyHopper>();
+    if (contributing.size() == 1)
+      return contributing[0]->idx()->hopper(feature);
+    if (feature == text_chunk_feature_) {
+      std::shared_ptr<SimplePosting> posting =
+          posting_factory_->posting_from_feature(feature);
+      fill_posting(posting, posting_factory_, contributing, feature);
+      return ArrayHopper::make(posting);
+    }
+    bool fill;
+    std::shared_ptr<SimplePosting> posting =
+        cache_->get(feature, posting_factory_, &fill);
+    if (fill) {
+      std::shared_ptr<SimplePostingFactory> posting_factory = posting_factory_;
+      std::thread thread([posting, posting_factory, contributing, feature] {
+        fill_posting(posting, posting_factory, contributing, feature);
+      });
+      thread.detach();
+    }
+    return ArrayHopper::make(posting);
+  }
+
+  std::shared_ptr<OwslaCache> cache_;
+  std::shared_ptr<SimplePostingFactory> posting_factory_;
+  std::vector<std::shared_ptr<Owsla>> warrens_;
+  addr text_chunk_feature_;
   bool erasing_;
 };
 
 class BigwigTxt final : public Txt {
 public:
   static std::shared_ptr<Txt>
-  make(const std::vector<std::shared_ptr<Fiver>> &warrens) {
+  make(const std::vector<std::shared_ptr<Owsla>> &warrens) {
     std::shared_ptr<BigwigTxt> txt =
         std::shared_ptr<BigwigTxt>(new BigwigTxt());
     assert(txt != nullptr);
@@ -197,71 +272,124 @@ private:
       *q = q0;
     return true;
   };
-  std::vector<std::shared_ptr<Fiver>> warrens_;
+  std::vector<std::shared_ptr<Owsla>> warrens_;
 };
 
 namespace {
-bool fiver_files(std::shared_ptr<Working> working,
-                 std::vector<std::string> *name, std::string *error) {
-  if (working == nullptr) {
-    if (name != nullptr)
-      name->clear();
+struct SanitizedInventory {
+  std::vector<OwslaShard> fivers;
+  std::vector<OwslaShard> hazels;
+  std::vector<OwslaShard> shards;
+  std::vector<HazelMergeRecovery> hazel_merges;
+};
+
+bool verify_shard_order(const std::string &kind,
+                        const std::vector<OwslaShard> &shards,
+                        std::string *error) {
+  for (size_t i = 0; i < shards.size(); i++) {
+    if (shards[i].start < 0 || shards[i].end < shards[i].start) {
+      safe_error(error) = "Bad " + kind + " shard range: " + shards[i].name;
+      return false;
+    }
+    if (i > 0 && shards[i - 1].end >= shards[i].start) {
+      safe_error(error) = "Overlapping " + kind + " shards around: " +
+                          shards[i].name;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool combine_shards(std::shared_ptr<Working> working,
+                    SanitizedInventory *inventory, std::string *error) {
+  if (inventory == nullptr)
     return true;
-  }
-  std::vector<std::string> fivers = working->ls("fiver");
-  struct FiverFile {
-    FiverFile(addr start, cottontail::addr end, const std::string &name)
-        : start(start), end(end), name(name){};
-    addr start;
-    addr end;
-    std::string name;
-  };
-  std::vector<FiverFile> found;
-  for (auto &fiver : fivers) {
-    std::string suffix = fiver.substr(fiver.find(".") + 1);
-    try {
-      addr start = std::stol(suffix.substr(0, suffix.find(".")));
-      addr end = std::stol(suffix.substr(suffix.find(".") + 1));
-      if (start < 0 || end < 0 || start > end) {
-        safe_error(error) = "Filename range error for fiver: " + fiver;
-        return false;
+  if (!verify_shard_order("fiver", inventory->fivers, error) ||
+      !verify_shard_order("hazel", inventory->hazels, error))
+    return false;
+
+  std::vector<OwslaShard> fivers;
+  size_t hazel = 0;
+  for (auto &fiver : inventory->fivers) {
+    while (hazel < inventory->hazels.size() &&
+           inventory->hazels[hazel].end < fiver.start)
+      hazel++;
+    if (hazel < inventory->hazels.size() &&
+        owsla_ranges_overlap(inventory->hazels[hazel], fiver)) {
+      if (owsla_range_contains(inventory->hazels[hazel], fiver)) {
+        if (working != nullptr && !working->remove(fiver.name, error))
+          return false;
+        continue;
       }
-      found.emplace_back(start, end, fiver);
-    } catch (const std::invalid_argument &e) {
-      safe_error(error) = "Filename format error for fiver: " + fiver;
+      if (owsla_range_contains(fiver, inventory->hazels[hazel])) {
+        safe_error(error) =
+            "Fiver shard contains Hazel shard around: " + fiver.name + " and " +
+            inventory->hazels[hazel].name;
+      } else {
+        safe_error(error) =
+            "Mixed fiver/hazel overlap around: " + fiver.name + " and " +
+            inventory->hazels[hazel].name;
+      }
       return false;
     }
+    fivers.push_back(fiver);
   }
-  std::sort(found.begin(), found.end(),
-            [](const auto &a, const auto &b) -> bool {
-              return a.start < b.start || (a.start == b.start && a.end > b.end);
-            });
-  std::vector<FiverFile> living;
-  std::vector<FiverFile> dead;
-  for (auto &fiver : found)
-    if (living.empty() || living.back().end < fiver.start) {
-      living.emplace_back(fiver);
-    } else if (living.back().end >= fiver.end) {
-      dead.emplace_back(fiver);
-    } else {
-      safe_error(error) = "Filename sequence error for fiver: " + fiver.name;
+  inventory->fivers = fivers;
+
+  inventory->shards.clear();
+  inventory->shards.reserve(inventory->hazels.size() + inventory->fivers.size());
+  inventory->shards.insert(inventory->shards.end(), inventory->hazels.begin(),
+                           inventory->hazels.end());
+  inventory->shards.insert(inventory->shards.end(), inventory->fivers.begin(),
+                           inventory->fivers.end());
+  std::sort(inventory->shards.begin(), inventory->shards.end());
+  return true;
+}
+
+std::string shell_quote(const std::string &s) {
+  std::string quoted = "'";
+  for (char c : s) {
+    if (c == '\'')
+      quoted += "'\\''";
+    else
+      quoted += c;
+  }
+  quoted += "'";
+  return quoted;
+}
+
+bool is_commit_script(const std::string &name) {
+  return name.size() > 10 && name.compare(0, 7, "commit.") == 0 &&
+         name.compare(name.size() - 3, 3, ".sh") == 0;
+}
+
+bool finalize_commits(std::shared_ptr<Working> working, std::string *error) {
+  if (working == nullptr)
+    return true;
+  for (auto &name : working->ls("commit")) {
+    if (!is_commit_script(name))
+      continue;
+    std::string command = shell_quote(working->make_name(name));
+    if (std::system(command.c_str()) != 0) {
+      safe_error(error) = "Could not finalize commit script: " + name;
       return false;
     }
-  // can't see a situation when it isn't okay to remove
-  // uncommited transactions ("kittens")
-  std::vector<std::string> kittens = working->ls("kitten");
-  for (auto &kitten : kittens)
-    std::remove(working->make_name(kitten).c_str());
-  std::vector<std::string> temps = working->ls("temp");
-  for (auto &temp : temps)
-    std::remove(working->make_name(temp).c_str());
-  for (auto &fiver : dead)
-    std::remove(working->make_name(fiver.name).c_str());
-  if (name != nullptr) {
-    name->clear();
-    for (auto &fiver : living)
-      name->push_back(working->make_name(fiver.name));
+    if (!working->remove(name, error))
+      return false;
   }
+  return true;
+}
+
+bool sanitize(std::shared_ptr<Working> working, SanitizedInventory *inventory,
+              std::string *error) {
+  SanitizedInventory found;
+  if (!finalize_commits(working, error) ||
+      !Fiver::sanitize(working, &found.fivers, error) ||
+      !Hazel::sanitize(working, &found.hazels, &found.hazel_merges, error) ||
+      !combine_shards(working, &found, error))
+    return false;
+  if (inventory != nullptr)
+    *inventory = found;
   return true;
 }
 
@@ -404,34 +532,55 @@ std::shared_ptr<Bigwig> Bigwig::make(const std::string &burrow,
       do_merge = do_merge_element->second;
   }
   std::shared_ptr<Fluffle> fluffle = Fluffle::make();
+  fluffle->working = working;
   (*fluffle->parameters) = extra_parameters;
   fluffle->merge = (do_merge == "" || okay(do_merge));
-  std::vector<std::string> fivernames;
-  if (!fiver_files(working, &fivernames, error))
+  SanitizedInventory inventory;
+  if (!sanitize(working, &inventory, error))
     return nullptr;
-  std::vector<std::shared_ptr<Fiver>> fivers;
-  for (auto &fivername : fivernames) {
-    std::shared_ptr<Fiver> fiver =
-        Fiver::unpickle(fivername, working, featurizer, tokenizer, error,
-                        posting_compressor, fvalue_compressor, text_compressor);
-    if (fiver == nullptr)
+  fluffle->hazel_merges = inventory.hazel_merges;
+  std::vector<std::shared_ptr<Owsla>> visible;
+  for (auto &shard : inventory.shards) {
+    if (shard.name.compare(0, 6, "hazel.") == 0) {
+      std::string hazelname = working->make_name(shard.name);
+      std::shared_ptr<Warren> warren = Warren::make(hazelname, error);
+      if (warren == nullptr)
+        return nullptr;
+      std::shared_ptr<Hazel> hazel = std::dynamic_pointer_cast<Hazel>(warren);
+      if (hazel == nullptr) {
+        safe_error(error) = "Bigwig got non-Hazel shard: " + shard.name;
+        return nullptr;
+      }
+      hazel->start();
+      visible.push_back(hazel);
+      fluffle->warrens.push_back(hazel);
+    } else if (shard.name.compare(0, 6, "fiver.") == 0) {
+      std::string fivername = working->make_name(shard.name);
+      std::shared_ptr<Fiver> fiver =
+          Fiver::unpickle(fivername, working, featurizer, tokenizer, error,
+                          posting_compressor, fvalue_compressor,
+                          text_compressor);
+      if (fiver == nullptr)
+        return nullptr;
+      fiver->start();
+      visible.push_back(fiver);
+      fluffle->warrens.push_back(fiver);
+    } else {
+      safe_error(error) = "Bigwig got unknown shard: " + shard.name;
       return nullptr;
-    fiver->start();
-    fivers.push_back(fiver);
-    fluffle->warrens.push_back(fiver);
+    }
   }
   addr address = 0;
   addr sequence = 0;
-  if (fivers.size() > 0) {
+  if (visible.size() > 0) {
     addr p, q;
-    for (size_t i = fivers.size(); i > 0; --i) {
-      if (fivers[i - 1]->txt()->range(&p, &q)) {
+    for (size_t i = visible.size(); i > 0; --i) {
+      if (visible[i - 1]->txt()->range(&p, &q)) {
         address = q + 1;
         break;
       }
     }
-    fivers.back()->get_sequence(&p, &q);
-    sequence = q + 1;
+    sequence = inventory.shards.back().end + 1;
   }
   fluffle->address = address;
   fluffle->sequence = sequence;
@@ -442,6 +591,8 @@ std::shared_ptr<Bigwig> Bigwig::make(const std::string &burrow,
   bigwig->fluffle_ = fluffle;
   bigwig->posting_compressor_ = posting_compressor;
   bigwig->fvalue_compressor_ = fvalue_compressor;
+  bigwig->posting_factory_ =
+      SimplePostingFactory::make(posting_compressor, fvalue_compressor);
   bigwig->text_compressor_ = text_compressor;
   bigwig->txt_recipe_ = txt_parameters["recipe"];
   if (stemmer != nullptr)
@@ -481,6 +632,7 @@ std::shared_ptr<Bigwig> Bigwig::make(
     bigwig->fluffle_ = Fluffle::make();
   else
     bigwig->fluffle_ = fluffle;
+  bigwig->fluffle_->working = working;
   std::shared_ptr<Compressor> null_compressor = nullptr;
   if (posting_compressor == nullptr || fvalue_compressor == nullptr ||
       text_compressor == nullptr)
@@ -497,6 +649,9 @@ std::shared_ptr<Bigwig> Bigwig::make(
     bigwig->text_compressor_ = null_compressor;
   else
     bigwig->text_compressor_ = text_compressor;
+  bigwig->posting_factory_ =
+      SimplePostingFactory::make(bigwig->posting_compressor_,
+                                 bigwig->fvalue_compressor_);
   if (working != nullptr && !write_dna(working, bigwig->recipe(), error))
     return nullptr;
   return bigwig;
@@ -519,6 +674,7 @@ std::shared_ptr<Warren> Bigwig::clone_(std::string *error) {
   bigwig->fluffle_ = fluffle_;
   bigwig->posting_compressor_ = posting_compressor_;
   bigwig->fvalue_compressor_ = fvalue_compressor_;
+  bigwig->posting_factory_ = posting_factory_;
   bigwig->text_compressor_ = text_compressor_;
   bigwig->default_container_ = default_container_;
   if (stemmer_ != nullptr) {
@@ -530,8 +686,10 @@ std::shared_ptr<Warren> Bigwig::clone_(std::string *error) {
   }
   warrens_lock_.lock();
   if (warrens_valid_) {
+    assert(cache_ != nullptr);
     for (auto &warren : warrens_)
       bigwig->warrens_.push_back(warren);
+    bigwig->cache_ = cache_;
     bigwig->warrens_valid_ = true;
     warrens_lock_.unlock();
     bigwig->start();
@@ -542,18 +700,27 @@ std::shared_ptr<Warren> Bigwig::clone_(std::string *error) {
 }
 
 void Bigwig::start_() {
+  std::shared_ptr<OwslaCache> cache;
   {
     std::lock_guard<std::mutex> _(warrens_lock_);
     if (!warrens_valid_) {
       fluffle_->lock.lock();
+      warrens_.clear();
       for (auto &warren : fluffle_->warrens)
-        if (warren != nullptr && warren->name() == "fiver")
-          warrens_.push_back(std::static_pointer_cast<Fiver>(warren));
+        if (warren != nullptr &&
+            (warren->name() == "hazel" || warren->name() == "fiver"))
+          warrens_.push_back(warren);
+      if (fluffle_->cache == nullptr)
+        fluffle_->cache = std::make_shared<OwslaCache>();
+      cache_ = fluffle_->cache;
       fluffle_->lock.unlock();
       warrens_valid_ = true;
     }
+    assert(cache_ != nullptr);
+    cache = cache_;
   }
-  idx_ = BigwigIdx::make(warrens_);
+  idx_ = BigwigIdx::make(warrens_, cache, posting_factory_,
+                         featurizer_->featurize(text_chunk_tag));
   assert(idx_ != nullptr);
   txt_ = Txt::wrap(txt_recipe_, BigwigTxt::make(warrens_));
   assert(txt_ != nullptr);
@@ -564,6 +731,7 @@ void Bigwig::end_() {
     std::lock_guard<std::mutex> _(warrens_lock_);
     warrens_valid_ = false;
     warrens_.clear();
+    cache_ = nullptr;
   }
   idx_ = nullptr;
   txt_ = nullptr;
@@ -636,19 +804,22 @@ bool Bigwig::transaction_(std::string *error) {
   return true;
 }
 
-bool Bigwig::ready_() {
+bool Bigwig::ready_(std::string *error) {
   fluffle_->lock.lock();
   fluffle_->address = fiver_->relocate(fluffle_->address);
   fiver_->set_sequence(fluffle_->sequence);
   fluffle_->sequence++;
   fluffle_->warrens.push_back(fiver_);
   fluffle_->lock.unlock();
-  return fiver_->ready();
+  return fiver_->ready(error);
 }
 
 namespace {
-#if 1
-bool find_sequence(const std::vector<bool> a, size_t *start, size_t *end) {
+const addr small_shard = 8 * 1024 * 1024;
+const addr medium_shard = 256 * 1024 * 1024;
+const addr large_shard = 2 * medium_shard;
+
+bool find_sequence(const std::vector<bool> &a, size_t *start, size_t *end) {
   size_t best_len = 0;
   size_t best_start = 0;
   size_t cur_start = 0;
@@ -659,7 +830,7 @@ bool find_sequence(const std::vector<bool> a, size_t *start, size_t *end) {
         cur_start = i;
       ++cur_len;
     } else {
-      if (cur_len >= 3 && cur_len > best_len) { // ← only change
+      if (cur_len >= 3 && cur_len > best_len) {
         best_len = cur_len;
         best_start = cur_start;
       }
@@ -678,7 +849,8 @@ bool find_sequence(const std::vector<bool> a, size_t *start, size_t *end) {
   return false;
 }
 
-bool find_smallest_pair(const std::vector<addr> a, size_t *start, size_t *end) {
+bool find_smallest_pair(const std::vector<addr> &a, size_t *start,
+                        size_t *end) {
   if (a.size() < 2)
     return false;
   bool found = false;
@@ -703,64 +875,401 @@ bool find_smallest_pair(const std::vector<addr> a, size_t *start, size_t *end) {
   return found;
 }
 
+bool eligible(std::shared_ptr<Fluffle> fluffle, std::shared_ptr<Owsla> warren) {
+  return warren != nullptr &&
+         fluffle->merging.find(warren) == fluffle->merging.end();
+}
+
+bool hazel_merge_okay(std::shared_ptr<Fluffle> fluffle) {
+  size_t merging_hazels = 0;
+  for (auto &warren : fluffle->merging)
+    if (warren != nullptr && warren->name() == "hazel")
+      merging_hazels++;
+  return merging_hazels + 1 < fluffle->max_workers;
+}
+
+bool find_tiny_fiver_run(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                         size_t *end) {
+  std::vector<bool> tiny(fluffle->warrens.size(), false);
+  for (size_t i = 0; i < fluffle->warrens.size(); i++) {
+    auto warren = fluffle->warrens[i];
+    tiny[i] = eligible(fluffle, warren) && warren->name() == "fiver" &&
+              warren->estimated_size() < small_shard;
+  }
+  return find_sequence(tiny, start, end);
+}
+
+bool find_smallest_fiver_pair(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                              size_t *end) {
+  bool found = false;
+  size_t best = 0;
+  addr best_sum = 0;
+  for (size_t i = 0; i + 1 < fluffle->warrens.size(); i++) {
+    auto left = fluffle->warrens[i];
+    auto right = fluffle->warrens[i + 1];
+    if (!eligible(fluffle, left) || !eligible(fluffle, right) ||
+        left->name() != "fiver" || right->name() != "fiver")
+      continue;
+    addr left_size = left->estimated_size();
+    addr right_size = right->estimated_size();
+    if (left_size < 0 || right_size < 0 || left_size >= medium_shard ||
+        right_size >= medium_shard)
+      continue;
+    addr sum = left_size + right_size;
+    if (!found || sum < best_sum) {
+      found = true;
+      best = i;
+      best_sum = sum;
+    }
+  }
+  if (!found)
+    return false;
+  if (start != nullptr && end != nullptr) {
+    *start = best;
+    *end = best + 1;
+  }
+  return true;
+}
+
+bool find_stranded_fiver_conversion(std::shared_ptr<Fluffle> fluffle,
+                                    size_t *start, size_t *end) {
+  if (fluffle->warrens.size() < 3)
+    return false;
+  for (size_t i = 1; i + 1 < fluffle->warrens.size(); i++) {
+    auto left = fluffle->warrens[i - 1];
+    auto warren = fluffle->warrens[i];
+    auto right = fluffle->warrens[i + 1];
+    if (left != nullptr && right != nullptr && warren != nullptr &&
+        left->name() == "hazel" && warren->name() == "fiver" &&
+        right->name() == "hazel" && eligible(fluffle, warren)) {
+      if (start != nullptr && end != nullptr) {
+        *start = i;
+        *end = i;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+bool find_oldest_large_fiver_conversion(std::shared_ptr<Fluffle> fluffle,
+                                        size_t *start, size_t *end) {
+  for (size_t i = 0; i < fluffle->warrens.size(); i++) {
+    auto warren = fluffle->warrens[i];
+    if (eligible(fluffle, warren) && warren->name() == "fiver" &&
+        warren->estimated_size() >= medium_shard) {
+      if (start != nullptr && end != nullptr) {
+        *start = i;
+        *end = i;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+bool same_sequence(const OwslaShard &shard, std::shared_ptr<Owsla> warren) {
+  if (warren == nullptr || warren->name() != "hazel")
+    return false;
+  addr start;
+  addr end;
+  warren->get_sequence(&start, &end);
+  return shard.start == start && shard.end == end;
+}
+
+bool find_recovered_hazel_merge(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                                size_t *end) {
+  for (auto &recovery : fluffle->hazel_merges) {
+    if (recovery.sources.size() < 2 ||
+        recovery.sources.size() > fluffle->warrens.size())
+      continue;
+    for (size_t i = 0; i + recovery.sources.size() <= fluffle->warrens.size();
+         i++) {
+      bool match = true;
+      for (size_t j = 0; j < recovery.sources.size(); j++) {
+        auto warren = fluffle->warrens[i + j];
+        if (!eligible(fluffle, warren) ||
+            !same_sequence(recovery.sources[j], warren)) {
+          match = false;
+          break;
+        }
+      }
+      if (match) {
+        if (start != nullptr && end != nullptr) {
+          *start = i;
+          *end = i + recovery.sources.size() - 1;
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+bool find_smallest_hazel_pair(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                              size_t *end) {
+  std::vector<addr> storage(fluffle->warrens.size(), -1);
+  for (size_t i = 0; i < fluffle->warrens.size(); i++) {
+    auto warren = fluffle->warrens[i];
+    if (eligible(fluffle, warren) && warren->name() == "hazel")
+      storage[i] = warren->estimated_size();
+  }
+  return find_smallest_pair(storage, start, end);
+}
+
+bool find_hazel_action(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                       size_t *end) {
+  if (!hazel_merge_okay(fluffle))
+    return false;
+  if (find_recovered_hazel_merge(fluffle, start, end))
+    return true;
+  if (find_smallest_hazel_pair(fluffle, start, end))
+    return true;
+  return false;
+}
+
+bool find_lone_fiver_cleanup(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                             size_t *end) {
+  bool found_fiver = false;
+  bool fiver_eligible = false;
+  size_t fiver_index = 0;
+  size_t hazels = 0;
+  addr smallest_hazel = 0;
+  for (size_t i = 0; i < fluffle->warrens.size(); i++) {
+    auto warren = fluffle->warrens[i];
+    if (warren == nullptr)
+      continue;
+    if (warren->name() == "fiver") {
+      if (found_fiver)
+        return false;
+      found_fiver = true;
+      fiver_eligible = eligible(fluffle, warren);
+      fiver_index = i;
+    } else if (warren->name() == "hazel") {
+      addr size = warren->estimated_size();
+      if (hazels == 0 || size < smallest_hazel)
+        smallest_hazel = size;
+      hazels++;
+    } else {
+      return false;
+    }
+  }
+  if (!found_fiver || !fiver_eligible)
+    return false;
+  if (hazels == 1 || (hazels > 1 && smallest_hazel > large_shard)) {
+    if (start != nullptr && end != nullptr) {
+      *start = fiver_index;
+      *end = fiver_index;
+    }
+    return true;
+  }
+  return false;
+}
+
+bool find_fiver_action(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                       size_t *end) {
+  if (find_lone_fiver_cleanup(fluffle, start, end))
+    return true;
+  if (find_tiny_fiver_run(fluffle, start, end))
+    return true;
+  if (find_stranded_fiver_conversion(fluffle, start, end))
+    return true;
+  if (find_oldest_large_fiver_conversion(fluffle, start, end))
+    return true;
+  if (find_smallest_fiver_pair(fluffle, start, end))
+    return true;
+  return false;
+}
+
+bool find_merge_action(std::shared_ptr<Fluffle> fluffle, size_t *start,
+                       size_t *end) {
+  if (find_fiver_action(fluffle, start, end))
+    return true;
+  if (find_hazel_action(fluffle, start, end))
+    return true;
+  return false;
+}
+
+enum class MergeAction { none, fiver_merge, hazel_merge, fiver_to_hazel };
+
+bool validate_fiver_conversion(
+    std::shared_ptr<Fluffle> fluffle,
+    const std::vector<std::shared_ptr<Owsla>> &selected,
+    std::shared_ptr<Fiver> *fiver_to_hazel, std::string *parameters) {
+  if (selected.size() != 1 || selected[0] == nullptr ||
+      selected[0]->name() != "fiver" || !eligible(fluffle, selected[0]))
+    return false;
+  if (fiver_to_hazel != nullptr) {
+    *fiver_to_hazel = std::dynamic_pointer_cast<Fiver>(selected[0]);
+    if (*fiver_to_hazel == nullptr)
+      return false;
+  }
+  if (parameters != nullptr && fluffle->parameters != nullptr)
+    *parameters = freeze(*fluffle->parameters);
+  return true;
+}
+
+bool validate_fiver_merge(
+    std::shared_ptr<Fluffle> fluffle,
+    const std::vector<std::shared_ptr<Owsla>> &selected,
+    std::vector<std::shared_ptr<Fiver>> *fivers) {
+  if (selected.size() < 2)
+    return false;
+  if (fivers != nullptr)
+    fivers->clear();
+  for (auto &warren : selected) {
+    if (warren == nullptr || warren->name() != "fiver" ||
+        !eligible(fluffle, warren))
+      return false;
+    auto fiver = std::dynamic_pointer_cast<Fiver>(warren);
+    if (fiver == nullptr)
+      return false;
+    if (fivers != nullptr)
+      fivers->push_back(fiver);
+  }
+  return true;
+}
+
+bool hazel_recovery_conflicts(const HazelMergeRecovery &recovery,
+                              const OwslaShard &action) {
+  if (owsla_ranges_overlap(recovery.target, action))
+    return true;
+  for (auto &source : recovery.sources)
+    if (owsla_ranges_overlap(source, action))
+      return true;
+  return false;
+}
+
+void clear_conflicting_hazel_recoveries(std::shared_ptr<Fluffle> fluffle,
+                                        const OwslaShard &action) {
+  std::vector<HazelMergeRecovery> hazel_merges;
+  for (auto &recovery : fluffle->hazel_merges)
+    if (!hazel_recovery_conflicts(recovery, action))
+      hazel_merges.push_back(recovery);
+  fluffle->hazel_merges = hazel_merges;
+}
+
+bool validate_hazel_action(
+    std::shared_ptr<Fluffle> fluffle,
+    const std::vector<std::shared_ptr<Owsla>> &selected,
+    std::vector<std::shared_ptr<Hazel>> *hazels, std::string *destination,
+    std::shared_ptr<std::map<std::string, std::string>> *parameters) {
+  if (fluffle == nullptr || fluffle->working == nullptr || selected.size() < 2)
+    return false;
+  if (hazels != nullptr)
+    hazels->clear();
+  addr sequence_start = 0;
+  addr sequence_end = 0;
+  addr previous_end = 0;
+  for (size_t i = 0; i < selected.size(); i++) {
+    auto warren = selected[i];
+    if (warren == nullptr || warren->name() != "hazel" ||
+        !eligible(fluffle, warren))
+      return false;
+    auto hazel = std::dynamic_pointer_cast<Hazel>(warren);
+    if (hazel == nullptr)
+      return false;
+    addr current_start;
+    addr current_end;
+    hazel->get_sequence(&current_start, &current_end);
+    if (current_start < 0 || current_end < current_start ||
+        (i > 0 &&
+         (previous_end == maxfinity || current_start != previous_end + 1)))
+      return false;
+    if (i == 0)
+      sequence_start = current_start;
+    previous_end = current_end;
+    sequence_end = current_end;
+    if (hazels != nullptr)
+      hazels->push_back(hazel);
+  }
+  if (destination != nullptr)
+    *destination =
+        fluffle->working->make_name(hazel_default_name(sequence_start,
+                                                       sequence_end));
+  if (parameters != nullptr) {
+    *parameters = std::make_shared<std::map<std::string, std::string>>();
+    if (fluffle->parameters != nullptr)
+      **parameters = *fluffle->parameters;
+  }
+  clear_conflicting_hazel_recoveries(
+      fluffle, OwslaShard(sequence_start, sequence_end, ""));
+  return true;
+}
+
 void merge_worker(std::shared_ptr<Fluffle> fluffle) {
+  auto retire = [&fluffle]() {
+    assert(fluffle->workers > 0);
+    --fluffle->workers;
+  };
   for (;;) {
+    MergeAction action = MergeAction::none;
     std::vector<std::shared_ptr<Fiver>> fivers;
-    std::shared_ptr<Warren> start_warren;
-    std::shared_ptr<Warren> end_warren;
+    std::vector<std::shared_ptr<Hazel>> hazels;
+    std::vector<std::shared_ptr<Owsla>> selected;
+    std::shared_ptr<Fiver> fiver_to_hazel;
+    std::shared_ptr<Owsla> start_warren;
+    std::shared_ptr<Owsla> end_warren;
+    std::string fiver_hazel_parameters;
+    std::string hazel_merge_destination;
+    std::shared_ptr<std::map<std::string, std::string>> hazel_parameters;
     {
       std::lock_guard<std::mutex> _(fluffle->lock);
       bool cleanup = false;
       for (auto &warren : fluffle->warrens)
-        if (warren->name() == "remove") {
+        if (warren != nullptr && warren->name() == "remove") {
           cleanup = true;
           break;
         }
       if (cleanup) {
-        std::vector<std::shared_ptr<Warren>> warrens;
+        std::vector<std::shared_ptr<Owsla>> warrens;
         for (auto &warren : fluffle->warrens)
-          if (warren->name() != "remove")
+          if (warren == nullptr || warren->name() != "remove")
             warrens.push_back(warren);
         fluffle->warrens = warrens;
       }
-      if (fluffle->warrens.size() < 2)
-        break;
-      std::vector<bool> small;
-      std::vector<addr> storage;
-      for (size_t i = 0; i < fluffle->warrens.size(); i++) {
-        if (fluffle->warrens[i] != nullptr &&
-            fluffle->warrens[i]->name() == "fiver" &&
-            fluffle->merging.find(fluffle->warrens[i]) ==
-                fluffle->merging.end()) {
-          std::shared_ptr<Fiver> fiver =
-              std::static_pointer_cast<Fiver>(fluffle->warrens[i]);
-          addr n = fiver->get_storage_estimate();
-          small.push_back(n < 4 * 1024 * 1024); // arbitrary
-          storage.push_back(n);
-        } else {
-          small.push_back(false);
-          storage.push_back(-1);
-        }
+      size_t start;
+      size_t end;
+      if (!find_merge_action(fluffle, &start, &end)) {
+        retire();
+        return;
       }
-      size_t start, end;
-      if (!find_sequence(small, &start, &end) &&
-          !find_smallest_pair(storage, &start, &end))
-        break;
+      if (start > end || end >= fluffle->warrens.size()) {
+        retire();
+        return;
+      }
+      bool bad = false;
       for (size_t i = start; i <= end; i++) {
-        fivers.push_back(std::static_pointer_cast<Fiver>(fluffle->warrens[i]));
-        fluffle->merging.insert(fluffle->warrens[i]);
-      }
-#if 0
-      {
-        std::cerr << "Merging:\n";
-        for (auto &fiver : fivers) {
-          addr sequence_start, sequence_end;
-          fiver->get_sequence(&sequence_start, &sequence_end);
-          std::cerr << " fiver." << sequence_start << "." << sequence_end
-                    << " (" << fiver->get_storage_estimate() << ")\n";
+        auto warren = fluffle->warrens[i];
+        if (warren == nullptr ||
+            fluffle->merging.find(warren) != fluffle->merging.end()) {
+          bad = true;
+          break;
         }
+        selected.push_back(warren);
       }
-#endif
+      if (bad || selected.size() == 0) {
+        retire();
+        return;
+      }
+
+      if (validate_fiver_conversion(fluffle, selected, &fiver_to_hazel,
+                                    &fiver_hazel_parameters)) {
+        action = MergeAction::fiver_to_hazel;
+      } else if (validate_fiver_merge(fluffle, selected, &fivers)) {
+        action = MergeAction::fiver_merge;
+      } else if (validate_hazel_action(fluffle, selected, &hazels,
+                                       &hazel_merge_destination,
+                                       &hazel_parameters)) {
+        action = MergeAction::hazel_merge;
+      }
+
+      if (action == MergeAction::none) {
+        retire();
+        return;
+      }
+      for (auto &warren : selected)
+        fluffle->merging.insert(warren);
       if (fluffle->workers < fluffle->max_workers) {
         fluffle->workers++;
         std::thread t(merge_worker, fluffle);
@@ -769,184 +1278,63 @@ void merge_worker(std::shared_ptr<Fluffle> fluffle) {
       start_warren = fluffle->warrens[start];
       end_warren = fluffle->warrens[end];
     }
-    std::shared_ptr<Fiver> merged = Fiver::merge(fivers);
-    merged->pickle();
-    for (auto &fiver : fivers)
-      fiver->discard();
+    std::shared_ptr<Owsla> output;
+    if (action == MergeAction::fiver_merge) {
+      std::shared_ptr<Fiver> merged = Fiver::merge(fivers);
+      if (merged != nullptr) {
+        merged->pickle();
+        output = merged;
+      }
+    } else if (action == MergeAction::hazel_merge) {
+      std::string error;
+      output = Hazel::merge(hazels, hazel_merge_destination, hazel_parameters,
+                            &error);
+    } else if (action == MergeAction::fiver_to_hazel) {
+      std::string error;
+      output = fiver_to_hazel->hazel(&error, 64 * 1024,
+                                     fiver_hazel_parameters);
+    }
     {
       std::lock_guard<std::mutex> _(fluffle->lock);
-      std::vector<std::shared_ptr<Warren>> warrens;
+      if (output == nullptr) {
+        for (auto &warren : selected)
+          fluffle->merging.erase(warren);
+        retire();
+        return;
+      }
+      std::vector<std::shared_ptr<Owsla>> warrens;
       size_t i;
       for (i = 0;
            i < fluffle->warrens.size() && fluffle->warrens[i] != start_warren;
            i++)
         warrens.push_back(fluffle->warrens[i]);
-      assert(i < fluffle->warrens.size());
-      if (merged != nullptr) {
-        merged->start();
-        warrens.push_back(merged);
+      if (i >= fluffle->warrens.size()) {
+        for (auto &warren : selected)
+          fluffle->merging.erase(warren);
+        retire();
+        return;
       }
+      output->start();
+      warrens.push_back(output);
       for (; i < fluffle->warrens.size() && fluffle->warrens[i] != end_warren;
            i++)
         fluffle->merging.erase(fluffle->warrens[i]);
-      ;
-      assert(i < fluffle->warrens.size());
+      if (i >= fluffle->warrens.size()) {
+        output->end();
+        for (auto &warren : selected)
+          fluffle->merging.erase(warren);
+        retire();
+        return;
+      }
       fluffle->merging.erase(fluffle->warrens[i]);
       for (i++; i < fluffle->warrens.size(); i++)
         warrens.push_back(fluffle->warrens[i]);
       fluffle->warrens = warrens;
     }
-  }
-  {
-    std::lock_guard<std::mutex> _(fluffle->lock);
-    assert(fluffle->workers > 0);
-    --fluffle->workers;
+    for (auto &warren : selected)
+      warren->discard();
   }
 }
-
-#else
-void merge_worker(std::shared_ptr<Fluffle> fluffle) {
-  for (;;) {
-    fluffle->lock.lock();
-    if (fluffle->warrens.size() < 2) {
-      assert(fluffle->workers > 0);
-      --fluffle->workers;
-      fluffle->lock.unlock();
-      return;
-    }
-    bool cleanup = false;
-    for (auto &warren : fluffle->warrens)
-      if (warren->name() == "remove") {
-        cleanup = true;
-        break;
-      }
-    if (cleanup) {
-      std::vector<std::shared_ptr<Warren>> warrens;
-      for (auto &warren : fluffle->warrens)
-        if (warren->name() != "remove")
-          warrens.push_back(warren);
-      fluffle->warrens = warrens;
-    }
-    if (fluffle->warrens.size() < 2) {
-      assert(fluffle->workers > 0);
-      --fluffle->workers;
-      fluffle->lock.unlock();
-      return;
-    }
-    std::vector<addr> info;
-    for (size_t i = 0; i < fluffle->warrens.size(); i++) {
-      if (fluffle->warrens[i] != nullptr &&
-          fluffle->warrens[i]->name() == "fiver" &&
-          fluffle->merging.find(fluffle->warrens[i]) ==
-              fluffle->merging.end()) {
-        std::shared_ptr<Fiver> fiver =
-            std::static_pointer_cast<Fiver>(fluffle->warrens[i]);
-        addr a, b;
-        fiver->get_sequence(&a, &b);
-        info.push_back(b - a);
-      } else {
-        info.push_back(-1);
-      }
-    }
-    size_t start = 0, end = 0;
-    bool have_range = false;
-    size_t current;
-    bool in_range = false;
-    for (size_t i = 0; i < info.size(); i++)
-      if (in_range) {
-        if (info[i] != 0) {
-          in_range = false;
-          if (have_range) {
-            addr len0 = (end - start) + 1;
-            addr len1 = i - current;
-            if (len1 > len0) {
-              start = current;
-              end = i - 1;
-            }
-          } else if ((i - current) >= 2) {
-            have_range = true;
-            start = current;
-            end = i - 1;
-          }
-        }
-      } else if (info[i] == 0) {
-        in_range = true;
-        current = i;
-      }
-    if (in_range) {
-      if (have_range) {
-        addr len0 = (end - start) + 1;
-        addr len1 = info.size() - current;
-        if (len1 > len0) {
-          start = current;
-          end = info.size() - 1;
-        }
-      } else if ((info.size() - current) >= 2) {
-        have_range = true;
-        start = current;
-        end = info.size() - 1;
-      }
-    }
-    if (!have_range) {
-      addr gap = maxfinity;
-      for (size_t i = info.size() - 1; i > 0; --i)
-        if (info[i] >= 0 && info[i - 1] >= 0 &&
-            std::abs(info[i] - info[i - 1]) < gap) {
-          have_range = true;
-          gap = std::abs(info[i] - info[i - 1]);
-          start = i - 1;
-          end = i;
-        }
-    }
-    if (!have_range) {
-      assert(fluffle->workers > 0);
-      --fluffle->workers;
-      fluffle->lock.unlock();
-      return;
-    }
-    std::vector<std::shared_ptr<Fiver>> fivers;
-    for (size_t i = start; i <= end; i++) {
-      fivers.push_back(std::static_pointer_cast<Fiver>(fluffle->warrens[i]));
-      fluffle->merging.insert(fluffle->warrens[i]);
-    }
-    std::shared_ptr<Warren> start_warren = fluffle->warrens[start];
-    std::shared_ptr<Warren> end_warren = fluffle->warrens[end];
-    if (fluffle->workers < fluffle->max_workers) {
-      fluffle->workers++;
-      std::thread t(merge_worker, fluffle);
-      t.detach();
-    }
-    fluffle->lock.unlock();
-    std::shared_ptr<Fiver> merged = Fiver::merge(fivers);
-    merged->pickle();
-    for (auto &fiver : fivers)
-      fiver->discard();
-    fluffle->lock.lock();
-    std::vector<std::shared_ptr<Warren>> warrens;
-    size_t i;
-    for (i = 0;
-         i < fluffle->warrens.size() && fluffle->warrens[i] != start_warren;
-         i++)
-      warrens.push_back(fluffle->warrens[i]);
-    assert(i < fluffle->warrens.size());
-    fluffle->merging.erase(fluffle->warrens[i]);
-    if (merged != nullptr) {
-      warrens.push_back(merged);
-      merged->start();
-    }
-    for (i++; i < fluffle->warrens.size() && fluffle->warrens[i] != end_warren;
-         i++)
-      fluffle->merging.erase(fluffle->warrens[i]);
-    ;
-    assert(i < fluffle->warrens.size());
-    fluffle->merging.erase(fluffle->warrens[i]);
-    for (i++; i < fluffle->warrens.size(); i++)
-      warrens.push_back(fluffle->warrens[i]);
-    fluffle->warrens = warrens;
-    fluffle->lock.unlock();
-  }
-}
-#endif
 } // namespace
 
 void Bigwig::try_merge() {
@@ -964,12 +1352,59 @@ void Bigwig::try_merge() {
 void Bigwig::commit_() {
   fluffle_->lock.lock();
   fiver_->commit();
+  fluffle_->cache = std::make_shared<OwslaCache>();
   fiver_->start();
   fluffle_->lock.unlock();
   appender_ = nullptr;
   annotator_ = nullptr;
   fiver_ = nullptr;
   try_merge();
+}
+
+bool Bigwig::commit_all(std::vector<std::shared_ptr<Bigwig>> bigwigs) {
+  if (bigwigs.size() == 0)
+    return true;
+  std::shared_ptr<Working> working = bigwigs[0]->working();
+  if (working == nullptr)
+    return false;
+  for (auto &bigwig : bigwigs)
+    if (bigwig == nullptr || bigwig->working() != working)
+      return false;
+  std::string temp_name = working->make_temp("commit");
+  std::ofstream script(temp_name);
+  if (script.fail())
+    return false;
+  script << "#!/bin/sh\n";
+  for (auto &bigwig : bigwigs) {
+    assert(bigwig->fiver_ != nullptr);
+    std::string command =
+        bigwig->fiver_ == nullptr ? "" : bigwig->fiver_->commit_command();
+    script << command;
+    if (command.size() == 0 || command.back() != '\n')
+      script << "\n";
+  }
+  script.close();
+  if (script.fail()) {
+    std::remove(temp_name.c_str());
+    return false;
+  }
+  if (chmod(temp_name.c_str(), 0700) != 0) {
+    std::remove(temp_name.c_str());
+    return false;
+  }
+  std::ostringstream name;
+  name << "commit." << bigwigs[0].get() << ".sh";
+  std::string commit_name = name.str();
+  std::string commit_path = working->make_name(commit_name);
+  if (link(temp_name.c_str(), commit_path.c_str()) != 0) {
+    std::remove(temp_name.c_str());
+    return false;
+  }
+  std::remove(temp_name.c_str());
+  for (auto &bigwig : bigwigs)
+    bigwig->commit();
+  working->remove(commit_name);
+  return true;
 }
 
 void Bigwig::abort_() {

@@ -1,5 +1,5 @@
-#ifndef COTTONTAIL_SRC_PARSE_H_
-#define COTTONTAIL_SRC_PARSE_H_
+#ifndef COTTONTAIL_GCL_PARSE_H_
+#define COTTONTAIL_GCL_PARSE_H_
 
 #include <memory>
 #include <string>
@@ -7,7 +7,7 @@
 
 #include "src/core.h"
 #include "src/featurizer.h"
-#include "src/gcl.h"
+#include "gcl/gcl.h"
 #include "src/hopper.h"
 #include "src/idx.h"
 #include "src/tokenizer.h"
@@ -15,6 +15,8 @@
 namespace cottontail {
 
 namespace gcl {
+
+class Optimizer;
 
 enum Operator {
   TERM,
@@ -26,11 +28,19 @@ enum Operator {
   CONTAINING,
   NOT_CONTAINED_IN,
   NOT_CONTAINING,
-  LINK
+  LINK,
+  MATERIALIZE
 };
 
 class SExpression final {
 public:
+  SExpression() = default;
+  SExpression(const SExpression &) = delete;
+  SExpression &operator=(const SExpression &) = delete;
+  SExpression(SExpression &&) = delete;
+  SExpression &operator=(SExpression &&) = delete;
+  ~SExpression() = default;
+
   static std::shared_ptr<SExpression> from_string(std::string s,
                                                   std::string *error);
   std::string to_string();
@@ -42,6 +52,7 @@ public:
 
   friend const char *parse_expr(const char *where,
                                 std::shared_ptr<SExpression> expr, bool *okay);
+  friend class Optimizer;
 
 private:
   Operator kind_;
@@ -51,4 +62,4 @@ private:
 };
 } // namespace gcl
 } // namespace cottontail
-#endif // COTTONTAIL_SRC_PARSE_H_
+#endif // COTTONTAIL_GCL_PARSE_H_

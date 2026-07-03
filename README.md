@@ -13,3 +13,20 @@ copy-paste-runnable source for how to run these tools. It links out to the desig
 specs for detail.
 
 Build, test, and toolchain prerequisites are in [`CLAUDE.md`](CLAUDE.md).
+## Why This May Matter For Agents
+
+Written by Codex.
+
+Annotative indexing is interesting for AI coding and research agents because it
+can make large collections of code, text, JSON, and metadata searchable through
+one structural model. An agent can translate a natural-language intent into a
+precise query, inspect the matching intervals, and then ask for only the local
+context it needs, such as the function, file, document span, or annotation that
+explains the result.
+
+That changes the role of an expressive query language. Humans may not want to
+write detailed structural queries by hand, but agents can generate and refine
+them quickly. If the collection records useful annotations like paths, fields,
+symbols, spans, provenance, or transactions, an agent can move from vague
+requests such as "find where this source was appended" or "show code that
+updates this lifecycle" to exact, inspectable evidence in a large corpus.

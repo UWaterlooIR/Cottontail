@@ -37,6 +37,7 @@ public:
     return make(working, featurizer, tokenizer, fluffle, error,
                 posting_compressor, fvalue_compressor, text_compressor);
   };
+  static bool commit_all(std::vector<std::shared_ptr<Bigwig>> bigwigs);
   void merge(bool on = true);
 
   virtual ~Bigwig(){};
@@ -63,16 +64,18 @@ private:
   bool get_parameter_(const std::string &key, std::string *value,
                       std::string *error) final;
   bool transaction_(std::string *error) final;
-  bool ready_() final;
+  bool ready_(std::string *error) final;
   void commit_() final;
   void abort_() final;
   std::shared_ptr<Fiver> fiver_;
   std::shared_ptr<Fluffle> fluffle_;
   std::mutex warrens_lock_;
   bool warrens_valid_ = false;
-  std::vector<std::shared_ptr<Fiver>> warrens_;
+  std::vector<std::shared_ptr<Owsla>> warrens_;
+  std::shared_ptr<OwslaCache> cache_;
   std::shared_ptr<Compressor> posting_compressor_;
   std::shared_ptr<Compressor> fvalue_compressor_;
+  std::shared_ptr<SimplePostingFactory> posting_factory_;
   std::shared_ptr<Compressor> text_compressor_;
   std::string txt_recipe_;
 }; // namespace cottontail

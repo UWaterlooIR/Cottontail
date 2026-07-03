@@ -16,13 +16,15 @@ std::shared_ptr<Warren> create_meadow(std::string *error = nullptr);
 std::shared_ptr<Warren> open_meadow(const std::string &meadow,
                                     std::string *error = nullptr);
 std::shared_ptr<Warren> open_meadow(std::string *error = nullptr);
-bool append_path(std::shared_ptr<Warren> warren, const std::string &filename,
-                 addr *path_feature, std::string *error = nullptr);
+bool already_appended(std::shared_ptr<Warren> warren,
+                      const std::string &filename, bool *appended,
+                      std::string *error = nullptr);
 bool append_tsv(std::shared_ptr<Warren> warren, const std::string &filename,
                 std::string *error = nullptr, bool header = false,
                 std::string separator = "\t", size_t threads = 0);
 bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
-                  std::string *error = nullptr, size_t threads = 0);
+                  std::string *error = nullptr, size_t threads = 0,
+                  bool verbose = true);
 bool forage(std::shared_ptr<Warren> warren,
             const std::vector<std::pair<addr, addr>> &intervals,
             const std::string &name, const std::string &tag,
