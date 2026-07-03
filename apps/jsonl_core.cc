@@ -535,13 +535,27 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
 // dog, sled*. The query was validated by cover_rewrite, so no mid-token '*' reaches
 // here. The atom loop resolves each leaf: a trailing '*' -> its stem family, else the
 // exact feature (a bare capitalized/punctuated term stays raw and may report 0).
+//
+// The width operand of the '#' operator is NOT a leaf: in "(>> (# 12) (^ ...))"
+// -- the proximity-window idiom both searcher prompts teach -- the 12 is window
+// geometry, not a query term, and reporting the corpus count of the token "12"
+// is noise in the model's feedback. A digits-only token is skipped iff the
+// preceding token was '#'; a standalone numeric term ("1984") stays a real leaf.
 std::vector<std::string> cover_leaves(const std::string &gcl,
                                       std::shared_ptr<Tokenizer> tokenizer) {
   std::vector<std::string> out;
   std::set<std::string> seen;
+  bool after_width_op = false;
   auto add = [&](const std::string &t) {
-    if (t.empty() || is_gcl_nonterm(t))
+    if (t.empty())
       return;
+    bool was_after_width_op = after_width_op;
+    after_width_op = (t == "#");
+    if (is_gcl_nonterm(t))
+      return;
+    if (was_after_width_op &&
+        t.find_first_not_of("0123456789") == std::string::npos)
+      return; // the N of (# N): window width, not a term
     if (seen.insert(t).second)
       out.push_back(t);
   };

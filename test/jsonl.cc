@@ -1528,3 +1528,43 @@ TEST(JsonlParallel, EndToEndParityAcrossRankThreads) {
   }
   w->end();
 }
+
+// The N of a (# N) width window is geometry, not a query term: it must NOT
+// appear in atom_counts (both searcher prompts teach the (>> (# N) (^ ...))
+// idiom, so before this fix every windowed query reported a bogus count for
+// its width). A standalone numeric TERM is a real leaf and keeps its count.
+TEST(JsonlCover, WidthOperandIsNotAnAtom) {
+  std::string error, burrow;
+  std::vector<std::string> rows = kCoverRows;
+  rows.push_back(R"({"docid":"c-6","contents":"the year 1984 saw a black bear attack"})");
+  ASSERT_TRUE(build_rows("cover_width", rows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  CoverSpec spec;
+  spec.query = "(>> (# 12) (^ black bear*))";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(atom_count(resp, "12"), -1); // width operand: absent, not counted
+  EXPECT_GT(atom_count(resp, "black"), 0);
+  EXPECT_GT(atom_count(resp, "bear*"), 0);
+
+  // A standalone numeric term is a genuine leaf.
+  spec.query = "(^ 1984 bear*)";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_GT(atom_count(resp, "1984"), 0);
+
+  // And the two compose: only the width operand disappears.
+  spec.query = "(>> (# 7) (^ 1984 bear*))";
+  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
+  EXPECT_EQ(atom_count(resp, "7"), -1);
+  EXPECT_GT(atom_count(resp, "1984"), 0);
+
+  // Same rule on the tiered path (per-tier leaf union).
+  TieredSpec tiered;
+  tiered.tiers = {"(>> (# 9) (^ black bear*))", "bear*"};
+  ASSERT_TRUE(jsonl_tiered_query_search(w, tiered, &resp, &error)) << error;
+  EXPECT_EQ(atom_count(resp, "9"), -1);
+  EXPECT_GT(atom_count(resp, "black"), 0);
+  w->end();
+}
