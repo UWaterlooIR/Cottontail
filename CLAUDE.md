@@ -159,6 +159,13 @@ instructions elsewhere; point at that guide.
 
 `*.burrow` and `*.meadow` directories are local working indexes and are gitignored.
 
+**ClimbMix** (the corpus behind the `climbmix-*` burrows) is a **general web /
+pretraining corpus — it has nothing to do with climbing**. Write test queries
+for broad web/educational content, not climbing topics. Provenance:
+[karpathy/climbmix-400b-shuffle](https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle),
+processed to JSONL via
+[trec-rag-climbmix-corpus-creation](https://github.com/TREC-RAG/trec-rag-skills/tree/main/skills/trec-rag-climbmix-corpus-creation).
+
 ## Architecture (orientation)
 
 The public umbrella header is `src/cottontail.h`. Core model:
