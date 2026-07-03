@@ -86,6 +86,12 @@ bool is_loopback(const std::string &host) {
   return host == "127.0.0.1" || host == "::1" || host == "localhost";
 }
 
+// The server-level ranking-thread policy (TASK-25): threads INSIDE one ranking
+// pass, resolved once in main() (default = auto-budget, allowed_threads divided
+// by the handler pool so worst-case busy threads stay within the cap). Stamped
+// into every spec here -- deliberately NOT readable from the request JSON.
+size_t g_rank_threads = 1;
+
 QuerySpec spec_from(const json &b, bool is_gcl) {
   QuerySpec s;
   s.is_gcl = is_gcl;
@@ -95,6 +101,7 @@ QuerySpec spec_from(const json &b, bool is_gcl) {
   s.full_text = b.value("full_text", s.full_text);
   s.ranker = b.value("ranker", s.ranker);
   s.snippet_chars = b.value("snippet_chars", s.snippet_chars);
+  s.rank_threads = g_rank_threads;
   return s;
 }
 
@@ -107,6 +114,7 @@ CoverSpec cover_spec_from(const json &b) {
   s.max_words = b.value("max_words", s.max_words);
   if (b.contains("exclude"))
     s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
+  s.rank_threads = g_rank_threads;
   return s;
 }
 
@@ -119,6 +127,7 @@ TieredSpec tiered_spec_from(const json &b) {
   s.max_words = b.value("max_words", s.max_words);
   if (b.contains("exclude"))
     s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
+  s.rank_threads = g_rank_threads;
   return s;
 }
 
@@ -145,6 +154,10 @@ void usage(const char *prog) {
             << "  --host <addr>   default 127.0.0.1 (loopback)\n"
             << "  --port <n>      default 8080\n"
             << "  --threads <n>   concurrent query handlers (default 4)\n"
+            << "  --rank-threads <n>  threads inside ONE ranking pass (TASK-25);\n"
+            << "                  default 0 = auto-budget: allowed hardware\n"
+            << "                  threads / --threads, so handlers x rank-threads\n"
+            << "                  never exceeds the hardware cap\n"
             << "  --token <t>     bearer token (prefer env COTTONTAIL_API_TOKEN)\n"
             << "  --no-auth       disable auth (loopback dev only)\n";
 }
@@ -154,6 +167,7 @@ int main(int argc, char **argv) {
   std::string burrow, host = "127.0.0.1", flag_token;
   int port = 8080;
   int threads = 4;
+  size_t rank_threads = 0; // 0 = auto-budget (see usage)
   bool no_auth = false;
 
   for (int i = 1; i < argc; i++) {
@@ -173,6 +187,8 @@ int main(int argc, char **argv) {
       port = std::stoi(next());
     else if (a == "--threads")
       threads = std::stoi(next());
+    else if (a == "--rank-threads")
+      rank_threads = std::stoul(next());
     else if (a == "--token")
       flag_token = next();
     else if (a == "--no-auth")
@@ -230,6 +246,16 @@ int main(int argc, char **argv) {
   // shares the idx cache but gets its own Txt fstream; see the threadpool spec.
   if (threads < 1)
     threads = 1;
+  // Resolve the ranking-thread policy (TASK-25). Auto-budget divides the
+  // allowed-threads cap across the handler pool so concurrent queries cannot
+  // oversubscribe the machine; an explicit value is capped by allowed_threads.
+  bool rank_auto = (rank_threads == 0);
+  if (rank_auto)
+    rank_threads = std::max<size_t>(
+        1, cottontail::allowed_threads(0) / static_cast<size_t>(threads));
+  else
+    rank_threads = cottontail::allowed_threads(rank_threads);
+  g_rank_threads = rank_threads;
   std::vector<std::shared_ptr<cottontail::Warren>> handles;
   handles.push_back(warren);
   for (int i = 1; i < threads; ++i) {
@@ -450,6 +476,7 @@ int main(int argc, char **argv) {
 
   std::cerr << "cottontail-jsonl-server listening on " << host << ":" << port
             << " burrow=" << burrow << " threads=" << threads
+            << " rank_threads=" << rank_threads << (rank_auto ? " (auto)" : "")
             << (auth_required ? " (auth on)" : " (NO AUTH)") << "\n";
   if (!svr.listen(host, port)) {
     std::cerr << "bind failed on " << host << ":" << port << "\n";

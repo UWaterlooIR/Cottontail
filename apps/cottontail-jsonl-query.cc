@@ -35,6 +35,9 @@ void usage(const char *prog) {
             << "  ... --batch   (one query object per stdin line -> JSONL)\n"
             << "options: --ranker icover|ssr|tiered  --top-k N  --full-text\n"
             << "         --snippet-chars N  --format json|jsonl  --stem\n"
+            << "         --rank-threads N  (threads inside one ranking pass;\n"
+            << "           0 = all allowed hardware threads, the default here --\n"
+            << "           this CLI runs one query at a time)\n"
             << "  --stem   match the stemmed stream (index must be built --stem;\n"
             << "           ranks via cover density over stemmed terms)\n"
             << "  --count  report match_count for --text/--gcl instead of ranking\n"
@@ -66,6 +69,7 @@ int main(int argc, char **argv) {
   size_t cover_max_words = 150;           // --cover: cap the summary in tokens
   QuerySpec base;
   std::string format = "json";
+  size_t rank_threads = 0; // 0 = allowed_threads cap (one query per process)
 
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -111,6 +115,8 @@ int main(int argc, char **argv) {
       base.stem = true;
     else if (a == "--snippet-chars")
       base.snippet_chars = std::stoul(next());
+    else if (a == "--rank-threads")
+      rank_threads = std::stoul(next());
     else if (a == "--format")
       format = next();
     else if (a == "--help") {
@@ -142,6 +148,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Resolve the ranking-thread policy once: 0 (the default) means the
+  // allowed_threads cap; an explicit N is capped the same way.
+  base.rank_threads = cottontail::allowed_threads(rank_threads);
+
   std::string error;
   auto warren = cottontail::jsonl::open_burrow(burrow, &error);
   if (warren == nullptr)
@@ -172,6 +182,7 @@ int main(int argc, char **argv) {
     spec.window = cover_window;
     spec.max_covers = cover_max_covers;
     spec.max_words = cover_max_words;
+    spec.rank_threads = base.rank_threads;
     CoverResponse resp;
     if (!cottontail::jsonl::jsonl_cover_search(warren, spec, &resp, &error))
       die(error, "cover_search");

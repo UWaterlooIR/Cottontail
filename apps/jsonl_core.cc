@@ -5,6 +5,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -437,12 +438,12 @@ std::string cover_summary(std::shared_ptr<Warren> warren,
 
 // ---- cover_search ranking (cp-native, one pass: rank + match counts) -------
 
-// A ranked :item container: its cp (start), cq (end), and ssr cover-density score.
-struct CoverRanked {
-  addr cp = 0;
-  addr cq = 0;
-  double score = 0.0;
-};
+// Deterministic result order: score descending, then cp ascending. cp breaks
+// score ties so the sequential and parallel passes agree exactly (std::sort is
+// unstable, and the parallel merge concatenates per-range lists).
+inline bool cover_order(const CoverRanked &a, const CoverRanked &b) {
+  return a.score > b.score || (a.score == b.score && a.cp < b.cp);
+}
 
 // One cp-native pass (doc-6 section 4): walk the query hopper and the :item
 // container hopper once over the PUBLIC Hopper API -- mirroring ssr's recurrence
@@ -452,24 +453,35 @@ struct CoverRanked {
 // container closes, unjudged_matches for those whose cp is not in `exclude`. Does
 // NOT call ssr_ranking and touches no src/ file. Ranked containers are returned
 // in score-descending order.
+//
+// [start, end) restricts the pass to containers whose START (cp) lies in the
+// range -- the same ownership rule as ssr_ranking's start/end -- so splitting the
+// shard into contiguous ranges scores every container exactly once, with the
+// same score as one full pass (a container straddling `end` is scored in full
+// by the range that owns its cp). Defaults cover the whole shard.
 bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
                    size_t depth, const std::unordered_set<addr> &exclude,
                    std::vector<CoverRanked> *ranked, long *total_matches,
-                   long *unjudged_matches, std::string *error) {
+                   long *unjudged_matches, std::string *error,
+                   addr start = minfinity + 1, addr end = maxfinity) {
   const double K = 42.0; // ssr default (smoothed 1/(K + q - p))
   ranked->clear();
   *total_matches = 0;
   *unjudged_matches = 0;
+  if (start == minfinity)
+    start++;
+  if (start >= end)
+    return true;
   auto hopper = warren->hopper_from_gcl(query, error);
   if (hopper == nullptr)
     return false;
   auto chopper = warren->hopper_from_gcl(":item", error);
   if (chopper == nullptr)
     return false;
-  // Bounded min-heap (smallest score on top) of the top `depth` containers.
-  auto lower_score = [](const CoverRanked &a, const CoverRanked &b) {
-    return a.score > b.score;
-  };
+  // Bounded heap of the top `depth` containers, worst-first under cover_order
+  // (lowest score on top; among equal scores the LARGEST cp, so ties resolve
+  // toward smaller cps -- exactly the parallel merge's truncation rule, which
+  // keeps sequential and parallel identical even at a tied top-k boundary).
   std::vector<CoverRanked> heap;
   auto close_container = [&](addr cp, addr cq, double score) {
     if (score <= 0.0)
@@ -481,18 +493,20 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
       return;
     if (heap.size() < depth) {
       heap.push_back({cp, cq, score});
-      std::push_heap(heap.begin(), heap.end(), lower_score);
-    } else if (score > heap.front().score) {
-      std::pop_heap(heap.begin(), heap.end(), lower_score);
+      std::push_heap(heap.begin(), heap.end(), cover_order);
+    } else if (cover_order({cp, cq, score}, heap.front())) {
+      std::pop_heap(heap.begin(), heap.end(), cover_order);
       heap.back() = {cp, cq, score};
-      std::push_heap(heap.begin(), heap.end(), lower_score);
+      std::push_heap(heap.begin(), heap.end(), cover_order);
     }
   };
   addr p, q, cp, cq;
-  hopper->tau(minfinity + 1, &p, &q);
-  chopper->rho(q, &cp, &cq);
+  chopper->tau(start, &cp, &cq); // first container OWNED by [start, end)
+  if (cp >= end)
+    return true;
+  hopper->tau(cp, &p, &q);
   double score = 0.0;
-  while (p < maxfinity && cq < maxfinity) {
+  while (p < maxfinity && cq < maxfinity && cp < end) {
     if (p < cp) {
       hopper->tau(cp, &p, &q);
     } else if (q > cq) {
@@ -504,14 +518,13 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
       hopper->tau(p + 1, &p, &q);
     }
   }
-  close_container(cp, cq, score); // flush the last open container
-  std::sort(heap.begin(), heap.end(),
-            [](const CoverRanked &a, const CoverRanked &b) {
-              return a.score > b.score; // descending by score
-            });
+  if (cp < end)
+    close_container(cp, cq, score); // flush the last owned open container
+  std::sort(heap.begin(), heap.end(), cover_order);
   *ranked = std::move(heap);
   return true;
 }
+
 
 // The query's content-term LEAVES for atom_counts, deduped first-seen. Operators /
 // parens / :tags are skipped. A BARE word (including a word* marker) is kept AS
@@ -581,6 +594,97 @@ std::vector<std::string> cover_leaves(const std::string &gcl,
 }
 
 } // namespace
+
+// Parallel front end over the ranged cover_ranking above, mirroring
+// src/ranking.cc's parallel_ranking: split the shard's container span into
+// `threads` contiguous ranges (each at least min_range_tokens), rank each range
+// on its own warren->clone() worker (clones share the SimpleIdx posting cache,
+// so workers add cursors, not copies), then merge the per-range top-`depth`
+// lists and sum the counters. Ownership by cp makes both exact: every matching
+// container is counted and scored by exactly one worker, with the same score as
+// one sequential pass.
+bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
+                            const std::string &query, size_t depth,
+                            const std::unordered_set<addr> &exclude,
+                            std::vector<CoverRanked> *ranked,
+                            long *total_matches, long *unjudged_matches,
+                            std::string *error, size_t threads,
+                            addr min_range_tokens) {
+  ranked->clear();
+  *total_matches = 0;
+  *unjudged_matches = 0;
+  // Validate the query up front (a malformed query must fail identically with
+  // any thread count) and find the container span for range splitting.
+  auto hopper = warren->hopper_from_gcl(query, error);
+  if (hopper == nullptr)
+    return false;
+  auto chopper = warren->hopper_from_gcl(":item", error);
+  if (chopper == nullptr)
+    return false;
+  addr p, q;
+  chopper->tau(minfinity + 1, &p, &q);
+  if (p == maxfinity)
+    return true; // no containers at all
+  addr start = p;
+  chopper->ohr(maxfinity - 1, &p, &q);
+  addr z = (q == maxfinity ? maxfinity : q + 1);
+  if (z <= start)
+    return true;
+  addr span = z - start;
+  threads = allowed_threads(threads);
+  if (min_range_tokens < 1)
+    min_range_tokens = 1;
+  size_t range_threads =
+      std::max<size_t>(1, static_cast<size_t>(span / min_range_tokens));
+  threads = std::min(threads, range_threads);
+  if (threads <= 1)
+    return cover_ranking(warren, query, depth, exclude, ranked, total_matches,
+                         unjudged_matches, error, start, z);
+
+  std::vector<std::pair<addr, addr>> ranges;
+  ranges.reserve(threads);
+  for (size_t i = 0; i < threads; i++) {
+    addr n = static_cast<addr>(i);
+    addr d = static_cast<addr>(threads);
+    addr begin = start + (span / d) * n + ((span % d) * n) / d;
+    n++;
+    addr end = start + (span / d) * n + ((span % d) * n) / d;
+    ranges.emplace_back(begin, end);
+  }
+
+  std::vector<std::vector<CoverRanked>> rankings(ranges.size());
+  std::vector<long> totals(ranges.size(), 0), unjudgeds(ranges.size(), 0);
+  std::vector<std::string> errors(ranges.size());
+  std::vector<bool> okay(ranges.size(), false);
+  std::vector<std::thread> workers;
+  workers.reserve(ranges.size());
+  for (size_t i = 0; i < ranges.size(); i++)
+    workers.emplace_back(std::thread([&, i] {
+      std::shared_ptr<Warren> local = warren->clone(&errors[i]);
+      if (local == nullptr)
+        return;
+      okay[i] = cover_ranking(local, query, depth, exclude, &rankings[i],
+                              &totals[i], &unjudgeds[i], &errors[i],
+                              ranges[i].first, ranges[i].second);
+    }));
+  for (auto &worker : workers)
+    worker.join();
+  for (size_t i = 0; i < ranges.size(); i++) {
+    if (!okay[i]) {
+      safe_error(error) = errors[i].empty()
+                              ? "parallel cover ranking worker failed"
+                              : errors[i];
+      return false;
+    }
+    *total_matches += totals[i];
+    *unjudged_matches += unjudgeds[i];
+    ranked->insert(ranked->end(), rankings[i].begin(), rankings[i].end());
+  }
+  std::sort(ranked->begin(), ranked->end(), cover_order);
+  if (depth > 0 && ranked->size() > depth)
+    ranked->resize(depth);
+  return true;
+}
 
 bool jsonl_index(const IndexOptions &opts, IndexSummary *summary,
                  std::string *error) {
@@ -772,7 +876,8 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
       auto check = warren->hopper_from_gcl(query, error);
       if (check == nullptr)
         return false;
-      ranked = ssr_ranking(warren, query, container, spec.top_k);
+      ranked = parallel_ssr(warren, query, container, spec.top_k,
+                            spec.rank_threads);
     }
   } else if (spec.is_gcl) {
     // Validate the expression up front so a bad --gcl is a reported error,
@@ -780,7 +885,8 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     auto check = warren->hopper_from_gcl(spec.query, error);
     if (check == nullptr)
       return false;
-    ranked = ssr_ranking(warren, spec.query, container, spec.top_k);
+    ranked = parallel_ssr(warren, spec.query, container, spec.top_k,
+                          spec.rank_threads);
   } else {
     std::vector<std::string> terms = warren->tokenizer()->split(spec.query);
     if (terms.empty()) {
@@ -788,13 +894,15 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
     } else if (spec.ranker == "tiered") {
       ranked = tiered_ranking(warren, spec.query, container, spec.top_k);
     } else if (spec.ranker == "ssr") {
-      ranked = ssr_ranking(warren, all_of(terms), container, spec.top_k);
+      ranked = parallel_ssr(warren, all_of(terms), container, spec.top_k,
+                            spec.rank_threads);
     } else { // icover (default): cover-density needs >=2 terms; for a single
              // term fall back to ssr so one-word "grep" queries still rank.
       if (terms.size() >= 2)
         ranked = icover_ranking(warren, spec.query, container, spec.top_k);
       else
-        ranked = ssr_ranking(warren, terms[0], container, spec.top_k);
+        ranked = parallel_ssr(warren, terms[0], container, spec.top_k,
+                              spec.rank_threads);
     }
   }
 
@@ -865,8 +973,9 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   // and count total_matches / unjudged_matches as a byproduct of the same pass.
   std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
   std::vector<CoverRanked> ranked;
-  if (!cover_ranking(warren, rewritten, spec.top_k + exclude.size(), exclude,
-                     &ranked, &out->total_matches, &out->unjudged_matches, error))
+  if (!parallel_cover_ranking(warren, rewritten, spec.top_k + exclude.size(),
+                              exclude, &ranked, &out->total_matches,
+                              &out->unjudged_matches, error, spec.rank_threads))
     return false;
   // cp POST-FILTER: drop excluded hits, keep top_k survivors, build summaries.
   int rank = 1;
@@ -1015,7 +1124,8 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     }
     std::vector<CoverRanked> discard;
     long tm = 0, um = 0;
-    if (!cover_ranking(warren, orq, 0, exclude, &discard, &tm, &um, error))
+    if (!parallel_cover_ranking(warren, orq, 0, exclude, &discard, &tm, &um,
+                                error, spec.rank_threads))
       return false;
     out->total_matches = tm;
     out->unjudged_matches = um;
@@ -1041,8 +1151,8 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     // pages by re-invoking with a grown exclude, and atom_counts must stay complete.
     std::vector<CoverRanked> ranked;
     long tm = 0, um = 0;
-    if (!cover_ranking(warren, rw, spec.top_k + exclude.size(), exclude, &ranked,
-                       &tm, &um, error))
+    if (!parallel_cover_ranking(warren, rw, spec.top_k + exclude.size(), exclude,
+                                &ranked, &tm, &um, error, spec.rank_threads))
       return false;
     for (const auto &r : ranked) {
       if (exclude.find(r.cp) != exclude.end())

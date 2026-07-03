@@ -1354,3 +1354,177 @@ TEST(JsonlTiered, MalformedTierFailsWholeRequestNamingTier) {
   EXPECT_NE(e0.find("tier 0"), std::string::npos) << e0;
   w->end();
 }
+
+// ---- TASK-25: parallel ranking parity ---------------------------------------
+// parallel_cover_ranking splits the shard's container span into ranges owned by
+// cp, so any thread count must return exactly the sequential pass's results:
+// same (cp, cq, score) list (deterministic: score desc, cp asc) and the same
+// match counters. min_range_tokens is tiny here to force a real multi-range
+// merge on a small fixture (production uses the 1M-token default).
+
+namespace {
+// 24 rows with "wolf" at varying density (and some rows without it at all) so
+// scores differ across containers and the top-k boundary is exercised.
+std::vector<std::string> parallel_rows() {
+  std::vector<std::string> rows;
+  for (int i = 0; i < 24; i++) {
+    std::string body;
+    int wolves = (i % 4); // 0..3 occurrences; %4==0 rows do not match
+    for (int j = 0; j <= i % 5; j++)
+      body += "filler" + std::to_string(i) + "x" + std::to_string(j) + " ";
+    for (int j = 0; j < wolves; j++)
+      body += "wolf ridge" + std::to_string(j) + " ";
+    body += "tail" + std::to_string(i);
+    rows.push_back(R"({"docid":"p-)" + std::to_string(i) +
+                   R"(","contents":")" + body + R"("})");
+  }
+  return rows;
+}
+} // namespace
+
+TEST(JsonlParallel, CoverRankingParityAcrossThreads) {
+  std::string error, burrow;
+  ASSERT_TRUE(
+      build_rows("parallel_cover", parallel_rows(), "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  const std::string query = "wolf";
+  const cottontail::addr kTinyRange = 4; // force several ranges on ~300 tokens
+
+  std::vector<CoverRanked> base;
+  long base_total = 0, base_unjudged = 0;
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 100, {}, &base, &base_total,
+                                     &base_unjudged, &error, 1))
+      << error;
+  ASSERT_GT(base_total, 0);
+  ASSERT_GT(base.size(), 4u); // enough matches to spread across ranges
+
+  for (size_t threads : {2u, 3u, 5u, 8u}) {
+    std::vector<CoverRanked> got;
+    long total = 0, unjudged = 0;
+    ASSERT_TRUE(parallel_cover_ranking(w, query, 100, {}, &got, &total,
+                                       &unjudged, &error, threads, kTinyRange))
+        << "threads=" << threads << ": " << error;
+    EXPECT_EQ(total, base_total) << "threads=" << threads;
+    EXPECT_EQ(unjudged, base_unjudged) << "threads=" << threads;
+    ASSERT_EQ(got.size(), base.size()) << "threads=" << threads;
+    for (size_t i = 0; i < base.size(); i++) {
+      EXPECT_EQ(got[i].cp, base[i].cp) << "threads=" << threads << " i=" << i;
+      EXPECT_EQ(got[i].cq, base[i].cq) << "threads=" << threads << " i=" << i;
+      EXPECT_EQ(got[i].score, base[i].score)
+          << "threads=" << threads << " i=" << i;
+    }
+  }
+
+  // Top-k truncation parity: the merged parallel list must truncate to the
+  // same best-3 as the sequential heap.
+  std::vector<CoverRanked> seq3, par3;
+  long t3, u3;
+  ASSERT_TRUE(
+      parallel_cover_ranking(w, query, 3, {}, &seq3, &t3, &u3, &error, 1));
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 3, {}, &par3, &t3, &u3, &error,
+                                     5, kTinyRange));
+  ASSERT_EQ(seq3.size(), 3u);
+  ASSERT_EQ(par3.size(), 3u);
+  for (size_t i = 0; i < 3; i++) {
+    EXPECT_EQ(par3[i].cp, seq3[i].cp) << "i=" << i;
+    EXPECT_EQ(par3[i].score, seq3[i].score) << "i=" << i;
+  }
+
+  // Exclude + count-only (depth 0) parity: unjudged drops by exactly the
+  // excluded matches in both modes, totals never change.
+  std::unordered_set<cottontail::addr> exclude = {base[0].cp, base[2].cp};
+  std::vector<CoverRanked> discard;
+  long ts, us, tp, up;
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 0, exclude, &discard, &ts, &us,
+                                     &error, 1));
+  EXPECT_TRUE(discard.empty());
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 0, exclude, &discard, &tp, &up,
+                                     &error, 4, kTinyRange));
+  EXPECT_TRUE(discard.empty());
+  EXPECT_EQ(ts, base_total);
+  EXPECT_EQ(tp, base_total);
+  EXPECT_EQ(us, base_unjudged - 2);
+  EXPECT_EQ(up, us);
+
+  // A malformed query fails identically with any thread count.
+  std::string e1, e4;
+  EXPECT_FALSE(parallel_cover_ranking(w, "(>> wolf)", 10, {}, &discard, &ts,
+                                      &us, &e1, 1));
+  EXPECT_FALSE(parallel_cover_ranking(w, "(>> wolf)", 10, {}, &discard, &ts,
+                                      &us, &e4, 4, kTinyRange));
+  w->end();
+}
+
+TEST(JsonlParallel, EndToEndParityAcrossRankThreads) {
+  std::string error, burrow;
+  ASSERT_TRUE(
+      build_rows("parallel_e2e", parallel_rows(), "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  // jsonl_query, ssr ranker: rank_threads 0/4 must equal 1 (on a tiny shard
+  // parallel_ssr's 1M-token range minimum makes them the same sequential pass;
+  // this pins that fallback and the plumbing).
+  for (bool gcl : {false, true}) {
+    QuerySpec s1;
+    s1.is_gcl = gcl;
+    s1.query = gcl ? "(^ wolf tail3)" : "wolf ridge1";
+    s1.ranker = "ssr";
+    s1.rank_threads = 1;
+    std::vector<Hit> h1, h0, h4;
+    ASSERT_TRUE(jsonl_query(w, s1, &h1, &error)) << error;
+    ASSERT_FALSE(h1.empty());
+    QuerySpec s0 = s1;
+    s0.rank_threads = 0;
+    ASSERT_TRUE(jsonl_query(w, s0, &h0, &error)) << error;
+    QuerySpec s4 = s1;
+    s4.rank_threads = 4;
+    ASSERT_TRUE(jsonl_query(w, s4, &h4, &error)) << error;
+    ASSERT_EQ(h0.size(), h1.size());
+    ASSERT_EQ(h4.size(), h1.size());
+    for (size_t i = 0; i < h1.size(); i++) {
+      EXPECT_EQ(h0[i].cp, h1[i].cp);
+      EXPECT_EQ(h0[i].score, h1[i].score);
+      EXPECT_EQ(h4[i].cp, h1[i].cp);
+      EXPECT_EQ(h4[i].score, h1[i].score);
+    }
+  }
+
+  // cover_search and tiered_query_search: rank_threads plumbs through the spec
+  // and results are identical to sequential.
+  CoverSpec c1;
+  c1.query = "wolf*";
+  c1.rank_threads = 1;
+  CoverResponse r1, r4;
+  ASSERT_TRUE(jsonl_cover_search(w, c1, &r1, &error)) << error;
+  CoverSpec c4 = c1;
+  c4.rank_threads = 4;
+  ASSERT_TRUE(jsonl_cover_search(w, c4, &r4, &error)) << error;
+  EXPECT_EQ(r4.total_matches, r1.total_matches);
+  EXPECT_EQ(r4.unjudged_matches, r1.unjudged_matches);
+  ASSERT_EQ(r4.results.size(), r1.results.size());
+  for (size_t i = 0; i < r1.results.size(); i++) {
+    EXPECT_EQ(r4.results[i].cp, r1.results[i].cp);
+    EXPECT_EQ(r4.results[i].score, r1.results[i].score);
+  }
+
+  TieredSpec t1;
+  t1.tiers = {"\"wolf ridge0\"", "wolf*"};
+  t1.rank_threads = 1;
+  CoverResponse tr1, tr4;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, t1, &tr1, &error)) << error;
+  TieredSpec t4 = t1;
+  t4.rank_threads = 4;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, t4, &tr4, &error)) << error;
+  EXPECT_EQ(tr4.total_matches, tr1.total_matches);
+  ASSERT_EQ(tr4.results.size(), tr1.results.size());
+  for (size_t i = 0; i < tr1.results.size(); i++) {
+    EXPECT_EQ(tr4.results[i].cp, tr1.results[i].cp);
+    EXPECT_EQ(tr4.results[i].score, tr1.results[i].score);
+  }
+  w->end();
+}

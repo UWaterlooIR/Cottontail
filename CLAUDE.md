@@ -139,8 +139,10 @@ Real binaries (build then run from `bazel-bin/apps/`):
   (`src/ranking.cc`), which parallelizes SSR within a single shard. Usage:
   `ssr-server [--fields fields] container content docno burrow [burrow...]`.
   Note: its per-result docno comes from a `docno` GCL evaluated inside the
-  container, so cp-native burrows (doc-8) have no real docno to report;
-  cp-native parallel SSR in our own server is backlog TASK-25.
+  container, so cp-native burrows (doc-8) have no real docno to report. Our own
+  stack has cp-native parallel ranking instead (TASK-25): `--rank-threads` on
+  `cottontail-jsonl-query` / `-server` parallelizes the ssr, cover_search, and
+  tiered ranking passes (see the run guide).
 
 **JSONL search stack (index → query → server → agent).** How to build and run
 these — with copy-paste commands — is in

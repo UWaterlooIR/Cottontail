@@ -10,16 +10,14 @@
 // ":item" start address (cp); jsonl_index pairs each docno with its cp in a flat
 // <burrow>/docno-cp.tsv dump, from which the index CLI (TASK-6.3) builds the
 // cp<->docno SQLite map. See docs/indexing.md (decision doc-6, cp-native, and the
-// docno/text naming, doc-7).
-//
-// NOTE: the query side below (jsonl_query / jsonl_get / jsonl_count /
-// jsonl_cover_search) still reads ":docno" and is therefore
-// INCOMPATIBLE with the cp-native burrow -- it is pending the cp-native query
-// cutover (TASK-5.12 / A3) and is left in source unchanged for now.
+// docno/text naming, doc-7). The query side is cp-native throughout (the
+// TASK-5.12 / A3 cutover): results carry cp, and docno<->cp mapping is
+// Python-only (doc-8).
 
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "src/cottontail.h"
@@ -84,6 +82,10 @@ struct QuerySpec {
   bool full_text = false;
   size_t snippet_chars = 240;
   bool stem = false;             // match against the stemmed stream (opt-in)
+  size_t rank_threads = 1;       // threads INSIDE one ranking call (TASK-25);
+                                 // 0 = allowed_threads cap. Set by the binary's
+                                 // policy (CLI flag / server auto-budget), never
+                                 // from the wire.
 };
 
 // Rank a query against a started burrow (from open_burrow). Returns false (with
@@ -104,6 +106,8 @@ struct CoverSpec {
   size_t window = 75;        // summary window in tokens (A2)
   size_t max_covers = 1;     // summary is built from the best K=max_covers covers
   size_t max_words = 150;    // cap the whole summary to this many tokens (0 = uncapped)
+  size_t rank_threads = 1;   // threads INSIDE the ranking pass (TASK-25); 0 =
+                             // allowed_threads cap. Binary policy, never wire.
 };
 
 struct CoverHit {
@@ -138,6 +142,30 @@ struct CoverResponse {
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
                         CoverResponse *out, std::string *error = nullptr);
 
+// A ranked :item container: its cp (start), cq (end), and ssr cover-density score.
+struct CoverRanked {
+  addr cp = 0;
+  addr cq = 0;
+  double score = 0.0;
+};
+
+// The cover_search/tiered ranking pass (TASK-25): rank `query` by ssr cover
+// density within :item, keeping the top `depth` containers, and count
+// total_matches / unjudged_matches (vs the read-only `exclude` cp set) as a
+// byproduct. threads > 1 splits the shard's token span into contiguous ranges
+// of at least `min_range_tokens` (a container belongs to the range holding its
+// cp, so scores and counts are exactly those of the sequential pass) and ranks
+// the ranges on warren->clone() workers; threads == 1 is the sequential pass;
+// threads == 0 means the allowed_threads cap. `min_range_tokens` is a parameter
+// only so unit tests can exercise the multi-range merge on a tiny fixture.
+bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
+                            const std::string &query, size_t depth,
+                            const std::unordered_set<addr> &exclude,
+                            std::vector<CoverRanked> *ranked,
+                            long *total_matches, long *unjudged_matches,
+                            std::string *error, size_t threads = 1,
+                            addr min_range_tokens = 1000000);
+
 // ---- tiered_query_search: an ordered cascade of cover tiers (TASK-19) ------
 // The ISJ agent's SECOND search tool. `tiers` is an ordered list of GCL cover
 // queries, most precise first and broadest last, run as a de-duplicated CASCADE:
@@ -152,6 +180,8 @@ struct TieredSpec {
   size_t window = 75;        // summary window in tokens
   size_t max_covers = 1;     // summary is built from the best K covers
   size_t max_words = 150;    // cap the whole summary to this many tokens (0 = uncapped)
+  size_t rank_threads = 1;   // threads INSIDE each tier's ranking pass (TASK-25);
+                             // 0 = allowed_threads cap. Binary policy, never wire.
 };
 
 // Run the tiers as a de-duplicated cascade and return the merged ranked list with,
