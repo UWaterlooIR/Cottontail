@@ -5,7 +5,8 @@
 - [Memory location](memory-location.md) — project memory lives in-repo at ./memory/, not ~/.claude
 - [User: Mark Smucker](user-mark-smucker.md) — IR researcher, acknowledged reviewer of the Annotative Indexing paper
 - [Cottontail overview](project-cottontail-overview.md) — what the project is, authoritative docs, and where active work sits
-- [Hazel not ready](hazel-not-ready.md) — Hazel is a WIP, not ready for use; don't build features on it
+- [Hazel not ready](hazel-not-ready.md) — not declared ready; fork builds nothing on it (upstream's Bigwig integration merged 2026-07 doesn't change that)
+- [Upstream sync (claclark)](upstream-sync-claclark.md) — upstream remote, standing merge-resolution policy, 2026-07 sync facts + SSR notes
 - [ClimbMix corpus location](climbmix-corpus-location.md) — gzip'd JSONL shards at /share/corpora/climbmix-400b-corpus-jsonl/ (outside repo)
 - [SimpleWarren scaling model](simplewarren-scaling-model.md) — external-memory build, on-demand posting reads, WAND ranking; tuning levers + stats caveat
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine

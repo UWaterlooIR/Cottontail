@@ -171,34 +171,31 @@ bool locate_posting(const std::vector<HazelPostingEntry> &directory,
   return true;
 }
 
-void mark_cache_ready(std::shared_ptr<CacheRecord> entry) {
-  entry->release();
-}
-
-void fill_bogus_cache_entry(std::shared_ptr<CacheRecord> entry) {
-  addr n = entry->n;
-  entry->postings = shared_array<addr>(n);
-  entry->qostings = shared_array<addr>(n);
-  entry->fostings = nullptr;
+void fill_bogus_posting(std::shared_ptr<SimplePosting> posting, addr n) {
   for (addr i = 0; i < n; i++) {
-    entry->postings.get()[i] = minfinity + 1 + i;
-    entry->qostings.get()[i] = minfinity + 2 + i;
+    posting->push(minfinity + 1 + i, minfinity + 2 + i, 0.0);
   }
-  mark_cache_ready(entry);
+  posting->release();
 }
 
-void fill_hazel_cache_entry(std::shared_ptr<CacheRecord> entry,
-                            std::shared_ptr<ReadGate> read_gate,
-                            std::shared_ptr<SimplePostingFactory> factory,
-                            addr offset, addr length) {
+void fill_hazel_posting(std::shared_ptr<SimplePosting> posting,
+                        std::shared_ptr<ReadGate> read_gate,
+                        std::shared_ptr<SimplePostingFactory> factory,
+                        addr offset, addr length, addr n) {
   std::string error;
   std::unique_ptr<char[]> bytes = read_gate->read(offset, length, &error);
-  if (bytes != nullptr &&
-      factory->cache_entry_from_compressed_blob(entry, bytes.get(), length,
-                                                &error))
-    return;
+  if (bytes != nullptr) {
+    std::shared_ptr<SimplePosting> decoded =
+        factory->posting_from_compressed_blob(bytes.get(), length, &error);
+    if (decoded != nullptr && decoded->feature() == posting->feature() &&
+        (addr)decoded->size() == n) {
+      posting->append(decoded);
+      posting->release();
+      return;
+    }
+  }
   assert(false);
-  fill_bogus_cache_entry(entry);
+  fill_bogus_posting(posting, n);
 }
 
 template <typename Work> void async(Work work) {
@@ -208,11 +205,11 @@ template <typename Work> void async(Work work) {
 
 class HazelIdx final : public Idx {
 public:
-  static std::shared_ptr<Idx> make(const std::string &recipe,
-                                   const std::string &filename,
-                                   std::shared_ptr<HazelFile> file,
-                                   const HazelBlob &blob,
-                                   std::string *error = nullptr) {
+  static std::shared_ptr<HazelIdx> make(const std::string &recipe,
+                                        const std::string &filename,
+                                        std::shared_ptr<HazelFile> file,
+                                        const HazelBlob &blob,
+                                        std::string *error = nullptr) {
     std::shared_ptr<HazelIdx> idx = std::shared_ptr<HazelIdx>(new HazelIdx());
     idx->therecipe_ = recipe;
     idx->file_ = file;
@@ -239,7 +236,8 @@ public:
 
   static bool merge(const std::vector<std::shared_ptr<HazelIdx>> &idxs,
                     const std::vector<addr> &text_lengths,
-                    addr text_chunk_feature, const std::string &prefix,
+                    addr text_chunk_feature, const std::string &pst_name,
+                    const std::string &dct_name,
                     std::ostream *out, std::string *error = nullptr);
 
   virtual ~HazelIdx(){};
@@ -248,24 +246,39 @@ public:
   HazelIdx(HazelIdx &&) = delete;
   HazelIdx &operator=(HazelIdx &&) = delete;
 
-  std::shared_ptr<CacheRecord> cache(addr feature) {
+  std::shared_ptr<SimplePosting> posting(addr feature) {
     size_t index;
     if (!locate_posting(directory_, feature, &index))
       return nullptr;
     addr start = posting_start(index);
     addr end = directory_[index].end;
-    if (start == end)
-      return singleton_cache(directory_[index].count_or_p);
+    if (start == end) {
+      std::shared_ptr<SimplePosting> posting =
+          posting_factory_->posting_from_feature(feature);
+      posting->push(directory_[index].count_or_p,
+                    directory_[index].count_or_p, 0.0);
+      return posting;
+    }
     if (start > end) {
       assert(false);
       return nullptr;
     }
     bool created;
-    std::shared_ptr<CacheRecord> entry = cache_record(index, &created);
+    std::shared_ptr<SimplePosting> entry =
+        cache_.get(directory_[index].feature, posting_factory_, &created);
     if (created)
-      fill_hazel_cache_entry(entry, read_gate_, posting_factory_,
-                             blob_offset_ + start, end - start);
+      fill_hazel_posting(entry, read_gate_, posting_factory_,
+                         blob_offset_ + start, end - start,
+                         directory_[index].count_or_p);
+    else
+      entry->wait();
     return entry;
+  }
+
+  addr estimated_size() const {
+    addr posting_bytes =
+        directory_.empty() ? postings_start_ : directory_.back().end;
+    return posting_bytes + (addr)directory_.size() * 3 * sizeof(addr);
   }
 
 private:
@@ -286,14 +299,16 @@ private:
       return std::make_unique<EmptyHopper>();
     }
     bool created;
-    std::shared_ptr<CacheRecord> entry = cache_record(index, &created);
+    std::shared_ptr<SimplePosting> entry =
+        cache_.get(directory_[index].feature, posting_factory_, &created);
     if (created) {
       std::shared_ptr<ReadGate> read_gate = read_gate_;
       std::shared_ptr<SimplePostingFactory> factory = posting_factory_;
       addr offset = blob_offset_ + start;
       addr length = end - start;
-      async([entry, read_gate, factory, offset, length] {
-        fill_hazel_cache_entry(entry, read_gate, factory, offset, length);
+      addr n = directory_[index].count_or_p;
+      async([entry, read_gate, factory, offset, length, n] {
+        fill_hazel_posting(entry, read_gate, factory, offset, length, n);
       });
     }
     return ArrayHopper::make(entry);
@@ -338,34 +353,6 @@ private:
       return nullptr;
     }
     return posting;
-  }
-
-  std::shared_ptr<CacheRecord> singleton_cache(addr p) {
-    std::shared_ptr<CacheRecord> entry =
-        std::shared_ptr<CacheRecord>(new CacheRecord);
-    entry->n = 1;
-    entry->postings = shared_array<addr>(1);
-    entry->qostings = entry->postings;
-    entry->fostings = nullptr;
-    *entry->postings = p;
-    entry->release();
-    return entry;
-  }
-
-  std::shared_ptr<CacheRecord> cache_record(size_t index, bool *created) {
-    addr feature = directory_[index].feature;
-    std::lock_guard<std::mutex> lock(cache_lock_);
-    auto cached = cache_.find(feature);
-    if (cached != cache_.end()) {
-      *created = false;
-      return cached->second;
-    }
-    std::shared_ptr<CacheRecord> entry =
-        std::shared_ptr<CacheRecord>(new CacheRecord);
-    entry->n = directory_[index].count_or_p;
-    cache_[feature] = entry;
-    *created = true;
-    return entry;
   }
 
   bool load(std::string *error) {
@@ -426,8 +413,7 @@ private:
   addr postings_start_;
   std::vector<HazelPostingEntry> directory_;
   std::shared_ptr<ReadGate> read_gate_;
-  std::map<addr, std::shared_ptr<CacheRecord>> cache_;
-  std::mutex cache_lock_;
+  OwslaCache cache_;
   std::shared_ptr<SimplePostingFactory> posting_factory_;
 };
 
@@ -675,7 +661,8 @@ bool hazel_copy_checkpoint_bytes(const std::string &filename, addr length,
 
 bool HazelIdx::merge(const std::vector<std::shared_ptr<HazelIdx>> &idxs,
                      const std::vector<addr> &text_lengths,
-                     addr text_chunk_feature, const std::string &prefix,
+                     addr text_chunk_feature, const std::string &pst_name,
+                     const std::string &dct_name,
                      std::ostream *out, std::string *error) {
   if (idxs.size() < 2) {
     safe_error(error) = "HazelIdx merge needs at least two indexes";
@@ -689,8 +676,8 @@ bool HazelIdx::merge(const std::vector<std::shared_ptr<HazelIdx>> &idxs,
     safe_error(error) = "HazelIdx merge got bad text chunk feature";
     return false;
   }
-  if (prefix == "") {
-    safe_error(error) = "HazelIdx merge got empty checkpoint prefix";
+  if (pst_name == "" || dct_name == "") {
+    safe_error(error) = "HazelIdx merge got empty checkpoint name";
     return false;
   }
   if (out == nullptr) {
@@ -713,8 +700,6 @@ bool HazelIdx::merge(const std::vector<std::shared_ptr<HazelIdx>> &idxs,
   }
 
   std::shared_ptr<SimplePostingFactory> factory = idxs[0]->posting_factory_;
-  const std::string pst_name = prefix + ".pst";
-  const std::string dct_name = prefix + ".dct";
   const addr header_length = hazel_idx_header_length();
 
   std::vector<addr> text_bases;
@@ -950,12 +935,12 @@ struct HazelTextCacheEntry {
 
 class HazelTxt final : public Txt {
 public:
-  static std::shared_ptr<Txt> make(const std::string &recipe,
-                                   const std::string &filename,
-                                   addr blob_offset, addr blob_length,
-                                   std::shared_ptr<Tokenizer> tokenizer,
-                                   std::unique_ptr<Hopper> hopper,
-                                   std::string *error = nullptr) {
+  static std::shared_ptr<HazelTxt> make(const std::string &recipe,
+                                        const std::string &filename,
+                                        addr blob_offset, addr blob_length,
+                                        std::shared_ptr<Tokenizer> tokenizer,
+                                        std::unique_ptr<Hopper> hopper,
+                                        std::string *error = nullptr) {
     std::shared_ptr<HazelTxt> txt = std::shared_ptr<HazelTxt>(new HazelTxt());
     txt->therecipe_ = recipe;
     txt->read_gate_ = ReadGate::make(filename, error, 16);
@@ -980,6 +965,7 @@ public:
   static bool merge(const std::vector<std::shared_ptr<HazelTxt>> &txts,
                     std::ostream *out, std::string *error = nullptr);
   addr raw_text_length() const { return raw_text_length_; }
+  addr estimated_size() const { return estimated_size_; }
 
 private:
   HazelTxt(){};
@@ -1120,6 +1106,7 @@ private:
         safe_error(error) = "Hazel got bad empty txt directory";
         return false;
       }
+      estimated_size_ = header_length;
       return true;
     }
 
@@ -1152,6 +1139,8 @@ private:
     }
     cache_ = std::unique_ptr<HazelTextCacheEntry[]>(
         new HazelTextCacheEntry[map_.size()]);
+    estimated_size_ = header_length + map_.back().compressed_byte_end +
+                      (addr)map_.size() * 2 * sizeof(addr);
     return true;
   }
 
@@ -1250,6 +1239,7 @@ private:
   addr chunk_space_start_;
   addr raw_text_length_;
   addr target_chunk_size_;
+  addr estimated_size_ = 0;
   std::vector<HazelTextEntry> map_;
   std::unique_ptr<HazelTextCacheEntry[]> cache_;
   std::shared_ptr<Tokenizer> tokenizer_;
@@ -1378,359 +1368,6 @@ bool parse_hazel_name(const std::string &name, addr *sequence_start,
   return true;
 }
 
-struct HazelMergeInput {
-  std::string name;
-  std::string filename;
-  std::fstream in;
-  std::string dna;
-  std::map<std::string, std::string> parameters;
-  std::map<std::string, HazelBlob> blobs;
-  HazelBlob idx_blob;
-  HazelBlob txt_blob;
-  std::vector<HazelPostingEntry> idx_directory;
-  std::vector<HazelTextEntry> txt_directory;
-  addr idx_postings_start = 0;
-  addr txt_chunk_space_start = 0;
-  addr txt_directory_offset = 0;
-  addr raw_text_length = 0;
-  addr target_chunk_size = 0;
-  addr sequence_start = 0;
-  addr sequence_end = 0;
-  size_t front = 0;
-
-  bool open(std::shared_ptr<Working> working, const std::string &hazel,
-            std::string *error) {
-    name = hazel;
-    filename = working->make_name(hazel);
-    in.open(filename, std::ios::binary | std::ios::in);
-    if (in.fail()) {
-      safe_error(error) = "Hazel can't open: " + filename;
-      return false;
-    }
-    return true;
-  }
-
-  bool read_at(addr where, char *data, addr length, std::string *error) {
-    if (where < 0 || length < 0) {
-      safe_error(error) = "Hazel got bad read range";
-      return false;
-    }
-    if (length == 0)
-      return true;
-    in.clear();
-    in.seekg(where, in.beg);
-    if (in.fail()) {
-      safe_error(error) = "Hazel can't seek in: " + filename;
-      return false;
-    }
-    in.read(data, length);
-    if (in.fail()) {
-      safe_error(error) = "Hazel can't read from: " + filename;
-      return false;
-    }
-    return true;
-  }
-
-  bool read_at(addr where, addr length, std::string *bytes,
-               std::string *error) {
-    bytes->assign(length, '\0');
-    if (length == 0)
-      return true;
-    return read_at(where, &(*bytes)[0], length, error);
-  }
-
-  bool read_file_header(std::string *error) {
-    const std::string magic = cottontail_file_magic;
-    std::string actual(magic.size(), '\0');
-    in.read(&actual[0], actual.size());
-    if (actual != magic) {
-      safe_error(error) = "Hazel got bad single-file magic";
-      return false;
-    }
-    std::ostringstream out;
-    std::string line;
-    while (std::getline(in, line)) {
-      if (line == "") {
-        dna = out.str();
-        return true;
-      }
-      out << line << "\n";
-    }
-    safe_error(error) = "Hazel file has no DNA terminator";
-    return false;
-  }
-
-  bool read_blob_dictionary(std::string *error) {
-    const std::string magic = hazel_blob_dictionary_magic;
-    std::string actual(magic.size(), '\0');
-    in.read(&actual[0], actual.size());
-    if (actual != magic) {
-      safe_error(error) = "Hazel got bad blob dictionary magic";
-      return false;
-    }
-    addr count;
-    if (!read_pod(&in, &count) || count < 0) {
-      safe_error(error) = "Hazel got bad blob dictionary count";
-      return false;
-    }
-    for (addr i = 0; i < count; i++) {
-      addr name_length;
-      if (!read_pod(&in, &name_length) || name_length < 0) {
-        safe_error(error) = "Hazel got bad blob name length";
-        return false;
-      }
-      std::string blob_name(name_length, '\0');
-      in.read(&blob_name[0], name_length);
-      HazelBlob blob;
-      blob.name = blob_name;
-      if (in.fail() || !read_pod(&in, &blob.offset) ||
-          !read_pod(&in, &blob.length) || blob.offset < 0 ||
-          blob.length < 0) {
-        safe_error(error) = "Hazel got bad blob dictionary entry";
-        return false;
-      }
-      blobs[blob_name] = blob;
-    }
-    auto idx = blobs.find("idx");
-    auto txt = blobs.find("txt");
-    if (idx == blobs.end() || txt == blobs.end()) {
-      safe_error(error) = "Hazel missing idx or txt blob";
-      return false;
-    }
-    idx_blob = idx->second;
-    txt_blob = txt->second;
-    return true;
-  }
-
-  bool read_idx_directory(std::string *error) {
-    const std::string magic = hazel_idx_magic;
-    addr header_length = magic.size() + 3 * sizeof(addr);
-    idx_postings_start = header_length;
-    if (idx_blob.length < header_length) {
-      safe_error(error) = "Hazel idx blob is too short";
-      return false;
-    }
-    std::string header;
-    if (!read_at(idx_blob.offset, header_length, &header, error))
-      return false;
-    if (header.compare(0, magic.size(), magic) != 0) {
-      safe_error(error) = "Hazel got bad idx blob magic";
-      return false;
-    }
-    const char *p = header.data() + magic.size();
-    addr directory_offset = read_pod<addr>(p);
-    p += sizeof(addr);
-    addr directory_length = read_pod<addr>(p);
-    p += sizeof(addr);
-    addr directory_count = read_pod<addr>(p);
-    if (directory_offset < header_length || directory_length < 0 ||
-        directory_count < 0 ||
-        directory_length != directory_count * (addr)(3 * sizeof(addr)) ||
-        directory_offset > idx_blob.length ||
-        directory_length > idx_blob.length - directory_offset) {
-      safe_error(error) = "Hazel got bad idx directory";
-      return false;
-    }
-    std::string directory;
-    if (!read_at(idx_blob.offset + directory_offset, directory_length,
-                 &directory, error))
-      return false;
-    idx_directory.reserve(directory_count);
-    p = directory.data();
-    for (addr i = 0; i < directory_count; i++) {
-      HazelPostingEntry entry;
-      entry.feature = read_pod<addr>(p);
-      p += sizeof(addr);
-      entry.end = read_pod<addr>(p);
-      p += sizeof(addr);
-      entry.count_or_p = read_pod<addr>(p);
-      p += sizeof(addr);
-      if (entry.end < header_length || entry.end > directory_offset ||
-          (!idx_directory.empty() &&
-           (entry.feature <= idx_directory.back().feature ||
-            entry.end < idx_directory.back().end))) {
-        safe_error(error) = "Hazel got bad idx posting boundary";
-        return false;
-      }
-      idx_directory.push_back(entry);
-    }
-    return true;
-  }
-
-  bool read_txt_directory(std::string *error) {
-    const std::string magic = hazel_txt_magic;
-    addr header_length = magic.size() + 5 * sizeof(addr);
-    if (txt_blob.length < header_length) {
-      safe_error(error) = "Hazel txt blob is too short";
-      return false;
-    }
-    std::string header;
-    if (!read_at(txt_blob.offset, header_length, &header, error))
-      return false;
-    if (header.compare(0, magic.size(), magic) != 0) {
-      safe_error(error) = "Hazel got bad txt blob magic";
-      return false;
-    }
-    const char *p = header.data() + magic.size();
-    addr directory_offset = read_pod<addr>(p);
-    p += sizeof(addr);
-    addr directory_length = read_pod<addr>(p);
-    p += sizeof(addr);
-    addr directory_count = read_pod<addr>(p);
-    p += sizeof(addr);
-    raw_text_length = read_pod<addr>(p);
-    p += sizeof(addr);
-    target_chunk_size = read_pod<addr>(p);
-    txt_chunk_space_start = txt_blob.offset + header_length;
-    txt_directory_offset = directory_offset;
-    addr chunk_space_length = txt_blob.length - header_length;
-    if (directory_offset < 0 || directory_length < 0 || directory_count < 0 ||
-        raw_text_length < 0 || target_chunk_size <= 0 ||
-        directory_length != directory_count * (addr)(2 * sizeof(addr)) ||
-        directory_offset > chunk_space_length ||
-        directory_length > chunk_space_length - directory_offset) {
-      safe_error(error) = "Hazel got bad txt directory";
-      return false;
-    }
-    if (directory_count == 0) {
-      if (raw_text_length != 0 || directory_length != 0 ||
-          directory_offset != 0) {
-        safe_error(error) = "Hazel got bad empty txt directory";
-        return false;
-      }
-      return true;
-    }
-    std::string directory;
-    if (!read_at(txt_chunk_space_start + directory_offset, directory_length,
-                 &directory, error))
-      return false;
-    txt_directory.reserve(directory_count);
-    p = directory.data();
-    for (addr i = 0; i < directory_count; i++) {
-      HazelTextEntry entry;
-      entry.raw_byte_end = read_pod<addr>(p);
-      p += sizeof(addr);
-      entry.compressed_byte_end = read_pod<addr>(p);
-      p += sizeof(addr);
-      if (entry.raw_byte_end < 0 || entry.compressed_byte_end < 0 ||
-          entry.compressed_byte_end > directory_offset ||
-          (!txt_directory.empty() &&
-           (entry.raw_byte_end < txt_directory.back().raw_byte_end ||
-            entry.compressed_byte_end <
-                txt_directory.back().compressed_byte_end))) {
-        safe_error(error) = "Hazel got bad txt chunk boundary";
-        return false;
-      }
-      txt_directory.push_back(entry);
-    }
-    if (txt_directory.back().raw_byte_end != raw_text_length ||
-        txt_directory.back().compressed_byte_end != directory_offset) {
-      safe_error(error) = "Hazel got bad txt final boundary";
-      return false;
-    }
-    return true;
-  }
-
-  bool read_sequence(std::string *error) {
-    auto hazel = parameters.find("hazel");
-    if (hazel == parameters.end()) {
-      safe_error(error) = "Hazel DNA has no hazel metadata";
-      return false;
-    }
-    std::map<std::string, std::string> metadata;
-    if (!cook(hazel->second, &metadata, error))
-      return false;
-    auto start = metadata.find("sequence_start");
-    auto end = metadata.find("sequence_end");
-    if (start == metadata.end() || end == metadata.end()) {
-      safe_error(error) = "Hazel DNA has no sequence range";
-      return false;
-    }
-    try {
-      sequence_start = std::stoll(start->second);
-      sequence_end = std::stoll(end->second);
-    } catch (...) {
-      safe_error(error) = "Hazel DNA has bad sequence range";
-      return false;
-    }
-    return true;
-  }
-
-  bool load(std::shared_ptr<Working> working, const std::string &hazel,
-            std::string *error) {
-    addr filename_start, filename_end;
-    if (!parse_hazel_name(hazel, &filename_start, &filename_end)) {
-      safe_error(error) = "Hazel merge got bad shard name: " + hazel;
-      return false;
-    }
-    if (!open(working, hazel, error) || !read_file_header(error) ||
-        !cook(dna, &parameters, error) || !read_blob_dictionary(error) ||
-        !read_idx_directory(error) || !read_txt_directory(error) ||
-        !read_sequence(error))
-      return false;
-    auto warren = parameters.find("warren");
-    if (warren == parameters.end() || warren->second != "hazel") {
-      safe_error(error) = "Hazel merge got non-Hazel DNA";
-      return false;
-    }
-    if (filename_start != sequence_start || filename_end != sequence_end) {
-      safe_error(error) = "Hazel filename and DNA sequence ranges differ";
-      return false;
-    }
-    return true;
-  }
-
-  bool empty() const { return front >= idx_directory.size(); }
-
-  addr front_feature() const {
-    return empty() ? maxfinity : idx_directory[front].feature;
-  }
-
-  void skip_front() {
-    if (!empty())
-      front++;
-  }
-
-  addr posting_start(size_t index) const {
-    return index == 0 ? idx_postings_start : idx_directory[index - 1].end;
-  }
-
-  std::shared_ptr<SimplePosting>
-  posting_at(size_t index, std::shared_ptr<SimplePostingFactory> factory,
-             std::string *error) {
-    const HazelPostingEntry &entry = idx_directory[index];
-    addr start = posting_start(index);
-    if (start == entry.end) {
-      std::shared_ptr<SimplePosting> posting =
-          factory->posting_from_feature(entry.feature);
-      posting->push(entry.count_or_p, entry.count_or_p, 0.0);
-      return posting;
-    }
-    if (start > entry.end) {
-      safe_error(error) = "Hazel got bad idx posting boundary";
-      return nullptr;
-    }
-    std::string bytes;
-    if (!read_at(idx_blob.offset + start, entry.end - start, &bytes, error))
-      return nullptr;
-    auto posting = factory->posting_from_compressed_blob(bytes.data(),
-                                                         bytes.size(), error);
-    if (posting == nullptr)
-      return nullptr;
-    if (posting->feature() != entry.feature) {
-      safe_error(error) = "Hazel posting feature differs from directory";
-      return nullptr;
-    }
-    return posting;
-  }
-
-  std::shared_ptr<SimplePosting>
-  front_posting(std::shared_ptr<SimplePostingFactory> factory,
-                std::string *error) {
-    return posting_at(front, factory, error);
-  }
-};
-
 struct HazelMergeOutput {
   std::string filename;
   std::fstream out;
@@ -1782,345 +1419,27 @@ struct HazelMergeOutput {
     }
     return true;
   }
-
-  bool write_posting(std::shared_ptr<SimplePosting> posting,
-                     std::vector<HazelPostingEntry> *directory,
-                     addr blob_start, std::string *error) {
-    if (posting == nullptr || posting->size() == 0)
-      return true;
-    HazelPostingEntry entry;
-    entry.feature = posting->feature();
-    entry.end = (addr)out.tellp() - blob_start;
-    entry.count_or_p = posting->size();
-    addr p, q;
-    fval v;
-    if (entry.count_or_p == 1 && posting->get(0, &p, &q, &v) && p == q &&
-        v == 0.0) {
-      entry.count_or_p = p;
-    } else {
-      posting->write(&out);
-      entry.end = (addr)out.tellp() - blob_start;
-      if (out.fail()) {
-        safe_error(error) = "Hazel merge failed to write idx postings";
-        return false;
-      }
-    }
-    directory->push_back(entry);
-    return true;
-  }
-
-  bool copy_posting(std::shared_ptr<HazelMergeInput> input, size_t index,
-                    std::vector<HazelPostingEntry> *directory, addr blob_start,
-                    std::string *error) {
-    const HazelPostingEntry &source = input->idx_directory[index];
-    addr start = input->posting_start(index);
-    if (start > source.end) {
-      safe_error(error) = "Hazel got bad idx posting boundary";
-      return false;
-    }
-    HazelPostingEntry entry;
-    entry.feature = source.feature;
-    entry.end = (addr)out.tellp() - blob_start;
-    entry.count_or_p = source.count_or_p;
-    if (start < source.end) {
-      std::string bytes;
-      if (!input->read_at(input->idx_blob.offset + start, source.end - start,
-                          &bytes, error))
-        return false;
-      out.write(bytes.data(), bytes.size());
-      entry.end = (addr)out.tellp() - blob_start;
-      if (out.fail()) {
-        safe_error(error) = "Hazel merge failed to copy idx postings";
-        return false;
-      }
-    }
-    directory->push_back(entry);
-    return true;
-  }
-
-  bool write_txt(const std::vector<std::shared_ptr<HazelMergeInput>> &inputs,
-                 addr target_chunk_size, std::string *error) {
-    HazelBlob &blob = blobs[1];
-    blob.offset = out.tellp();
-    const std::string magic = hazel_txt_magic;
-    out.write(magic.data(), magic.size());
-    write_pod<addr>(&out, 0);
-    write_pod<addr>(&out, 0);
-    write_pod<addr>(&out, 0);
-    write_pod<addr>(&out, 0);
-    write_pod(&out, target_chunk_size);
-    addr chunk_space_start = out.tellp();
-
-    std::vector<HazelTextEntry> directory;
-    addr raw_base = 0;
-    for (auto &input : inputs) {
-      addr previous_raw = 0;
-      addr previous_compressed = 0;
-      for (auto &entry : input->txt_directory) {
-        addr raw_length = entry.raw_byte_end - previous_raw;
-        addr compressed_length = entry.compressed_byte_end - previous_compressed;
-        if (raw_length < 0 || compressed_length < 0) {
-          safe_error(error) = "Hazel got bad txt chunk boundary";
-          return false;
-        }
-        std::string compressed;
-        if (!input->read_at(input->txt_chunk_space_start + previous_compressed,
-                            compressed_length, &compressed, error))
-          return false;
-        out.write(compressed.data(), compressed.size());
-        HazelTextEntry out_entry;
-        out_entry.raw_byte_end = raw_base + entry.raw_byte_end;
-        out_entry.compressed_byte_end = (addr)out.tellp() - chunk_space_start;
-        directory.push_back(out_entry);
-        previous_raw = entry.raw_byte_end;
-        previous_compressed = entry.compressed_byte_end;
-      }
-      raw_base += input->raw_text_length;
-    }
-
-    addr directory_offset = (addr)out.tellp() - chunk_space_start;
-    addr directory_count = directory.size();
-    for (auto &entry : directory) {
-      write_pod(&out, entry.raw_byte_end);
-      write_pod(&out, entry.compressed_byte_end);
-    }
-    addr directory_length =
-        (addr)out.tellp() - (chunk_space_start + directory_offset);
-    blob.length = (addr)out.tellp() - blob.offset;
-    out.seekp(blob.offset + magic.size());
-    write_pod(&out, directory_offset);
-    write_pod(&out, directory_length);
-    write_pod(&out, directory_count);
-    write_pod(&out, raw_base);
-    write_pod(&out, target_chunk_size);
-    out.seekp(blob.offset + blob.length);
-    if (out.fail()) {
-      safe_error(error) = "Hazel merge failed to write txt blob";
-      return false;
-    }
-    return true;
-  }
-
-  bool write_idx(
-      std::vector<std::shared_ptr<HazelMergeInput>> *inputs,
-      addr text_chunk_feature, std::shared_ptr<SimplePosting> exclude,
-      std::shared_ptr<SimplePosting> text_chunk,
-      std::shared_ptr<SimplePostingFactory> factory, std::string *error) {
-    HazelBlob &blob = blobs[0];
-    blob.offset = out.tellp();
-    const std::string magic = hazel_idx_magic;
-    out.write(magic.data(), magic.size());
-    write_pod<addr>(&out, 0);
-    write_pod<addr>(&out, 0);
-    write_pod<addr>(&out, 0);
-    addr blob_start = blob.offset;
-
-    std::vector<HazelPostingEntry> directory;
-    bool wrote_null = false;
-    bool wrote_text_chunk = false;
-    while (true) {
-      addr next = maxfinity;
-      for (auto &input : *inputs)
-        next = std::min(next, input->front_feature());
-      if (!wrote_null && exclude != nullptr)
-        next = std::min(next, null_feature);
-      if (!wrote_text_chunk && text_chunk != nullptr)
-        next = std::min(next, text_chunk_feature);
-      if (next == maxfinity)
-        break;
-
-      std::vector<std::pair<std::shared_ptr<HazelMergeInput>, size_t>> sources;
-      for (auto &input : *inputs) {
-        if (input->front_feature() == next) {
-          sources.emplace_back(input, input->front);
-          input->skip_front();
-        }
-      }
-
-      if (next == null_feature) {
-        if (!write_posting(exclude, &directory, blob_start, error))
-          return false;
-        wrote_null = true;
-      } else if (next == text_chunk_feature) {
-        if (!write_posting(text_chunk, &directory, blob_start, error))
-          return false;
-        wrote_text_chunk = true;
-      } else if (sources.size() == 1 && exclude == nullptr) {
-        if (!copy_posting(sources[0].first, sources[0].second, &directory,
-                          blob_start, error))
-          return false;
-      } else if (!sources.empty()) {
-        std::vector<std::shared_ptr<SimplePosting>> postings;
-        for (auto &source : sources) {
-          auto posting = source.first->posting_at(source.second, factory, error);
-          if (posting == nullptr)
-            return false;
-          postings.push_back(posting);
-        }
-        auto posting = factory->posting_from_merge(postings, exclude);
-        if (!write_posting(posting, &directory, blob_start, error))
-          return false;
-      }
-    }
-
-    addr directory_offset = (addr)out.tellp() - blob_start;
-    addr directory_count = directory.size();
-    for (auto &entry : directory) {
-      write_pod(&out, entry.feature);
-      write_pod(&out, entry.end);
-      write_pod(&out, entry.count_or_p);
-    }
-    addr directory_length = (addr)out.tellp() - blob_start - directory_offset;
-    blob.length = (addr)out.tellp() - blob_start;
-    out.seekp(blob.offset + magic.size());
-    write_pod(&out, directory_offset);
-    write_pod(&out, directory_length);
-    write_pod(&out, directory_count);
-    out.seekp(blob.offset + blob.length);
-    if (out.fail()) {
-      safe_error(error) = "Hazel merge failed to write idx blob";
-      return false;
-    }
-    return true;
-  }
 };
 
-bool normalize_dna_for_merge(const std::map<std::string, std::string> &input,
-                             std::string *normalized, std::string *error) {
-  std::map<std::string, std::string> parameters = input;
-  parameters.erase("parameters");
-  auto hazel = parameters.find("hazel");
-  if (hazel != parameters.end()) {
-    std::map<std::string, std::string> metadata;
-    if (!cook(hazel->second, &metadata, error))
-      return false;
-    metadata.erase("sequence_start");
-    metadata.erase("sequence_end");
-    hazel->second = freeze(metadata);
-  }
-  auto txt = parameters.find("txt");
-  if (txt != parameters.end()) {
-    std::map<std::string, std::string> txt_package;
-    if (!cook(txt->second, &txt_package, error))
-      return false;
-    auto recipe = txt_package.find("recipe");
-    if (recipe != txt_package.end()) {
-      std::map<std::string, std::string> txt_recipe;
-      if (!cook(recipe->second, &txt_recipe, error))
-        return false;
-      txt_recipe.erase("chunk_size");
-      recipe->second = freeze(txt_recipe);
-      txt->second = freeze(txt_package);
-    }
-  }
-  *normalized = freeze(parameters);
-  return true;
+struct HazelMergeSidecars {
+  std::string mrg;
+  std::string pst;
+  std::string dct;
+};
+
+std::string hazel_sidecar_name(const std::string &dst,
+                               const std::string &prefix) {
+  std::filesystem::path target(dst);
+  std::filesystem::path directory = target.parent_path();
+  std::filesystem::path sidecar = prefix + "." + target.filename().string();
+  if (directory.empty())
+    return sidecar.string();
+  return (directory / sidecar).string();
 }
 
-bool merged_hazel_dna(const HazelMergeInput &first, addr sequence_start,
-                      addr sequence_end, addr target_chunk_size,
-                      const std::string &parameters_recipe, std::string *dna,
-                      std::string *error) {
-  std::map<std::string, std::string> parameters = first.parameters;
-  std::map<std::string, std::string> metadata;
-  auto hazel = parameters.find("hazel");
-  if (hazel != parameters.end() && !cook(hazel->second, &metadata, error))
-    return false;
-  metadata["sequence_start"] = std::to_string(sequence_start);
-  metadata["sequence_end"] = std::to_string(sequence_end);
-  parameters["hazel"] = freeze(metadata);
-  if (parameters_recipe == "")
-    parameters.erase("parameters");
-  else
-    parameters["parameters"] = parameters_recipe;
-
-  auto txt = parameters.find("txt");
-  if (txt == parameters.end()) {
-    safe_error(error) = "Hazel DNA has no txt recipe";
-    return false;
-  }
-  std::map<std::string, std::string> txt_package;
-  if (!cook(txt->second, &txt_package, error))
-    return false;
-  auto recipe = txt_package.find("recipe");
-  if (recipe == txt_package.end()) {
-    safe_error(error) = "Hazel DNA has no txt subrecipe";
-    return false;
-  }
-  std::map<std::string, std::string> txt_recipe;
-  if (!cook(recipe->second, &txt_recipe, error))
-    return false;
-  txt_recipe["chunk_size"] = std::to_string(target_chunk_size);
-  recipe->second = freeze(txt_recipe);
-  txt->second = freeze(txt_package);
-  *dna = freeze(parameters);
-  return true;
-}
-
-bool posting_for_feature(
-    const std::vector<std::shared_ptr<HazelMergeInput>> &inputs, addr feature,
-    std::shared_ptr<SimplePostingFactory> factory,
-    std::shared_ptr<SimplePosting> *posting, std::string *error) {
-  std::vector<std::shared_ptr<SimplePosting>> postings;
-  for (auto &input : inputs) {
-    size_t index;
-    if (locate_posting(input->idx_directory, feature, &index)) {
-      auto p = input->posting_at(index, factory, error);
-      if (p == nullptr)
-        return false;
-      postings.push_back(p);
-    }
-  }
-  if (postings.empty()) {
-    *posting = nullptr;
-  } else if (postings.size() == 1) {
-    *posting = postings[0];
-  } else {
-    *posting = factory->posting_from_merge(postings);
-  }
-  return true;
-}
-
-bool text_chunk_posting(
-    const std::vector<std::shared_ptr<HazelMergeInput>> &inputs, addr feature,
-    std::shared_ptr<SimplePostingFactory> factory,
-    std::shared_ptr<SimplePosting> *posting, std::string *error) {
-  *posting = factory->posting_from_feature(feature);
-  addr raw_base = 0;
-  for (auto &input : inputs) {
-    size_t index;
-    if (locate_posting(input->idx_directory, feature, &index)) {
-      auto source = input->posting_at(index, factory, error);
-      if (source == nullptr)
-        return false;
-      addr p, q;
-      fval v;
-      for (size_t i = 0; i < source->size(); i++) {
-        source->get(i, &p, &q, &v);
-        (*posting)->push(p, q, addr2fval(fval2addr(v) + raw_base));
-      }
-    }
-    raw_base += input->raw_text_length;
-  }
-  if ((*posting)->size() == 0)
-    *posting = nullptr;
-  return true;
-}
-
-bool posting_factory_from_idx_recipe(
-    const std::string &idx_recipe,
-    std::shared_ptr<SimplePostingFactory> *factory, std::string *error) {
-  std::shared_ptr<Compressor> posting_compressor;
-  std::shared_ptr<Compressor> fvalue_compressor;
-  if (!compressor_from_recipe(idx_recipe, "posting_compressor",
-                              "posting_compressor_recipe",
-                              &posting_compressor, error) ||
-      !compressor_from_recipe(idx_recipe, "fvalue_compressor",
-                              "fvalue_compressor_recipe", &fvalue_compressor,
-                              error))
-    return false;
-  *factory = SimplePostingFactory::make(posting_compressor, fvalue_compressor);
-  return *factory != nullptr;
+HazelMergeSidecars hazel_merge_sidecars(const std::string &dst) {
+  return {hazel_sidecar_name(dst, "mrg"), hazel_sidecar_name(dst, "pst"),
+          hazel_sidecar_name(dst, "dct")};
 }
 
 bool hazel_path_exists(const std::string &filename, bool *exists,
@@ -2196,6 +1515,138 @@ bool hazel_cleanup_prefix_files(const std::string &prefix,
   }
   return true;
 }
+
+bool hazel_cleanup_merge_sidecars(const std::string &dst,
+                                  const HazelMergeSidecars &sidecars,
+                                  std::string *error) {
+  if (!hazel_remove_if_exists(sidecars.mrg, error) ||
+      !hazel_remove_if_exists(sidecars.pst, error) ||
+      !hazel_remove_if_exists(sidecars.dct, error))
+    return false;
+  return hazel_cleanup_prefix_files(dst, error);
+}
+
+bool has_suffix(const std::string &name, const std::string &suffix) {
+  return name.size() >= suffix.size() &&
+         name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+bool parse_old_hazel_sidecar(const std::string &name, OwslaShard *target) {
+  for (const char *suffix : {".tmp", ".pst", ".dct"}) {
+    if (!has_suffix(name, suffix))
+      continue;
+    std::string base = name.substr(0, name.size() - std::strlen(suffix));
+    return owsla_parse_shard_name(base, "hazel", target);
+  }
+  return false;
+}
+
+bool parse_hazel_sidecar(const std::string &name, const std::string &prefix,
+                         OwslaShard *target) {
+  std::string full_prefix = prefix + ".";
+  if (name.compare(0, full_prefix.size(), full_prefix) != 0)
+    return false;
+  return owsla_parse_shard_name(name.substr(full_prefix.size()), "hazel",
+                                target);
+}
+
+bool normalize_hazel_shards(std::vector<OwslaShard> *found,
+                            std::vector<OwslaShard> *living,
+                            std::vector<OwslaShard> *dead,
+                            std::string *error) {
+  std::sort(found->begin(), found->end(),
+            [](const auto &a, const auto &b) -> bool {
+              return a.start < b.start || (a.start == b.start && a.end > b.end);
+            });
+  living->clear();
+  dead->clear();
+  for (auto &shard : *found) {
+    if (living->empty() || living->back().end < shard.start) {
+      living->push_back(shard);
+    } else if (living->back().end >= shard.end) {
+      dead->push_back(shard);
+    } else {
+      safe_error(error) = "Filename sequence error for hazel: " + shard.name;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool shadowed_by_living_hazel(const OwslaShard &dead,
+                              const std::vector<OwslaShard> &living) {
+  for (auto &live : living)
+    if (owsla_range_contains(live, dead))
+      return true;
+  return false;
+}
+
+bool verify_dead_hazels(const std::vector<OwslaShard> &living,
+                        const std::vector<OwslaShard> &dead,
+                        std::string *error) {
+  for (auto &shard : dead)
+    if (!shadowed_by_living_hazel(shard, living)) {
+      safe_error(error) = "Unshadowed dead hazel shard: " + shard.name;
+      return false;
+    }
+  return true;
+}
+
+bool same_range(const OwslaShard &shard, addr start, addr end) {
+  return shard.start == start && shard.end == end;
+}
+
+bool has_hazel(const std::vector<OwslaShard> &hazels, addr start, addr end) {
+  for (auto &hazel : hazels)
+    if (same_range(hazel, start, end))
+      return true;
+  return false;
+}
+
+bool hazel_source_group(const std::vector<OwslaShard> &hazels, addr start,
+                        addr end, std::vector<OwslaShard> *sources) {
+  if (sources != nullptr)
+    sources->clear();
+  for (size_t i = 0; i < hazels.size(); i++) {
+    if (hazels[i].start != start)
+      continue;
+    std::vector<OwslaShard> group;
+    addr next = start;
+    for (size_t j = i; j < hazels.size(); j++) {
+      if (hazels[j].start != next || hazels[j].end > end)
+        break;
+      group.push_back(hazels[j]);
+      if (hazels[j].end == end) {
+        if (group.size() < 2)
+          return false;
+        if (sources != nullptr)
+          *sources = group;
+        return true;
+      }
+      if (hazels[j].end == maxfinity)
+        break;
+      next = hazels[j].end + 1;
+    }
+  }
+  return false;
+}
+
+bool remove_working_names(std::shared_ptr<Working> working,
+                          const std::vector<std::string> &names,
+                          std::string *error) {
+  for (auto &name : names)
+    if (!working->remove(name, error))
+      return false;
+  return true;
+}
+
+struct HazelRecoverySidecars {
+  OwslaShard target;
+  bool mrg = false;
+  bool pst = false;
+  bool dct = false;
+  std::vector<std::string> names;
+};
 
 bool normalize_dna_for_activated_hazel_merge(
     const std::map<std::string, std::string> &input, std::string *normalized,
@@ -2281,127 +1732,207 @@ bool merged_activated_hazel_dna(
   return true;
 }
 
+std::shared_ptr<Hazel> activate_hazel(const std::string &filename,
+                                      std::string *error) {
+  std::shared_ptr<Warren> warren = Warren::make(filename, error);
+  if (warren == nullptr)
+    return nullptr;
+  std::shared_ptr<Hazel> hazel = std::dynamic_pointer_cast<Hazel>(warren);
+  if (hazel == nullptr) {
+    safe_error(error) = "Hazel merge got non-Hazel output: " + filename;
+    return nullptr;
+  }
+  return hazel;
+}
+
 } // namespace
 
 bool Hazel::merge(std::shared_ptr<Working> working,
                   const std::vector<std::string> &hazels,
                   const std::string &parameters, std::string *error) {
+  (void)parameters;
   if (working == nullptr) {
     safe_error(error) = "Hazel merge needs a working directory";
     return false;
   }
-  if (hazels.empty()) {
-    safe_error(error) = "Hazel merge got no shards";
+  if (hazels.size() < 2) {
+    safe_error(error) = "Hazel merge needs at least two shards";
     return false;
   }
 
-  std::vector<std::shared_ptr<HazelMergeInput>> inputs;
-  std::string normalized;
+  std::vector<std::shared_ptr<Hazel>> activated;
+  activated.reserve(hazels.size());
+  addr first_start = 0;
+  addr last_end = 0;
+  addr previous_end = 0;
   for (size_t i = 0; i < hazels.size(); i++) {
-    auto input = std::make_shared<HazelMergeInput>();
-    if (!input->load(working, hazels[i], error))
+    addr sequence_start;
+    addr sequence_end;
+    if (!parse_hazel_name(hazels[i], &sequence_start, &sequence_end)) {
+      safe_error(error) = "Hazel merge got bad shard name: " + hazels[i];
       return false;
-    if (i > 0 && inputs.back()->sequence_end + 1 != input->sequence_start) {
+    }
+    if (i == 0) {
+      first_start = sequence_start;
+    } else if (previous_end == maxfinity || sequence_start != previous_end + 1) {
       safe_error(error) = "Hazel merge got non-contiguous shards";
       return false;
     }
-    std::string current;
-    if (!normalize_dna_for_merge(input->parameters, &current, error))
+    previous_end = sequence_end;
+    last_end = sequence_end;
+
+    std::string filename = working->make_name(hazels[i]);
+    std::shared_ptr<Warren> warren = Warren::make(filename, error);
+    if (warren == nullptr)
       return false;
-    if (i == 0)
-      normalized = current;
-    else if (current != normalized) {
-      safe_error(error) = "Hazel merge got incompatible DNA";
+    std::shared_ptr<Hazel> hazel = std::dynamic_pointer_cast<Hazel>(warren);
+    if (hazel == nullptr) {
+      safe_error(error) = "Hazel merge got non-Hazel shard: " + hazels[i];
       return false;
     }
-    inputs.push_back(input);
+
+    bool dna_sequence_present;
+    addr dna_sequence_start;
+    addr dna_sequence_end;
+    if (!hazel_sequence_range(hazel->parameters_, &dna_sequence_present,
+                              &dna_sequence_start, &dna_sequence_end, error))
+      return false;
+    if (dna_sequence_present &&
+        (dna_sequence_start != sequence_start ||
+         dna_sequence_end != sequence_end)) {
+      safe_error(error) = "Hazel filename and DNA sequence ranges differ";
+      return false;
+    }
+    activated.push_back(hazel);
   }
 
-  std::string featurizer_name, featurizer_recipe;
-  std::string idx_name, idx_recipe;
-  if (!name_and_recipe(inputs[0]->parameters, "featurizer", &featurizer_name,
-                       &featurizer_recipe, error) ||
-      !name_and_recipe(inputs[0]->parameters, "idx", &idx_name, &idx_recipe,
-                       error))
-    return false;
-  if (idx_name != "hazel") {
-    safe_error(error) = "Hazel merge got non-Hazel idx";
-    return false;
-  }
-
-  std::shared_ptr<Featurizer> featurizer =
-      Featurizer::make(featurizer_name, featurizer_recipe, error);
-  if (featurizer == nullptr)
-    return false;
-  addr text_chunk_feature = featurizer->featurize(text_chunk_tag);
-
-  std::shared_ptr<SimplePostingFactory> posting_factory;
-  if (!posting_factory_from_idx_recipe(idx_recipe, &posting_factory, error))
-    return false;
-
-  addr target_chunk_size = inputs[0]->target_chunk_size;
-  for (auto &input : inputs)
-    target_chunk_size = std::min(target_chunk_size, input->target_chunk_size);
-
-  std::shared_ptr<SimplePosting> exclude;
-  std::shared_ptr<SimplePosting> text_chunk;
-  if (!posting_for_feature(inputs, null_feature, posting_factory, &exclude,
-                           error) ||
-      !text_chunk_posting(inputs, text_chunk_feature, posting_factory,
-                          &text_chunk, error))
-    return false;
-
-  std::string dna;
-  if (!merged_hazel_dna(*inputs[0], inputs.front()->sequence_start,
-                        inputs.back()->sequence_end, target_chunk_size,
-                        parameters, &dna, error))
-    return false;
-
-  std::string tempname = working->make_temp("hazel");
-  HazelMergeOutput output;
-  if (!output.open(tempname, dna, error) ||
-      !output.write_txt(inputs, target_chunk_size, error) ||
-      !output.write_idx(&inputs, text_chunk_feature, exclude, text_chunk,
-                        posting_factory, error) ||
-      !output.close(error)) {
-    std::remove(tempname.c_str());
-    return false;
-  }
-
-  std::string final_name = hazel_default_name(inputs.front()->sequence_start,
-                                              inputs.back()->sequence_end);
+  std::string final_name = hazel_default_name(first_start, last_end);
   std::string final_filename = working->make_name(final_name);
-  if (link(tempname.c_str(), final_filename.c_str()) != 0) {
-    safe_error(error) = "Hazel merge can't link shard: " + final_filename;
-    std::remove(tempname.c_str());
+  return Hazel::merge(activated, final_filename, nullptr, error) != nullptr;
+}
+
+bool Hazel::sanitize(std::shared_ptr<Working> working,
+                     std::vector<OwslaShard> *hazels,
+                     std::vector<HazelMergeRecovery> *recoveries,
+                     std::string *error) {
+  if (hazels != nullptr)
+    hazels->clear();
+  if (recoveries != nullptr)
+    recoveries->clear();
+  if (working == nullptr)
+    return true;
+
+  std::vector<OwslaShard> found;
+  std::vector<std::string> old_sidecars;
+  for (auto &name : working->ls("hazel")) {
+    OwslaShard shard;
+    if (owsla_parse_shard_name(name, "hazel", &shard)) {
+      found.push_back(shard);
+      continue;
+    }
+    if (parse_old_hazel_sidecar(name, &shard)) {
+      old_sidecars.push_back(name);
+      continue;
+    }
+    safe_error(error) = "Filename format error for hazel: " + name;
     return false;
   }
-  std::remove(tempname.c_str());
+
+  std::vector<OwslaShard> living;
+  std::vector<OwslaShard> dead;
+  if (!normalize_hazel_shards(&found, &living, &dead, error) ||
+      !verify_dead_hazels(living, dead, error))
+    return false;
+
+  std::map<std::pair<addr, addr>, HazelRecoverySidecars> sidecars;
+  auto add_sidecars = [&](const std::string &prefix) {
+    for (auto &name : working->ls(prefix)) {
+      OwslaShard target;
+      if (!parse_hazel_sidecar(name, prefix, &target))
+        continue;
+      auto key = std::make_pair(target.start, target.end);
+      auto &sidecar = sidecars[key];
+      sidecar.target = target;
+      if (prefix == "mrg")
+        sidecar.mrg = true;
+      else if (prefix == "pst")
+        sidecar.pst = true;
+      else if (prefix == "dct")
+        sidecar.dct = true;
+      sidecar.names.push_back(name);
+    }
+  };
+  add_sidecars("mrg");
+  add_sidecars("pst");
+  add_sidecars("dct");
+
+  std::vector<HazelMergeRecovery> restartable;
+  for (auto &item : sidecars) {
+    HazelRecoverySidecars &sidecar = item.second;
+    if (has_hazel(living, sidecar.target.start, sidecar.target.end)) {
+      if (!remove_working_names(working, sidecar.names, error))
+        return false;
+      continue;
+    }
+    for (auto &name : sidecar.names)
+      if (name.compare(0, 4, "mrg.") == 0)
+        if (!working->remove(name, error))
+          return false;
+    std::vector<OwslaShard> sources;
+    if (sidecar.pst && sidecar.dct &&
+        hazel_source_group(living, sidecar.target.start, sidecar.target.end,
+                           &sources)) {
+      HazelMergeRecovery recovery;
+      recovery.target = sidecar.target;
+      recovery.sources = sources;
+      restartable.push_back(recovery);
+      continue;
+    }
+    for (auto &name : sidecar.names)
+      if (name.compare(0, 4, "mrg.") != 0)
+        if (!working->remove(name, error))
+          return false;
+  }
+
+  for (auto &shard : dead)
+    if (!working->remove(shard.name, error))
+      return false;
+  if (!remove_working_names(working, old_sidecars, error))
+    return false;
+  std::sort(restartable.begin(), restartable.end());
+
+  if (hazels != nullptr)
+    *hazels = living;
+  if (recoveries != nullptr)
+    *recoveries = restartable;
   return true;
 }
 
-bool Hazel::merge(
+std::shared_ptr<Hazel> Hazel::merge(
     const std::vector<std::shared_ptr<Hazel>> &hazels, const std::string &dst,
     std::shared_ptr<std::map<std::string, std::string>> parameters,
     std::string *error) {
   if (hazels.size() < 2) {
     safe_error(error) = "Hazel merge needs at least two shards";
-    return false;
+    return nullptr;
   }
   if (dst == "") {
     safe_error(error) = "Hazel merge got empty destination";
-    return false;
+    return nullptr;
   }
 
   bool exists;
   if (!hazel_path_exists(dst, &exists, error))
-    return false;
-  if (exists)
-    return hazel_cleanup_prefix_files(dst, error);
+    return nullptr;
+  HazelMergeSidecars sidecars = hazel_merge_sidecars(dst);
+  if (exists) {
+    if (!hazel_cleanup_merge_sidecars(dst, sidecars, error))
+      return nullptr;
+    return activate_hazel(dst, error);
+  }
 
-  std::string tempname = dst + ".tmp";
-  if (!hazel_remove_if_exists(tempname, error))
-    return false;
+  if (!hazel_remove_if_exists(sidecars.mrg, error))
+    return nullptr;
 
   std::vector<std::shared_ptr<HazelIdx>> idxs;
   std::vector<std::shared_ptr<HazelTxt>> txts;
@@ -2419,34 +1950,34 @@ bool Hazel::merge(
     auto hazel = hazels[i];
     if (hazel == nullptr) {
       safe_error(error) = "Hazel merge got null shard";
-      return false;
+      return nullptr;
     }
     if (hazel->featurizer_ == nullptr || hazel->idx_ == nullptr ||
         hazel->txt_ == nullptr) {
       safe_error(error) = "Hazel merge got incomplete shard";
-      return false;
+      return nullptr;
     }
 
     auto idx = std::dynamic_pointer_cast<HazelIdx>(hazel->idx_);
     if (idx == nullptr) {
       safe_error(error) = "Hazel merge got non-Hazel idx";
-      return false;
+      return nullptr;
     }
     auto txt = std::dynamic_pointer_cast<HazelTxt>(hazel->txt_);
     if (txt == nullptr) {
       safe_error(error) = "Hazel merge got non-Hazel txt";
-      return false;
+      return nullptr;
     }
 
     std::string current;
     if (!normalize_dna_for_activated_hazel_merge(hazel->parameters_, &current,
                                                  error))
-      return false;
+      return nullptr;
     if (i == 0)
       normalized = current;
     else if (current != normalized) {
       safe_error(error) = "Hazel merge got incompatible DNA";
-      return false;
+      return nullptr;
     }
 
     bool current_sequence_present;
@@ -2455,7 +1986,7 @@ bool Hazel::merge(
     if (!hazel_sequence_range(hazel->parameters_, &current_sequence_present,
                               &current_sequence_start,
                               &current_sequence_end, error))
-      return false;
+      return nullptr;
     if (i == 0) {
       sequence_present = current_sequence_present;
       if (sequence_present) {
@@ -2466,13 +1997,13 @@ bool Hazel::merge(
     } else {
       if (current_sequence_present != sequence_present) {
         safe_error(error) = "Hazel merge got inconsistent sequence metadata";
-        return false;
+        return nullptr;
       }
       if (sequence_present) {
         if (previous_sequence_end == maxfinity ||
             current_sequence_start != previous_sequence_end + 1) {
           safe_error(error) = "Hazel merge got non-contiguous shards";
-          return false;
+          return nullptr;
         }
         sequence_end = current_sequence_end;
         previous_sequence_end = current_sequence_end;
@@ -2489,68 +2020,71 @@ bool Hazel::merge(
           hazels.front()->parameters_, hazels.back()->parameters_,
           sequence_present, sequence_start, sequence_end, parameters, &dna,
           error))
-    return false;
+    return nullptr;
 
-  addr text_chunk_feature = hazels.front()->featurizer_->featurize(text_chunk_tag);
+  addr text_chunk_feature =
+      hazels.front()->featurizer_->featurize(text_chunk_tag);
   HazelMergeOutput output;
   auto remove_temp = [&]() {
     output.out.close();
-    hazel_remove_if_exists(tempname, nullptr);
+    hazel_remove_if_exists(sidecars.mrg, nullptr);
   };
 
-  if (!output.open(tempname, dna, error)) {
+  if (!output.open(sidecars.mrg, dna, error)) {
     remove_temp();
-    return false;
+    return nullptr;
   }
 
   output.blobs[0].offset = (addr)output.out.tellp();
-  if (!HazelIdx::merge(idxs, text_lengths, text_chunk_feature, dst, &output.out,
-                       error)) {
+  if (!HazelIdx::merge(idxs, text_lengths, text_chunk_feature, sidecars.pst,
+                       sidecars.dct, &output.out, error)) {
     remove_temp();
-    return false;
+    return nullptr;
   }
   output.blobs[0].length = (addr)output.out.tellp() - output.blobs[0].offset;
   if (output.out.fail() || output.blobs[0].length < 0) {
     safe_error(error) = "Hazel merge failed to write idx blob";
     remove_temp();
-    return false;
+    return nullptr;
   }
 
   output.blobs[1].offset = (addr)output.out.tellp();
   if (!HazelTxt::merge(txts, &output.out, error)) {
     remove_temp();
-    return false;
+    return nullptr;
   }
   output.blobs[1].length = (addr)output.out.tellp() - output.blobs[1].offset;
   if (output.out.fail() || output.blobs[1].length < 0) {
     safe_error(error) = "Hazel merge failed to write txt blob";
     remove_temp();
-    return false;
+    return nullptr;
   }
 
   if (!output.close(error)) {
     remove_temp();
-    return false;
+    return nullptr;
   }
 
-  if (link(tempname.c_str(), dst.c_str()) != 0) {
+  if (link(sidecars.mrg.c_str(), dst.c_str()) != 0) {
     if (!hazel_path_exists(dst, &exists, error)) {
       remove_temp();
-      return false;
+      return nullptr;
     }
     if (exists) {
-      if (!hazel_cleanup_prefix_files(dst, error)) {
+      if (!hazel_cleanup_merge_sidecars(dst, sidecars, error)) {
         remove_temp();
-        return false;
+        return nullptr;
       }
-      return true;
+      return activate_hazel(dst, error);
     }
     safe_error(error) = "Hazel merge can't link shard: " + dst;
     remove_temp();
-    return false;
+    return nullptr;
   }
 
-  return hazel_cleanup_prefix_files(dst, error);
+  if (!hazel_cleanup_merge_sidecars(dst, sidecars, error))
+    return nullptr;
+  return activate_hazel(dst, error);
 }
 
 std::shared_ptr<Warren> Hazel::make(const std::string &filename,
@@ -2584,6 +2118,12 @@ std::shared_ptr<Warren> Hazel::make(const std::string &filename,
     safe_error(error) = "Hazel DNA has non-Hazel txt: " + txt_name;
     return nullptr;
   }
+  bool sequence_present;
+  addr sequence_start = -1;
+  addr sequence_end = -1;
+  if (!hazel_sequence_range(parameters, &sequence_present, &sequence_start,
+                            &sequence_end, error))
+    return nullptr;
 
   std::shared_ptr<Featurizer> featurizer =
       Featurizer::make(featurizer_name, featurizer_recipe, error);
@@ -2605,31 +2145,37 @@ std::shared_ptr<Warren> Hazel::make(const std::string &filename,
   std::shared_ptr<HazelFile> file = HazelFile::make(filename, error);
   if (file == nullptr)
     return nullptr;
-  std::shared_ptr<Idx> idx =
+  std::shared_ptr<HazelIdx> hazel_idx =
       HazelIdx::make(idx_recipe, filename, file, idx_blob->second, error);
-  if (idx == nullptr)
+  if (hazel_idx == nullptr)
     return nullptr;
   std::unique_ptr<Hopper> text_chunk_hopper =
-      idx->hopper(featurizer->featurize(text_chunk_tag));
+      hazel_idx->hopper(featurizer->featurize(text_chunk_tag));
   if (text_chunk_hopper == nullptr) {
     safe_error(error) = "Hazel can't make text chunk hopper";
     return nullptr;
   }
+  std::shared_ptr<HazelTxt> hazel_txt =
+      HazelTxt::make(txt_recipe, filename, txt_blob->second.offset,
+                     txt_blob->second.length, tokenizer,
+                     std::move(text_chunk_hopper), error);
+  if (hazel_txt == nullptr)
+    return nullptr;
   std::shared_ptr<Txt> txt =
-      Txt::wrap(txt_recipe,
-                HazelTxt::make(txt_recipe, filename, txt_blob->second.offset,
-                               txt_blob->second.length, tokenizer,
-                               std::move(text_chunk_hopper), error),
-                error);
+      Txt::wrap(txt_recipe, hazel_txt, error);
   if (txt == nullptr)
     return nullptr;
 
   std::shared_ptr<Hazel> hazel =
-      std::shared_ptr<Hazel>(new Hazel(featurizer, tokenizer, idx, txt));
+      std::shared_ptr<Hazel>(new Hazel(featurizer, tokenizer, hazel_idx, txt));
   hazel->name_ = "hazel";
   hazel->filename_ = filename;
   hazel->dna_ = dna;
   hazel->parameters_ = parameters;
+  hazel->sequence_start_ = sequence_start;
+  hazel->sequence_end_ = sequence_end;
+  hazel->estimated_size_ =
+      hazel_idx->estimated_size() + hazel_txt->estimated_size();
   hazel->annotator_ = NullAnnotator::make("", error);
   if (hazel->annotator_ == nullptr)
     return nullptr;
@@ -2655,6 +2201,24 @@ std::shared_ptr<Warren> Hazel::make(const std::string &filename,
   return hazel;
 }
 
+std::shared_ptr<SimplePosting> Hazel::posting(addr feature) {
+  std::shared_ptr<HazelIdx> idx =
+      std::static_pointer_cast<HazelIdx>(this->idx());
+  return idx->posting(feature);
+}
+
+void Hazel::get_sequence(addr *start, addr *end) const {
+  *start = sequence_start_;
+  *end = sequence_end_;
+}
+
+bool Hazel::discard(std::string *error) {
+  (void)error;
+  if (filename_ != "")
+    std::remove(filename_.c_str());
+  return true;
+}
+
 std::shared_ptr<Warren> Hazel::clone_(std::string *error) {
   std::shared_ptr<Hazel> hazel =
       std::shared_ptr<Hazel>(new Hazel(featurizer_, tokenizer_, idx_, txt_));
@@ -2662,6 +2226,9 @@ std::shared_ptr<Warren> Hazel::clone_(std::string *error) {
   hazel->filename_ = filename_;
   hazel->dna_ = dna_;
   hazel->parameters_ = parameters_;
+  hazel->estimated_size_ = estimated_size_;
+  hazel->sequence_start_ = sequence_start_;
+  hazel->sequence_end_ = sequence_end_;
   hazel->default_container_ = default_container_;
   hazel->stemmer_ = stemmer_;
   hazel->annotator_ = annotator_;

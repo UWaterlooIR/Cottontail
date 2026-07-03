@@ -4,15 +4,15 @@
 #include <cassert>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "src/annotator.h"
 #include "src/appender.h"
 #include "src/core.h"
 #include "src/featurizer.h"
-#include "src/gcl.h"
+#include "gcl/gcl.h"
 #include "src/hopper.h"
 #include "src/idx.h"
-#include "src/parse.h"
 #include "src/stemmer.h"
 #include "src/tokenizer.h"
 #include "src/txt.h"
@@ -29,6 +29,7 @@ public:
                                       std::string *error = nullptr);
   static std::shared_ptr<Warren> make(const std::string &burrow,
                                       std::string *error = nullptr);
+  static void commit_all(std::vector<std::shared_ptr<Warren>> warrens);
   Warren(std::shared_ptr<Working> working,
          std::shared_ptr<Featurizer> featurizer,
          std::shared_ptr<Tokenizer> tokenizer, std::shared_ptr<Idx> idx,
@@ -84,17 +85,9 @@ public:
     std::string stemmer_value = stemmer->name();
     return set_parameter(stemmer_key, stemmer_value, error);
   }
-  inline std::unique_ptr<Hopper> hopper_from_gcl(const std::string &gcl,
+  inline std::unique_ptr<Hopper> hopper_from_gcl(const std::string &query,
                                                  std::string *error = nullptr) {
-    std::shared_ptr<gcl::SExpression> expr =
-        cottontail::gcl::SExpression::from_string(gcl, error);
-    if (expr == nullptr)
-      return nullptr;
-    expr = expr->expand_phrases(tokenizer());
-    std::unique_ptr<Hopper> hopper = expr->to_hopper(featurizer(), idx());
-    if (hopper == nullptr)
-      safe_error(error) = "Could not construct hopper from valid gcl: " + gcl;
-    return hopper;
+    return gcl::hopper(query, this, error);
   }
   inline bool set_parameter(const std::string &key, const std::string &value,
                             std::string *error = nullptr) {

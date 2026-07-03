@@ -14,6 +14,7 @@
 
 #include "meadowlark/forager.h"
 #include "src/bigwig.h"
+#include "src/builder.h"
 #include "src/core.h"
 #include "src/json.h"
 #include "src/warren.h"
@@ -65,45 +66,136 @@ std::shared_ptr<Warren> open_meadow(std::string *error) {
   return open_meadow(DEFAULT_MEADOW, error);
 }
 
-bool append_path(std::shared_ptr<Warren> warren, const std::string &filename,
-                 addr *path_feature, std::string *error) {
-  assert(warren != nullptr);
-  warren->start();
-  std::string path;
+namespace {
+std::string normalized_path(const std::string &filename) {
   if (filename.find("/") != std::string::npos)
-    path = filename;
+    return filename;
   else
-    path = "./" + filename;
-  if (!warren->transaction(error))
+    return "./" + filename;
+}
+
+std::string gcl_string(const std::string &s) {
+  std::string quoted = "\"";
+  for (char c : s) {
+    if (c == '\\' || c == '"')
+      quoted += '\\';
+    quoted += c;
+  }
+  quoted += '"';
+  return quoted;
+}
+
+bool path_match(const std::string &text, const std::string &path) {
+  size_t start = 0;
+  while (start < text.size() &&
+         std::isspace(static_cast<unsigned char>(text[start])))
+    start++;
+  if (text.compare(start, path.size(), path) != 0)
     return false;
+  size_t end = start + path.size();
+  if (end < text.size() &&
+      !std::isspace(static_cast<unsigned char>(text[end])))
+    return false;
+  while (end < text.size() &&
+         std::isspace(static_cast<unsigned char>(text[end])))
+    end++;
+  return true;
+}
+
+bool append_path(std::shared_ptr<Appender> appender,
+                 std::shared_ptr<Annotator> annotator,
+                 std::shared_ptr<Featurizer> featurizer,
+                 const std::string &filename, addr *path_feature,
+                 std::string *error) {
+  assert(appender != nullptr);
+  assert(annotator != nullptr);
+  assert(featurizer != nullptr);
+  assert(path_feature != nullptr);
+  std::string path = normalized_path(filename);
   addr p, q;
-  if (!warren->appender()->append(path, &p, &q, error) ||
-      !warren->annotator()->annotate(warren->featurizer()->featurize("/"), p, q,
-                                     error) ||
-      !warren->ready(error)) {
-    warren->abort();
-    warren->end();
+  if (!appender->append(path, &p, &q, error) ||
+      !annotator->annotate(featurizer->featurize("/"), p, q, error))
+    return false;
+  *path_feature = featurizer->featurize(path);
+  return true;
+}
+
+bool append_path_scribe(std::shared_ptr<Scribe> scribe,
+                        const std::string &filename, addr *path_feature,
+                        std::string *error) {
+  assert(scribe != nullptr);
+  assert(path_feature != nullptr);
+  if (!scribe->transaction(error))
+    return false;
+  if (!append_path(scribe->appender(), scribe->annotator(),
+                   scribe->featurizer(), filename, path_feature, error) ||
+      !scribe->ready(error)) {
+    scribe->abort();
     return false;
   }
-  warren->commit();
-  *path_feature = warren->featurizer()->featurize(path);
-  warren->end();
+  return true;
+}
+
+bool append_path_warren(std::shared_ptr<Warren> warren,
+                        const std::string &filename, addr *path_feature,
+                        std::string *error) {
+  assert(warren != nullptr);
+  assert(path_feature != nullptr);
+  if (!warren->transaction(error))
+    return false;
+  if (!append_path(warren->appender(), warren->annotator(),
+                   warren->featurizer(), filename, path_feature, error) ||
+      !warren->ready(error)) {
+    warren->abort();
+    return false;
+  }
+  return true;
+}
+} // namespace
+
+bool already_appended(std::shared_ptr<Warren> warren,
+                      const std::string &filename, bool *appended,
+                      std::string *error) {
+  assert(warren != nullptr);
+  assert(appended != nullptr);
+  *appended = false;
+  std::string path = normalized_path(filename);
+  std::unique_ptr<Hopper> hopper =
+      warren->hopper_from_gcl("(>> / " + gcl_string(path) + ")", error);
+  if (hopper == nullptr)
+    return false;
+  addr p, q;
+  for (hopper->tau(minfinity + 1, &p, &q); p < maxfinity;
+       hopper->tau(p + 1, &p, &q)) {
+    if (path_match(warren->txt()->translate(p, q), path)) {
+      *appended = true;
+      return true;
+    }
+  }
   return true;
 }
 
 bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
-                  std::string *error, size_t threads) {
+                  std::string *error, size_t threads, bool verbose) {
   assert(warren != nullptr);
+  warren->start();
+  auto finish = [&](bool result) {
+    warren->end();
+    return result;
+  };
+  if (verbose)
+    std::cerr << "Appending " << filename << "\n" << std::flush;
   if (threads == 0)
     threads = std::thread::hardware_concurrency() + 1;
-  std::ifstream f(filename, std::istream::in);
-  if (f.fail()) {
-    safe_set(error) = "Cannot open: " + filename;
-    return false;
-  }
+  std::unique_ptr<std::istream> input = maybe_zipped(filename, error);
+  if (input == nullptr)
+    return finish(false);
   addr path_feature;
-  if (!append_path(warren, filename, &path_feature, error))
-    return false;
+  std::shared_ptr<Scribe> path_scribe = Scribe::make(warren, error);
+  if (path_scribe == nullptr)
+    return finish(false);
+  if (!append_path_scribe(path_scribe, filename, &path_feature, error))
+    return finish(false);
   std::vector<std::shared_ptr<cottontail::Warren>> clones;
   std::vector<std::shared_ptr<Scribe>> scribes;
   for (size_t i = 0; i < threads; i++) {
@@ -113,27 +205,28 @@ bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
         scribes[j]->abort();
         clones[j]->end();
       }
-      return false;
+      path_scribe->abort();
+      return finish(false);
     }
-    clone->start();
     std::shared_ptr<Scribe> scribe = Scribe::make(clone, error);
-    if (!scribe->transaction(error)) {
+    if (scribe == nullptr || !scribe->transaction(error)) {
       clone->end();
       for (size_t j = 0; j < i; j++) {
         scribes[j]->abort();
         clones[j]->end();
       }
-      return false;
+      path_scribe->abort();
+      return finish(false);
     }
     clones.push_back(clone);
     scribes.push_back(scribe);
   }
+  scribes.push_back(path_scribe);
   bool done = false;
   bool failed = false;
   std::mutex sync;
   auto append_worker = [&](size_t n) {
     std::string terror;
-    std::shared_ptr<cottontail::Warren> twarren = clones[n];
     std::shared_ptr<Scribe> scribe = scribes[n];
     for (;;) {
       std::string line;
@@ -141,10 +234,10 @@ bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
         std::lock_guard<std::mutex> _(sync);
         if (done)
           break;
-        if (!std::getline(f, line)) {
+        if (!std::getline(*input, line)) {
           done = true;
-          if (!f.eof()) {
-            *error = "Read error on: " + filename;
+          if (!input->eof()) {
+            safe_error(error) = "Read error on: " + filename;
             failed = true;
             return;
           }
@@ -158,7 +251,7 @@ bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
         std::lock_guard<std::mutex> _(sync);
         if (!failed) {
           done = failed = true;
-          *error = terror;
+          safe_set(error) = terror;
         }
         return;
       }
@@ -167,7 +260,7 @@ bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
       std::lock_guard<std::mutex> _(sync);
       if (!failed) {
         done = failed = true;
-        *error = terror;
+        safe_set(error) = terror;
       }
     }
   };
@@ -177,17 +270,19 @@ bool append_jsonl(std::shared_ptr<Warren> warren, const std::string &filename,
   for (auto &worker : workers)
     worker.join();
   if (failed) {
-    for (size_t i = 0; i < threads; i++) {
-      scribes[i]->abort();
+    for (auto &scribe : scribes)
+      scribe->abort();
+    for (size_t i = 0; i < threads; i++)
       clones[i]->end();
-    }
   } else {
-    for (size_t i = 0; i < threads; i++) {
-      scribes[i]->commit();
+    Scribe::commit_all(scribes);
+    for (auto &scribe : scribes)
+      if (!scribe->finalize(error))
+        failed = true;
+    for (size_t i = 0; i < threads; i++)
       clones[i]->end();
-    }
   }
-  return !failed;
+  return finish(!failed);
 }
 
 namespace {
@@ -213,8 +308,9 @@ bool append_tsv(std::shared_ptr<Warren> warren, const std::string &filename,
     lines = split_lines(*contents);
   }
   addr path_feature;
-  if (!append_path(warren, filename, &path_feature, error))
+  if (!append_path_warren(warren, filename, &path_feature, error))
     return false;
+  warren->commit();
   if (lines.size() == 0)
     return true;
   threads = thread_count(threads, lines.size());

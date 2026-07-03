@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "src/mt.h"
+#include "gcl/mt.h"
 
 int main() {
   cottontail::Mt mt;

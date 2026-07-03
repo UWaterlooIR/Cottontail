@@ -1,4 +1,4 @@
-#include "src/parse.h"
+#include "gcl/parse.h"
 
 #include <iostream>
 #include <map>
@@ -7,7 +7,8 @@
 
 #include "src/core.h"
 #include "src/featurizer.h"
-#include "src/gcl.h"
+#include "gcl/gcl.h"
+#include "gcl/materialize.h"
 #include "src/hopper.h"
 #include "src/idx.h"
 
@@ -35,7 +36,8 @@ static std::map<std::string, enum Operator> gcl_operator_forward = {
     {"!>", NOT_CONTAINING},
     {"not_containing", NOT_CONTAINING},
     {"@", LINK},
-    {"link", LINK}};
+    {"link", LINK},
+    {"materialize", MATERIALIZE}};
 
 static std::map<enum Operator, std::string> gcl_operator_reverse = {
     {TERM, ""},
@@ -47,14 +49,16 @@ static std::map<enum Operator, std::string> gcl_operator_reverse = {
     {CONTAINING, ">>"},
     {NOT_CONTAINED_IN, "!<"},
     {NOT_CONTAINING, "!>"},
-    {LINK, "@"}};
+    {LINK, "@"},
+    {MATERIALIZE, "materialize"}};
 
 static std::map<enum Operator, unsigned> gcl_operator_min_operands = {
     {TERM, 0},           {FIXED, 0},
     {ONE_OF, 1},         {ALL_OF, 1},
-    {FOLLOWED_BY, 2},    {CONTAINED_IN, 2},
+    {FOLLOWED_BY, 1},    {CONTAINED_IN, 2},
     {CONTAINING, 2},     {NOT_CONTAINED_IN, 2},
-    {NOT_CONTAINING, 2}, {LINK, 1}};
+    {NOT_CONTAINING, 2}, {LINK, 1},
+    {MATERIALIZE, 1}};
 
 static std::map<enum Operator, unsigned> gcl_operator_max_operands = {
     {TERM, 0},
@@ -66,7 +70,8 @@ static std::map<enum Operator, unsigned> gcl_operator_max_operands = {
     {CONTAINING, maxfinity},
     {NOT_CONTAINED_IN, maxfinity},
     {NOT_CONTAINING, maxfinity},
-    {LINK, 1}};
+    {LINK, 1},
+    {MATERIALIZE, 1}};
 
 inline bool is_whitespace(char c) { return c == ' ' || c == '\t'; }
 
@@ -269,14 +274,24 @@ SExpression::to_hopper(std::shared_ptr<Featurizer> featurizer,
       return nullptr;    // Link with a null child (its tau would deref null).
     return std::make_unique<cottontail::gcl::Link>(std::move(expr));
   }
+  if (kind_ == MATERIALIZE) {
+    if (subx_.size() != 1)
+      return nullptr;
+    std::unique_ptr<cottontail::Hopper> expr =
+        subx_[0]->to_hopper(featurizer, idx);
+    if (expr == nullptr)
+      return nullptr;
+    return std::make_unique<cottontail::gcl::Materialize>(std::move(expr));
+  }
   if (subx_.size() > 2) {
     std::shared_ptr<SExpression> binary_expr = to_binary();
     return binary_expr->to_hopper(featurizer, idx);
   }
-  // A 1-ary Or/And is identity: (+ X) == (^ X) == X. The grammar already accepts a
-  // single operand for +/^; only this builder rejected it. (Binary relations like
-  // >> still need 2 -- they fall through to the nullptr below.)
-  if (subx_.size() == 1 && (kind_ == ONE_OF || kind_ == ALL_OF))
+  // A 1-ary Or/And/FollowedBy is identity: (+ X) == (^ X) == (... X) == X.
+  // (Binary relations like < and > still need 2 -- they fall through to the
+  // nullptr below.)
+  if (subx_.size() == 1 &&
+      (kind_ == ONE_OF || kind_ == ALL_OF || kind_ == FOLLOWED_BY))
     return subx_[0]->to_hopper(featurizer, idx);
   if (subx_.size() < 2)
     return nullptr;
@@ -284,9 +299,9 @@ SExpression::to_hopper(std::shared_ptr<Featurizer> featurizer,
       subx_[0]->to_hopper(featurizer, idx);
   std::unique_ptr<cottontail::Hopper> right =
       subx_[1]->to_hopper(featurizer, idx);
-  // An invalid operand (e.g. "(^ x)" -- ALL_OF with one element -- returns null
-  // above) must propagate as a null result, NOT build a binary operator with a
-  // null child: the walk would dereference it (left_/right_->tau) and segfault.
+  // An invalid operand must propagate as a null result, NOT build a binary
+  // operator with a null child: the walk would dereference it
+  // (left_/right_->tau) and segfault.
   if (left == nullptr || right == nullptr)
     return nullptr;
   switch (kind_) {

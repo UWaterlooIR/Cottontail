@@ -15,6 +15,7 @@
 
 #include "src/annotator.h"
 #include "src/appender.h"
+#include "src/array_hopper.h"
 #include "src/compressor.h"
 #include "src/core.h"
 #include "src/fastid_txt.h"
@@ -25,12 +26,10 @@
 #include "src/null_txt.h"
 #include "src/owsla.h"
 #include "src/recipe.h"
-#include "src/safe_map.h"
 #include "src/simple.h"
 #include "src/simple_posting.h"
 #include "src/stemmer.h"
 #include "src/tokenizer.h"
-#include "src/vector_hopper.h"
 
 namespace cottontail {
 
@@ -77,7 +76,7 @@ private:
     }
     return true;
   };
-  bool ready_() final { return true; };
+  bool ready_(std::string *error) final { return true; };
   void commit_() final { annotations_ = nullptr; };
   void abort_() final { annotations_->clear(); };
   std::shared_ptr<std::vector<Annotation>> annotations_;
@@ -161,16 +160,17 @@ private:
     }
     return true;
   };
-  bool ready_() {
+  bool ready_(std::string *error) {
     if (text_->length() > 0 && text_->back() != '\n')
       *text_ += "\n";
     if (address_ > first_address_)
       if (!annotator_->annotate(featurizer_->featurize(transaction_tag),
-                                first_address_, address_ - 1))
+                                first_address_, address_ - 1, error))
         return false;
     if (address_ > chunk_address_)
       if (!annotator_->annotate(featurizer_->featurize(text_chunk_tag),
-                                chunk_address_, address_ - 1, chunk_offset_))
+                                chunk_address_, address_ - 1, chunk_offset_,
+                                error))
         return false;
     return true;
   }
@@ -220,8 +220,16 @@ private:
     auto posting = index_->find(feature);
     if (posting == index_->end())
       return std::make_unique<EmptyHopper>();
-    else
-      return posting->second->hopper();
+    else if (posting->second->size() == 1) {
+      addr p, q;
+      fval v;
+      if (posting->second->get(0, &p, &q, &v))
+        return std::make_unique<SingletonHopper>(p, q, v);
+      else
+        return std::make_unique<EmptyHopper>();
+    } else {
+      return ArrayHopper::make(posting->second);
+    }
   };
   addr count_(addr feature) final {
     auto posting = index_->find(feature);
@@ -397,6 +405,107 @@ Fiver::make(std::shared_ptr<Working> working,
   return fiver;
 }
 
+namespace {
+
+bool normalize_shards(const std::string &kind, std::vector<OwslaShard> *found,
+                      std::vector<OwslaShard> *living,
+                      std::vector<OwslaShard> *dead, std::string *error) {
+  std::sort(found->begin(), found->end(),
+            [](const auto &a, const auto &b) -> bool {
+              return a.start < b.start || (a.start == b.start && a.end > b.end);
+            });
+  living->clear();
+  dead->clear();
+  for (auto &shard : *found) {
+    if (living->empty() || living->back().end < shard.start) {
+      living->push_back(shard);
+    } else if (living->back().end >= shard.end) {
+      dead->push_back(shard);
+    } else {
+      safe_error(error) = "Filename sequence error for " + kind + ": " +
+                          shard.name;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool shadowed_by_living(const OwslaShard &dead,
+                        const std::vector<OwslaShard> &living) {
+  for (auto &live : living)
+    if (owsla_range_contains(live, dead))
+      return true;
+  return false;
+}
+
+bool verify_dead_shards(const std::string &kind,
+                        const std::vector<OwslaShard> &living,
+                        const std::vector<OwslaShard> &dead,
+                        std::string *error) {
+  for (auto &shard : dead)
+    if (!shadowed_by_living(shard, living)) {
+      safe_error(error) = "Unshadowed dead " + kind + " shard: " + shard.name;
+      return false;
+    }
+  return true;
+}
+
+bool remove_names(std::shared_ptr<Working> working,
+                  const std::vector<std::string> &names, std::string *error) {
+  for (auto &name : names)
+    if (!working->remove(name, error))
+      return false;
+  return true;
+}
+
+std::string shell_quote(const std::string &s) {
+  std::string quoted = "'";
+  for (char c : s) {
+    if (c == '\'')
+      quoted += "'\\''";
+    else
+      quoted += c;
+  }
+  quoted += "'";
+  return quoted;
+}
+
+} // namespace
+
+bool Fiver::sanitize(std::shared_ptr<Working> working,
+                     std::vector<OwslaShard> *fivers, std::string *error) {
+  if (fivers != nullptr)
+    fivers->clear();
+  if (working == nullptr)
+    return true;
+
+  std::vector<OwslaShard> found;
+  for (auto &name : working->ls("fiver")) {
+    OwslaShard shard;
+    if (!owsla_parse_shard_name(name, "fiver", &shard)) {
+      safe_error(error) = "Filename format error for fiver: " + name;
+      return false;
+    }
+    found.push_back(shard);
+  }
+
+  std::vector<OwslaShard> living;
+  std::vector<OwslaShard> dead;
+  if (!normalize_shards("fiver", &found, &living, &dead, error) ||
+      !verify_dead_shards("fiver", living, dead, error))
+    return false;
+
+  if (!remove_names(working, working->ls("kitten"), error))
+    return false;
+  for (auto &shard : dead)
+    if (!working->remove(shard.name, error))
+      return false;
+
+  if (fivers != nullptr)
+    *fivers = living;
+  return true;
+}
+
 std::shared_ptr<Fiver>
 Fiver::merge(const std::vector<std::shared_ptr<Fiver>> &fivers,
              std::string *error, std::shared_ptr<Compressor> posting_compressor,
@@ -417,7 +526,7 @@ Fiver::merge(const std::vector<std::shared_ptr<Fiver>> &fivers,
       if (posting != fiver->index_->end()) {
         if (text->length() > 0 && text->back() != '\n')
           *text += "\n";
-        std::unique_ptr<Hopper> hopper = posting->second->hopper();
+        std::unique_ptr<Hopper> hopper = ArrayHopper::make(posting->second);
         addr p, q, v;
         for (hopper->tau(0, &p, &q, &v); p < maxfinity;
              hopper->tau(p + 1, &p, &q, &v))
@@ -498,46 +607,13 @@ Fiver::merge(const std::vector<std::shared_ptr<Fiver>> &fivers,
   return fiver;
 }
 
-std::unique_ptr<Hopper>
-Fiver::merge(const std::vector<std::shared_ptr<Fiver>> &fivers, addr feature,
-             std::string *error,
-             SafeMap<addr, std::shared_ptr<SimplePosting>> *cache,
-             std::shared_ptr<Compressor> posting_compressor,
-             std::shared_ptr<Compressor> fvalue_compressor) {
-  if (fivers.size() == 0)
-    return std::make_unique<EmptyHopper>();
-  if (fivers.size() == 1)
-    return fivers[0]->idx()->hopper(feature);
-  if (feature == fivers[0]->featurizer()->featurize(text_chunk_tag)) {
-    std::vector<std::unique_ptr<cottontail::Hopper>> hoppers;
-    for (size_t i = 0; i < fivers.size(); i++)
-      if (fivers[i] != nullptr && fivers[i]->idx()->count(feature) > 0)
-        hoppers.emplace_back(fivers[i]->idx()->hopper(feature));
-    return gcl::VectorHopper::make(&hoppers, false, error);
-  }
-  std::shared_ptr<SimplePosting> posting;
-  if (cache != nullptr && cache->try_get(feature, &posting))
-    return posting->hopper();
-  std::vector<std::shared_ptr<SimplePosting>> postings;
-  for (size_t i = 0; i < fivers.size(); i++) {
-    auto where = fivers[i]->index_->find(feature);
-    if (where != fivers[i]->index_->end())
-      postings.emplace_back(where->second);
-  }
-  if (postings.size() == 0)
-    return std::make_unique<EmptyHopper>();
-  std::shared_ptr<Compressor> the_posting_compressor = posting_compressor;
-  if (the_posting_compressor == nullptr)
-    the_posting_compressor = fivers[0]->posting_compressor_;
-  std::shared_ptr<Compressor> the_fvalue_compressor = fvalue_compressor;
-  if (the_fvalue_compressor == nullptr)
-    the_fvalue_compressor = fivers[0]->fvalue_compressor_;
-  std::shared_ptr<SimplePostingFactory> posting_factory =
-      SimplePostingFactory::make(the_posting_compressor, the_fvalue_compressor);
-  posting = posting_factory->posting_from_merge(postings);
-  if (cache != nullptr)
-    cache->set(feature, posting);
-  return posting->hopper();
+std::shared_ptr<SimplePosting> Fiver::posting(addr feature) {
+  if (index_ == nullptr)
+    return nullptr;
+  auto where = index_->find(feature);
+  if (where == index_->end())
+    return nullptr;
+  return where->second;
 }
 
 addr Fiver::relocate(addr where) {
@@ -552,13 +628,26 @@ void Fiver::set_sequence(addr number) {
   sequence_start_ = sequence_end_ = number;
 };
 
-void Fiver::get_sequence(addr *start, addr *end) {
+void Fiver::get_sequence(addr *start, addr *end) const {
   *start = sequence_start_;
   *end = sequence_end_;
 }
 
 std::string Fiver::recipe_() {
   return seq2str(sequence_start_) + "." + seq2str(sequence_end_);
+}
+
+std::string Fiver::commit_command() {
+  assert(!built_ && working() != nullptr);
+  if (built_ || working() == nullptr)
+    return "";
+  std::string ready_name = working()->make_name(name() + "." + recipe());
+  std::string final_name = working()->make_name("fiver." + recipe());
+  assert(access(ready_name.c_str(), F_OK) == 0);
+  if (access(ready_name.c_str(), F_OK) != 0)
+    return "";
+  return "mv -n " + shell_quote(ready_name) + " " + shell_quote(final_name) +
+         " 2>/dev/null; rm -f " + shell_quote(ready_name);
 }
 
 bool Fiver::transaction_(std::string *error = nullptr) {
@@ -575,8 +664,12 @@ bool Fiver::transaction_(std::string *error = nullptr) {
   return true;
 };
 
-bool Fiver::ready_() {
-  if (built_ || !appender_->ready() || !annotator_->ready())
+bool Fiver::ready_(std::string *error) {
+  if (built_) {
+    safe_error(error) = "Fiver does not support more than one transaction";
+    return false;
+  }
+  if (!appender_->ready(error) || !annotator_->ready(error))
     return false;
   if (annotations_->size() == 0)
     return true;
@@ -601,7 +694,7 @@ bool Fiver::ready_() {
         posting_factory->posting_from_annotations(&it, annotations_->end());
     (*index_)[posting->feature()] = posting;
   }
-  if (pickle())
+  if (pickle(error))
     return true;
   else
     return false;
@@ -819,7 +912,7 @@ Fiver::unpickle(const std::string &filename, std::shared_ptr<Working> working,
     std::shared_ptr<SimplePosting> posting = factory->posting_from_file(&jar);
     if (posting == nullptr)
       break;
-    total_annotations += sizeof(Annotation) * posting->size();
+    total_annotations += posting->size();
     (*fiver->index_)[posting->feature()] = posting;
   }
   jar.close();
@@ -1067,39 +1160,52 @@ bool hazel_write_txt_blob(std::fstream *out, std::shared_ptr<Idx> idx,
   return true;
 }
 
+std::shared_ptr<Hazel> activate_hazel(const std::string &filename,
+                                      std::string *error) {
+  std::shared_ptr<Warren> warren = Warren::make(filename, error);
+  if (warren == nullptr)
+    return nullptr;
+  std::shared_ptr<Hazel> hazel = std::dynamic_pointer_cast<Hazel>(warren);
+  if (hazel == nullptr) {
+    safe_error(error) = "Fiver got non-Hazel shard: " + filename;
+    return nullptr;
+  }
+  return hazel;
+}
+
 } // namespace
 
-bool Fiver::hazel(std::string *error, bool discard, addr text_chunk_size,
-                  const std::string &parameters) {
+std::shared_ptr<Hazel> Fiver::hazel(std::string *error, addr text_chunk_size,
+                                    const std::string &parameters) {
   if (working() == nullptr) {
     safe_error(error) = "Fiver needs a working directory for default Hazel name";
-    return false;
+    return nullptr;
   }
   if (text_chunk_size <= 0) {
     safe_error(error) = "Hazel text chunk size must be positive";
-    return false;
+    return nullptr;
   }
   std::string tempname = working()->make_temp("hazel");
-  if (!hazel(tempname, error, false, text_chunk_size, parameters)) {
+  if (!hazel(tempname, error, text_chunk_size, parameters)) {
     std::remove(tempname.c_str());
-    return false;
+    return nullptr;
   }
   std::string hazelname =
       working()->make_name(hazel_default_name(sequence_start_, sequence_end_));
   if (link(tempname.c_str(), hazelname.c_str()) != 0) {
     safe_error(error) = "Fiver can't link Hazel shard: " + hazelname;
     std::remove(tempname.c_str());
-    return false;
+    return nullptr;
   }
   std::remove(tempname.c_str());
-  if (discard)
-    return Fiver::discard(error);
-  return true;
+  std::shared_ptr<Hazel> hazel = activate_hazel(hazelname, error);
+  if (hazel == nullptr)
+    return nullptr;
+  return hazel;
 }
 
 bool Fiver::hazel(const std::string &filename, std::string *error,
-                  bool discard, addr text_chunk_size,
-                  const std::string &parameters) {
+                  addr text_chunk_size, const std::string &parameters) {
   if (idx_ == nullptr || txt_ == nullptr || index_ == nullptr ||
       text_ == nullptr) {
     safe_error(error) = "Fiver must have Idx and Txt before writing Hazel";
@@ -1153,8 +1259,6 @@ bool Fiver::hazel(const std::string &filename, std::string *error,
     return false;
   }
   out.close();
-  if (discard)
-    return Fiver::discard(error);
   return true;
 }
 

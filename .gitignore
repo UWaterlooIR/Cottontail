@@ -1,12 +1,18 @@
 *~
 *.swp
+
 *.burrow
 *.meadow
 isj/runs/
+
+# Top-level scratch files.
 *temp*
 /*test*
 !/*test*/
 !/*test*/**
+/*.sh
+/*.py
+
 .DS_Store
 .venv/
 __pycache__/

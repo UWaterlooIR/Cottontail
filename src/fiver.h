@@ -2,23 +2,26 @@
 #define COTTONTAIL_SRC_FIVER_H_
 
 #include <map>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "src/annotator.h"
 #include "src/appender.h"
 #include "src/core.h"
 #include "src/featurizer.h"
 #include "src/idx.h"
-#include "src/safe_map.h"
+#include "src/owsla.h"
 #include "src/simple_posting.h"
 #include "src/tokenizer.h"
 #include "src/txt.h"
-#include "src/warren.h"
 #include "src/working.h"
 
 namespace cottontail {
 
-class Fiver final : public Warren {
+class Hazel;
+
+class Fiver final : public Owsla {
 public:
   static std::shared_ptr<Fiver>
   make(std::shared_ptr<Working> working, std::shared_ptr<Featurizer> featurizer,
@@ -32,20 +35,18 @@ public:
         std::shared_ptr<Compressor> posting_compressor = nullptr,
         std::shared_ptr<Compressor> fvalue_compressor = nullptr,
         std::shared_ptr<Compressor> text_compressor = nullptr);
-  static std::unique_ptr<Hopper>
-  merge(const std::vector<std::shared_ptr<Fiver>> &fivers, addr feature,
-        std::string *error = nullptr,
-        SafeMap<addr, std::shared_ptr<SimplePosting>> *cache = nullptr,
-        std::shared_ptr<Compressor> posting_compressor = nullptr,
-        std::shared_ptr<Compressor> fvalue_compressor = nullptr);
+  static bool sanitize(std::shared_ptr<Working> working,
+                       std::vector<OwslaShard> *fivers,
+                       std::string *error = nullptr);
   bool pickle(const std::string &filename, std::string *error = nullptr);
   bool pickle(std::string *error = nullptr);
-  bool discard(std::string *error = nullptr);
-  bool hazel(std::string *error = nullptr, bool discard = false,
-             addr text_chunk_size = 64 * 1024,
-             const std::string &parameters = "");
+  std::string commit_command();
+  bool discard(std::string *error = nullptr) final;
+  std::shared_ptr<Hazel> hazel(std::string *error = nullptr,
+                               addr text_chunk_size = 64 * 1024,
+                               const std::string &parameters = "");
   bool hazel(const std::string &filename, std::string *error = nullptr,
-             bool discard = false, addr text_chunk_size = 64 * 1024,
+             addr text_chunk_size = 64 * 1024,
              const std::string &parameters = "");
   static std::shared_ptr<Fiver>
   unpickle(const std::string &filename, std::shared_ptr<Working> working,
@@ -56,9 +57,13 @@ public:
            std::shared_ptr<Compressor> text_compressor = nullptr);
   addr relocate(addr where);
   void set_sequence(addr number);
-  void get_sequence(addr *start, addr *end);
-  addr get_storage_estimate() {
+  void get_sequence(addr *start, addr *end) const final;
+  std::shared_ptr<SimplePosting> posting(addr feature) final;
+  addr estimated_size() const final {
     return storage_estimate_;
+  }
+  addr get_storage_estimate() const {
+    return estimated_size();
   }
 
   virtual ~Fiver(){};
@@ -72,7 +77,7 @@ private:
         std::shared_ptr<Featurizer> featurizer,
         std::shared_ptr<Tokenizer> tokenizer, std::shared_ptr<Idx> idx,
         std::shared_ptr<Txt> txt)
-      : Warren(working, featurizer, tokenizer, idx, txt) {
+      : Owsla(working, featurizer, tokenizer, idx, txt) {
     name_ = "kitten";
   };
   std::string recipe_() final;
@@ -87,7 +92,7 @@ private:
     return false;
   };
   bool transaction_(std::string *error) final;
-  bool ready_() final;
+  bool ready_(std::string *error) final;
   void commit_() final;
   void abort_() final;
   bool built_;
