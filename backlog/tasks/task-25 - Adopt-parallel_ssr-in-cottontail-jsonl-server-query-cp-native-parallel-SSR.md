@@ -1,11 +1,11 @@
 ---
 id: TASK-25
 title: Adopt parallel_ssr in cottontail-jsonl-server/-query (cp-native parallel SSR)
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-03 00:47'
-updated_date: '2026-07-03 02:36'
+updated_date: '2026-07-03 02:37'
 labels: []
 dependencies:
   - TASK-24
@@ -43,7 +43,7 @@ Depends on TASK-24 (merged as PR #8). Branch: claude/ssr-parallel-etc.
 - [x] #3 Parity: on Scrapheap/climbmix-1M-porter.burrow, rank-threads=1 vs parallel return identical (cp, score) result multisets and identical total/unjudged match counts for a fixed query set covering --text ssr, --gcl, cover_search, and tiered_query_search
 - [x] #4 A unit test exercises the multi-range parallel cover_ranking merge on a small fixture (range minimum parameterized so tests do not need a >=2M-token index); bazel test //test:all and the isj Python suite stay green
 - [x] #5 Measured latency for a fixed query set on Scrapheap/climbmix-1M-porter.burrow and /share/indexes/climbmix-100M-porter.burrow, rank-threads=1 vs auto, recorded in task notes (via the CLI; the running dev server is not restarted)
-- [ ] #6 running-the-search-stack.md documents --rank-threads for both binaries incl. the server auto-budget rule; CLAUDE.md's ssr-apps note updated (TASK-25 no longer pending); PR opened from claude/ssr-parallel-etc to main
+- [x] #6 running-the-search-stack.md documents --rank-threads for both binaries incl. the server auto-budget rule; CLAUDE.md's ssr-apps note updated (TASK-25 no longer pending); PR opened from claude/ssr-parallel-etc to main
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -92,3 +92,9 @@ Implementation committed (dc6470b). One design wrinkle vs plan: cover_ranking's 
 
 Validation (read-only; dev server untouched, temp servers on ports 18081/18082 since stopped). PARITY on climbmix-1M: rank-threads 1 vs 0 identical full JSON (elapsed_ms stripped) for text-ssr x2, gcl x2 (incl. quoted phrase), cover x3 (incl. 2-cp exclude), icover, and via temp servers search_text/cover_search/tiered_query_search. Initial run had ONE boundary mismatch: rank-10 score tie (0.523810 both) chose different cps — fixed properly by making the sequential bounded heap use the same (score desc, cp asc) order as the parallel merge (cover_order), so parity is now exact even at tied boundaries; no caveat needed. LATENCY (warm, seq vs auto): 1M burrow — single queries already ~0.13s (no headroom), tiered 1.26s -> 0.29s (4.3x). 100M shard (auto-budget resolved to rank_threads=16 with 4 handlers, as designed): search_text/ssr 1.1s -> 0.2s (4.7x); cover_search 0.4 -> 0.2s (1.7x); cover_search with phrase 1.3 -> 0.2s (5.4x); tiered_query_search 100s -> 6.7s (14.9x). Cold numbers improve similarly (tiered 100.6 -> 7.6s).
 <!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented cp-native parallel ranking for the JSONL stack; PR #9 (https://github.com/UWaterlooIR/Cottontail/pull/9). New parallel_cover_ranking (range-split by container cp, clone-per-worker, exact counter sums, deterministic score/cp ordering incl. the sequential heap) powers cover_search and tiered_query_search; jsonl_query's five ssr_ranking sites route through upstream parallel_ssr. --rank-threads on both binaries: CLI default auto, server default auto-budget (allowed_threads / handlers = 16 on this box), server-level only, wire protocol unchanged. Verified: exact parity (rank-threads 1 vs auto) on climbmix-1M across all query modes incl. score-tie boundaries; 100M-shard warm speedups 1.7-14.9x with tiered_query_search 100s -> 6.7s; multi-range unit tests via parameterized range minimum; bazel 5/5 + isj 118/1skip green; dev server untouched.
+<!-- SECTION:FINAL_SUMMARY:END -->
