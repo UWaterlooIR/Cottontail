@@ -1,10 +1,11 @@
 ---
 id: TASK-22
 title: MultiTextTieredSearcher — a Searcher that authors tiers in the MultiText DSL
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-02 16:10'
-updated_date: '2026-07-03 04:05'
+updated_date: '2026-07-03 04:07'
 labels:
   - enhancement
 dependencies:

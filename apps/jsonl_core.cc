@@ -3,11 +3,15 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
+
+#include "gcl/mt.h"
 
 #include "src/builder.h"
 #include "src/content_index.h"
@@ -1228,6 +1232,95 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     out->results.push_back(std::move(h));
   }
   return true;
+}
+
+// Compile a MultiText DSL program into its tier GCL s-expressions with a fresh
+// Mt. The statement walk mirrors apps/mt-compile.cc: trim each line; skip
+// blank lines and '#'/';;' comments; a line starting with '@' must be a
+// well-formed '@rank name...' (a legacy leading NUMERIC topic label is
+// tolerated and skipped); anything else is a macro definition. ALL statements
+// are compiled even after a failure so the model gets the complete diagnostic
+// list in one bounce. Returns false iff any statement failed, no @rank line
+// was found, @rank named no tiers, or more than one @rank line appeared;
+// *error then carries one mt-compile-style diagnostic per line.
+static bool compile_multitext(const std::string &program,
+                              std::vector<std::string> *tiers,
+                              std::string *error) {
+  tiers->clear();
+  Mt mt;
+  std::vector<std::string> diagnostics;
+  int rank_lines = 0;
+  std::istringstream in(program);
+  std::string line;
+  while (std::getline(in, line)) {
+    size_t a = line.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos)
+      continue;
+    size_t b = line.find_last_not_of(" \t\r\n");
+    line = line.substr(a, b - a + 1);
+    if (line.empty() || line[0] == '#' || line.rfind(";;", 0) == 0)
+      continue; // blank / comment
+    std::string mt_error;
+    if (line[0] == '@') {
+      std::istringstream ws(line);
+      std::vector<std::string> cmd{std::istream_iterator<std::string>(ws),
+                                   std::istream_iterator<std::string>()};
+      if (cmd.size() < 2 || cmd[0] != "@rank") {
+        diagnostics.push_back("TIER ERR " + line + ": malformed @rank line");
+        continue;
+      }
+      if (++rank_lines > 1) {
+        diagnostics.push_back("TIER ERR " + line +
+                              ": more than one @rank line (write exactly one)");
+        continue;
+      }
+      size_t first = 1;
+      if (cmd.size() > 2 &&
+          cmd[1].find_first_not_of("0123456789") == std::string::npos)
+        first = 2; // legacy numeric topic label
+      if (first >= cmd.size()) {
+        diagnostics.push_back("TIER ERR " + line + ": @rank names no tiers");
+        continue;
+      }
+      for (size_t i = first; i < cmd.size(); i++) {
+        if (mt.infix_expression(cmd[i], &mt_error))
+          tiers->push_back(mt.s_expression());
+        else
+          diagnostics.push_back("TIER ERR " + cmd[i] + ": " + mt_error);
+      }
+    } else {
+      if (!mt.infix_expression(line, &mt_error))
+        diagnostics.push_back("DEF ERR " + line + ": " + mt_error);
+    }
+  }
+  if (rank_lines == 0)
+    diagnostics.push_back(
+        "TIER ERR: no @rank line (end the program with '@rank t0 t1 ...')");
+  if (!diagnostics.empty()) {
+    std::string joined;
+    for (const auto &d : diagnostics)
+      joined += (joined.empty() ? "" : "\n") + d;
+    safe_error(error) = joined;
+    return false;
+  }
+  return true;
+}
+
+bool jsonl_multitext_tiered_search(std::shared_ptr<Warren> warren,
+                                   const MtSpec &spec, CoverResponse *out,
+                                   std::string *error) {
+  std::vector<std::string> tiers;
+  if (!compile_multitext(spec.program, &tiers, error))
+    return false;
+  TieredSpec tiered;
+  tiered.tiers = std::move(tiers);
+  tiered.top_k = spec.top_k;
+  tiered.exclude = spec.exclude;
+  tiered.window = spec.window;
+  tiered.max_covers = spec.max_covers;
+  tiered.max_words = spec.max_words;
+  tiered.rank_threads = spec.rank_threads;
+  return jsonl_tiered_query_search(warren, tiered, out, error);
 }
 
 bool jsonl_get(std::shared_ptr<Warren> warren, addr cp, std::string *text,

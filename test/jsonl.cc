@@ -14,6 +14,7 @@
 #include "gtest/gtest.h"
 
 #include "apps/jsonl_core.h"
+#include "gcl/mt.h"
 #include "src/cottontail.h"
 
 namespace {
@@ -1566,5 +1567,109 @@ TEST(JsonlCover, WidthOperandIsNotAnAtom) {
   ASSERT_TRUE(jsonl_tiered_query_search(w, tiered, &resp, &error)) << error;
   EXPECT_EQ(atom_count(resp, "9"), -1);
   EXPECT_GT(atom_count(resp, "black"), 0);
+  w->end();
+}
+
+// ---- TASK-22: multitext_tiered_search ---------------------------------------
+
+// A valid MultiText program produces EXACTLY the tiered cascade's response for
+// the same tiers (compiled here through the same Mt), pinning that the handler
+// adds compilation and nothing else.
+TEST(JsonlMultitext, ParityWithTieredCascade) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("mt_parity", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+
+  MtSpec mt;
+  mt.program =
+      "b0 = \"black\" <> \"bear*\"\n"
+      "b1 = \"bear*\"\n"
+      "q0 = b0 ^ b1\n"
+      "@rank q0 b1\n";
+  CoverResponse got;
+  ASSERT_TRUE(jsonl_multitext_tiered_search(w, mt, &got, &error)) << error;
+
+  // Compile the same two tiers directly with Mt and run the JSON-tiers path.
+  cottontail::Mt oracle;
+  std::string e2;
+  ASSERT_TRUE(oracle.infix_expression("b0 = \"black\" <> \"bear*\"", &e2)) << e2;
+  ASSERT_TRUE(oracle.infix_expression("b1 = \"bear*\"", &e2)) << e2;
+  ASSERT_TRUE(oracle.infix_expression("q0 = b0 ^ b1", &e2)) << e2;
+  TieredSpec tiered;
+  ASSERT_TRUE(oracle.infix_expression("q0", &e2)) << e2;
+  tiered.tiers.push_back(oracle.s_expression());
+  ASSERT_TRUE(oracle.infix_expression("b1", &e2)) << e2;
+  tiered.tiers.push_back(oracle.s_expression());
+  CoverResponse want;
+  ASSERT_TRUE(jsonl_tiered_query_search(w, tiered, &want, &error)) << error;
+
+  EXPECT_EQ(got.total_matches, want.total_matches);
+  EXPECT_EQ(got.unjudged_matches, want.unjudged_matches);
+  ASSERT_EQ(got.results.size(), want.results.size());
+  for (size_t i = 0; i < want.results.size(); i++) {
+    EXPECT_EQ(got.results[i].cp, want.results[i].cp);
+    EXPECT_EQ(got.results[i].score, want.results[i].score);
+    EXPECT_EQ(got.results[i].summary, want.results[i].summary);
+  }
+  ASSERT_EQ(got.atom_counts.size(), want.atom_counts.size());
+  for (size_t i = 0; i < want.atom_counts.size(); i++)
+    EXPECT_EQ(got.atom_counts[i].term, want.atom_counts[i].term);
+  w->end();
+}
+
+// Compile problems return false with per-statement mt-compile-style diagnostics
+// (the bounce text), covering the failure classes TASK-26 catalogued.
+TEST(JsonlMultitext, CompileDiagnostics) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("mt_diag", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverResponse resp;
+  MtSpec mt;
+
+  // Underscore in a macro name (Mt lexer rejects it) -> DEF diagnostic naming
+  // the line, plus the cascading TIER failure.
+  mt.program = "q_0 = \"bear\"\n@rank q_0\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("DEF ERR q_0"), std::string::npos) << error;
+
+  // The captured malformed proximity chain -> 'Extra characters' diagnostic.
+  mt.program = "a = \"bear\"\nb = \"black\"\nt0 = (a) < [5] b ^ a\n@rank t0\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("Extra characters"), std::string::npos) << error;
+
+  // Structural problems: no @rank; @rank with no tiers; two @rank lines.
+  mt.program = "a = \"bear\"\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("no @rank line"), std::string::npos) << error;
+
+  mt.program = "a = \"bear\"\n@rank\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("malformed @rank"), std::string::npos) << error;
+
+  mt.program = "a = \"bear\"\n@rank a\n@rank a\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("more than one @rank"), std::string::npos) << error;
+
+  // ALL statements are compiled: two bad defs -> two diagnostics in one bounce.
+  mt.program = "x_ = \"bear\"\ny_ = \"black\"\n@rank x_\n";
+  error.clear();
+  EXPECT_FALSE(jsonl_multitext_tiered_search(w, mt, &resp, &error));
+  EXPECT_NE(error.find("DEF ERR x_"), std::string::npos) << error;
+  EXPECT_NE(error.find("DEF ERR y_"), std::string::npos) << error;
+
+  // Comments/blank lines are fine; the legacy numeric topic label is tolerated.
+  mt.program = "# comment\n\na = \"bear*\"\n;; also a comment\n@rank 208 a\n";
+  error.clear();
+  EXPECT_TRUE(jsonl_multitext_tiered_search(w, mt, &resp, &error)) << error;
+  EXPECT_GT(resp.total_matches, 0);
   w->end();
 }

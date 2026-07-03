@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -27,6 +28,7 @@ using cottontail::jsonl::CoverHit;
 using cottontail::jsonl::CoverResponse;
 using cottontail::jsonl::CoverSpec;
 using cottontail::jsonl::Hit;
+using cottontail::jsonl::MtSpec;
 using cottontail::jsonl::QuerySpec;
 using cottontail::jsonl::TieredSpec;
 
@@ -108,6 +110,21 @@ QuerySpec spec_from(const json &b, bool is_gcl) {
 CoverSpec cover_spec_from(const json &b) {
   CoverSpec s;
   s.query = b.at("query").get<std::string>();
+  s.top_k = b.value("top_k", s.top_k);
+  s.window = b.value("window", s.window);
+  s.max_covers = b.value("max_covers", s.max_covers);
+  s.max_words = b.value("max_words", s.max_words);
+  if (b.contains("exclude"))
+    s.exclude = b.at("exclude").get<std::vector<cottontail::addr>>();
+  s.rank_threads = g_rank_threads;
+  return s;
+}
+
+MtSpec mt_spec_from(const json &b) {
+  MtSpec s;
+  s.program = b.at("program").get<std::string>(); // json throws -> 400
+  if (s.program.empty())
+    throw std::invalid_argument("empty program");
   s.top_k = b.value("top_k", s.top_k);
   s.window = b.value("window", s.window);
   s.max_covers = b.value("max_covers", s.max_covers);
@@ -416,6 +433,37 @@ int main(int argc, char **argv) {
              if (!ok)
                return fail(res, 400, e, "tiered_query_search");
              // Reuse the cover_search response shape (identical CoverResponse).
+             res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
+                             "application/json");
+           });
+
+  // TASK-22: a MultiText DSL program front end over the same tiered cascade.
+  // A compile failure returns 400 whose error body carries the per-statement
+  // diagnostics -- the agent controller bounces them to the model verbatim.
+  svr.Post("/tools/multitext_tiered_search",
+           [&](const httplib::Request &req, httplib::Response &res) {
+             log_req(req);
+             json b;
+             try {
+               b = json::parse(req.body);
+             } catch (...) {
+               return fail(res, 400, "bad JSON body", "request");
+             }
+             cottontail::jsonl::MtSpec spec;
+             try {
+               spec = mt_spec_from(b);
+             } catch (...) {
+               return fail(res, 400, "missing/invalid 'program'", "request");
+             }
+             CoverResponse resp;
+             std::string e;
+             bool ok = provider.with(
+                 [&](std::shared_ptr<cottontail::Warren> &w) {
+                   return cottontail::jsonl::jsonl_multitext_tiered_search(
+                       w, spec, &resp, &e);
+                 });
+             if (!ok)
+               return fail(res, 400, e, "multitext_tiered_search");
              res.set_content(cottontail::jsonl::cover_results_json(resp).dump(),
                              "application/json");
            });
