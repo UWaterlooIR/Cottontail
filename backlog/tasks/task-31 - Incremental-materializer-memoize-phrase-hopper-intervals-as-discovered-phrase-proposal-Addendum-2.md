@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-03 14:53'
+updated_date: '2026-07-03 14:53'
 labels: []
 dependencies:
   - TASK-30
@@ -35,3 +36,12 @@ Validation (proposal Part IV, plus the TASK-28 scout as the regression suite):
 - The A/B killer request (captured repro) completes fast enough that the TASK-22 A/B can be rerun.
 - bazel //test:all + isj suite green; new unit tests for the memo hopper (forward/backward probes, known-range merging, cap fallback, parity vs unwrapped on a small fixture).
 <!-- SECTION:DESCRIPTION:END -->
+
+## Acceptance Criteria
+<!-- AC:BEGIN -->
+- [ ] #1 A new fork-owned memo-hopper wrapper answers probes inside known ranges from a sorted memo and streams+records outside them, handling both probe directions; unit tests cover forward/backward probes, known-range extension/merging, the memory-cap fallback, and parity vs the unwrapped hopper
+- [ ] #2 The phrase expander wraps its generated (>> (# N) (... ...)) in the memo hopper; the bare-FollowedBy / MultiText <> wrapping decision is made and documented
+- [ ] #3 Part I/III validation queries return identical total_matches and top-k (5,765 for the tiers); tier2 drops to within ~2x of tier1; 'camp placement' and 'selection campsite' skeletons fall to near the 9.8s floor
+- [ ] #4 No regressions: the TASK-28 scout's broad query stays ~4s, dense fast phrases stay fast, and bazel //test:all + the isj suite are green
+- [ ] #5 The captured A/B killer request completes fast enough to unblock the TASK-22 A/B rerun; timings recorded in task notes
+<!-- AC:END -->
