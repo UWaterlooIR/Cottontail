@@ -478,10 +478,10 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
   auto chopper = warren->hopper_from_gcl(":item", error);
   if (chopper == nullptr)
     return false;
-  // Bounded min-heap (smallest score on top) of the top `depth` containers.
-  auto lower_score = [](const CoverRanked &a, const CoverRanked &b) {
-    return a.score > b.score;
-  };
+  // Bounded heap of the top `depth` containers, worst-first under cover_order
+  // (lowest score on top; among equal scores the LARGEST cp, so ties resolve
+  // toward smaller cps -- exactly the parallel merge's truncation rule, which
+  // keeps sequential and parallel identical even at a tied top-k boundary).
   std::vector<CoverRanked> heap;
   auto close_container = [&](addr cp, addr cq, double score) {
     if (score <= 0.0)
@@ -493,11 +493,11 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
       return;
     if (heap.size() < depth) {
       heap.push_back({cp, cq, score});
-      std::push_heap(heap.begin(), heap.end(), lower_score);
-    } else if (score > heap.front().score) {
-      std::pop_heap(heap.begin(), heap.end(), lower_score);
+      std::push_heap(heap.begin(), heap.end(), cover_order);
+    } else if (cover_order({cp, cq, score}, heap.front())) {
+      std::pop_heap(heap.begin(), heap.end(), cover_order);
       heap.back() = {cp, cq, score};
-      std::push_heap(heap.begin(), heap.end(), lower_score);
+      std::push_heap(heap.begin(), heap.end(), cover_order);
     }
   };
   addr p, q, cp, cq;

@@ -61,7 +61,9 @@ bazel-bin/apps/cottontail-jsonl-query --describe        # LLM tool schema as JSO
 
 Options: `--ranker icover|ssr|tiered` (text only), `--top-k N`, `--stem`,
 `--full-text`, `--snippet-chars N`, `--format json|jsonl`, `--batch` (one query
-object per stdin line → JSONL). Run with `--help` for the authoritative list. Full
+object per stdin line → JSONL), `--rank-threads N` (threads inside one ranking
+pass; default `0` = all allowed hardware threads — this CLI runs one query at a
+time, so nothing multiplies). Run with `--help` for the authoritative list. Full
 options + output schema: [cli-spec §4](cottontail-jsonl-cli-spec.md).
 
 ## 3. Run the HTTP server — `cottontail-jsonl-server`
@@ -80,8 +82,20 @@ bazel-bin/apps/cottontail-jsonl-server --burrow corpus.burrow
 | `--host <addr>` | `127.0.0.1` | bind address (loopback by default) |
 | `--port <n>` | `8080` | listen port |
 | `--threads <n>` | `4` | concurrent query handlers |
+| `--rank-threads <n>` | `0` (auto) | threads inside ONE ranking pass (TASK-25) |
 | `--token <t>` | — | bearer token; prefer the env var below |
 | `--no-auth` | — | disable auth (loopback dev only) |
+
+**Ranking parallelism (`--rank-threads`, TASK-25):** the ssr, cover_search, and
+tiered_query_search ranking passes split the shard's token span across worker
+threads (each range at least ~1M tokens; results and match counts are exactly
+the sequential pass's). The two thread knobs multiply — `--threads` concurrent
+handlers can each run a `--rank-threads`-wide ranking — so the default `0`
+auto-budgets: `allowed hardware threads / --threads` (logged at startup, e.g.
+`rank_threads=16 (auto)`). Set it explicitly only when you know the concurrency
+profile. Workers share the process's single posting cache, so extra rank
+threads add no memory or I/O, just CPU. It is a server-level setting: requests
+cannot change it.
 
 **Auth:** optional on loopback; a non-loopback bind is refused unless you set a
 token (`COTTONTAIL_API_TOKEN` env var — preferred — or `--token`) or pass
