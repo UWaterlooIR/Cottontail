@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-03 00:47'
-updated_date: '2026-07-03 02:37'
+updated_date: '2026-07-03 03:33'
 labels: []
 dependencies:
   - TASK-24
@@ -91,6 +91,8 @@ Depends on TASK-24 (merged as PR #8). Branch: claude/ssr-parallel-etc.
 Implementation committed (dc6470b). One design wrinkle vs plan: cover_ranking's sequential result order gained a deterministic cp tiebreak (score desc, cp asc) so sequential and parallel agree exactly even on score ties — same result multiset as before. parallel_cover_ranking is exported from jsonl_core.h (needed external linkage anyway; the first build failed with the definition inside the file's anonymous namespace — moved out). All 5 bazel test targets + isj (118 pass/1 skip) green.
 
 Validation (read-only; dev server untouched, temp servers on ports 18081/18082 since stopped). PARITY on climbmix-1M: rank-threads 1 vs 0 identical full JSON (elapsed_ms stripped) for text-ssr x2, gcl x2 (incl. quoted phrase), cover x3 (incl. 2-cp exclude), icover, and via temp servers search_text/cover_search/tiered_query_search. Initial run had ONE boundary mismatch: rank-10 score tie (0.523810 both) chose different cps — fixed properly by making the sequential bounded heap use the same (score desc, cp asc) order as the parallel merge (cover_order), so parity is now exact even at tied boundaries; no caveat needed. LATENCY (warm, seq vs auto): 1M burrow — single queries already ~0.13s (no headroom), tiered 1.26s -> 0.29s (4.3x). 100M shard (auto-budget resolved to rank_threads=16 with 4 handlers, as designed): search_text/ssr 1.1s -> 0.2s (4.7x); cover_search 0.4 -> 0.2s (1.7x); cover_search with phrase 1.3 -> 0.2s (5.4x); tiered_query_search 100s -> 6.7s (14.9x). Cold numbers improve similarly (tiered 100.6 -> 7.6s).
+
+POST-MERGE BUG found and fixed during TASK-26 scouting: parallel_cover_ranking used std::vector<bool> for per-worker status — a packed bitfield, so concurrent workers' okay[i] writes raced on shared words and intermittently reported a successful worker as failed (~3-10% of cover queries on the 1M burrow at 64 workers, surfacing as 'parallel cover ranking worker failed'). Fixed with vector<char> + stage-tagged worker errors; verified with 210 consecutive real-tier runs (0 failures). Commit on claude/ssr-parallel-etc (rides PR #9 if still open). Dev servers restarted on the fixed binary.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary

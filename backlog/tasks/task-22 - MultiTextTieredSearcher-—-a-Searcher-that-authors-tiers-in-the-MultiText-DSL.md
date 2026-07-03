@@ -4,14 +4,14 @@ title: MultiTextTieredSearcher — a Searcher that authors tiers in the MultiTex
 status: To Do
 assignee: []
 created_date: '2026-07-02 16:10'
+updated_date: '2026-07-03 03:12'
 labels:
   - enhancement
 dependencies:
-  - TASK-18
-  - TASK-19
+  - TASK-26
 references:
   - isj/scouting/multitext-dsl/captured/FINDINGS.md
-  - src/mt.cc
+  - gcl/mt.cc
   - apps/mt-compile.cc
 priority: medium
 ordinal: 36000
