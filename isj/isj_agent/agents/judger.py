@@ -33,10 +33,14 @@ _PROMPT: str = (
 class JudgeCall:
     """The outcome of one judge LLM round-trip (aligned to its input doc by position).
 
-    `verdict` is None iff the call failed (LLM error or a Verdict that did not validate);
-    `error` then carries the message. The controller treats any failure as a mid-loop
-    failure that aborts the intent with a partial result. `request` is the VERBATIM
-    messages sent (including the full document) so the trace can reconstruct the call.
+    `verdict` is None iff the call failed (LLM error or a Verdict that did not
+    validate) after ALL retries; `error` then aggregates every attempt's message.
+    Transient failures are retried here (TASK-27, up to 2 retries after the first
+    attempt); the controller's policy for a still-failed call is the grade -2
+    sentinel entry, and only a fully-failed WAVE aborts the intent. `request` is
+    the VERBATIM messages sent (including the full document) so the trace can
+    reconstruct the call; content/reasoning/usage/duration describe the FINAL
+    attempt; `retries` counts attempts beyond the first.
     """
 
     verdict: Verdict | None
@@ -46,6 +50,7 @@ class JudgeCall:
     usage: dict = field(default_factory=dict)
     duration_ms: float = 0.0
     error: str | None = None
+    retries: int = 0
 
 
 def _fill(template: str, intent: str, summary: str, document: str) -> str:
@@ -89,7 +94,26 @@ class Judger:
         with ThreadPoolExecutor(max_workers=self.concurrency) as pool:
             return list(pool.map(lambda d: self._judge_one(intent, d[0], d[1]), docs))
 
+    # Attempts per document: the first call plus up to (RETRIES) fresh re-calls.
+    # Empty completions / transport hiccups are overwhelmingly transient (TASK-27).
+    RETRIES: int = 2
+
     def _judge_one(self, intent: str, summary: str, document: str) -> JudgeCall:
+        """One document, with retries: returns the first successful attempt's
+        JudgeCall (retries recorded); if every attempt fails, the LAST attempt's
+        JudgeCall with `error` aggregating all attempts' messages."""
+        failures: list[str] = []
+        call = None
+        for attempt in range(1 + self.RETRIES):
+            call = self._attempt(intent, summary, document)
+            call.retries = attempt
+            if call.error is None and call.verdict is not None:
+                return call
+            failures.append(f"attempt {attempt + 1}: {call.error}")
+        call.error = "; ".join(failures)
+        return call
+
+    def _attempt(self, intent: str, summary: str, document: str) -> JudgeCall:
         messages = [
             {"role": "user", "content": _fill(self.prompt, intent, summary, document)}
         ]

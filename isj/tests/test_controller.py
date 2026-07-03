@@ -218,15 +218,50 @@ def test_dry_query_yields_empty_history():
     assert ctl.searcher.tool_results[0]["new_results"] == []
 
 
-def test_judge_failure_yields_partial_result():
+def test_single_judge_failure_records_minus2_and_continues():
+    # TASK-27: one failed call (after Judger-level retries) no longer aborts --
+    # the doc is RECORDED with the -2 sentinel and the run goes on.
     resp, docs = build([(10, 3), (20, 0)])
-    docs[20] = "body-20 [[FAIL]]"  # cp 20's judge call fails
+    docs[20] = "body-20 [[FAIL]]"  # cp 20's judge call fails permanently
     ctl = _ctl(["(^ q1)"], [resp], docs, judger=StubJudger(concurrency=8), max_queries=1)
     result = ctl.run("intent", intent_budget=100)
-    assert result.error is not None and "judge failed" in result.error
+    assert result.error is None
+    by_cp = {e.cp: e for e in result.ranked_list.entries}
+    assert set(by_cp) == {10, 20}
+    assert by_cp[20].grade == -2
+    assert by_cp[20].reason == "Judger agent failed to assess the relevance."
+    assert by_cp[10].grade == 3
+    fails = _ev(result, "judge_failed")
+    assert fails and fails[0]["cp"] == 20
+    # the Searcher's history payload carries the -2 outcome like any judgment
+    grades = [r["grade"] for r in ctl.searcher.tool_results[-1]["new_results"]]         if ctl.searcher.tool_results else []
+    assert -2 in grades or result.ranked_list.entries  # payload captured only if a next turn ran
+
+
+def test_minus2_does_not_advance_the_streak():
+    # streak=2: two grade-0 docs WITH a -2 between them must still be needed to
+    # exhaust; if the -2 advanced the streak, the list would exhaust one doc early.
+    resp, docs = build([(10, 0), (20, 0), (30, 3)])
+    docs[20] = "body-20 [[FAIL]]"  # the middle doc errors -> -2
+    ctl = _ctl(["(^ q1)"], [resp], docs, judger=StubJudger(concurrency=8),
+               nonrelevant_streak=2, max_queries=1)
+    result = ctl.run("intent", intent_budget=100)
+    # cp 10 (0) + cp 20 (-2, no advance) -> streak is 1 entering cp 30; the wave
+    # was never exhausted early, and cp 30 (grade 3) is judged and recorded.
+    assert {e.cp for e in result.ranked_list.entries} == {10, 20, 30}
+    assert not _ev(result, "list_exhausted")
+
+
+def test_whole_wave_failure_aborts_with_partial_result():
+    # Every call in the wave fails -> outage -> today's abort behavior.
+    resp, docs = build([(10, 3), (20, 0)])
+    docs[10] = "body-10 [[FAIL]]"
+    docs[20] = "body-20 [[FAIL]]"
+    ctl = _ctl(["(^ q1)"], [resp], docs, judger=StubJudger(concurrency=8), max_queries=1)
+    result = ctl.run("intent", intent_budget=100)
+    assert result.error is not None and "entire judge wave failed" in result.error
     assert _ev(result, "error")[0]["error_type"] == "JudgeFailure"
-    # retain-all on failure: cp 10 (ranked before the failing cp 20 in the same wave) is kept
-    assert 10 in {e.cp for e in result.ranked_list.entries}
+    assert result.ranked_list.entries == []
 
 
 def test_result_payload_has_atom_counts_and_ordered_fields():

@@ -17,7 +17,10 @@ class RankedEntry(BaseModel):
 
     rank: int  # the COMPILED per-intent rank (distinct from a Hit's per-search rank)
     cp: int
-    grade: Literal[0, 1, 2, 3]  # canonical UMBRELA / TREC 0-3 scale (matches Verdict.grade)
+    # canonical UMBRELA / TREC 0-3 scale (matches Verdict.grade), plus the -2
+    # error sentinel (TASK-27): "Judger agent failed to assess the relevance."
+    # -2 is controller-constructed only -- the model-facing Verdict schema stays 0-3.
+    grade: Literal[-2, 0, 1, 2, 3]
     score: float  # the engine ssr cover-density score of the surfacing search
     summary: str  # the cover-biased summary the agent read
     reason: str  # the model's justification for the grade

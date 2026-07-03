@@ -211,7 +211,15 @@ of up to `concurrency` calls in parallel over a `ThreadPoolExecutor`. The **cp i
 never sent to the model**; the controller pairs each verdict (returned in input
 order) with the cp it asked about. `judger.md` is a decomposed, trust-aware UMBRELA
 prompt (intent → topical match → trust → scope → grade) for open-web ClimbMix text.
-A failed call surfaces as data (`JudgeCall.error`, `verdict=None`).
+A failed call (LLM error or an
+unvalidatable completion) is retried up to 2 more times inside the Judger; if it
+still fails it surfaces as data (`JudgeCall.error` aggregating every attempt,
+`verdict=None`, `retries`), and the controller records the doc with the **grade
+`-2` error sentinel** ("Judger agent failed to assess the relevance.") rather
+than aborting — the doc consumes budget, is never re-judged, and the Searcher
+sees the outcome. `-2` neither advances nor resets the non-relevant streak. Only
+a wave where EVERY call failed aborts the intent (an outage, not a hiccup). The
+`-2` is constructed controller-side; the model-facing Verdict schema stays 0–3.
 
 ### Controller — `controller.py`
 `Controller(searcher, judger, engine, …).run(intent, intent_budget)` returns the

@@ -107,7 +107,11 @@ def test_unparseable_output_sets_error():
         return _response("not json at all")
 
     [call] = _judger(junk).judge("intent", _docs([2]))
-    assert call.verdict is None and call.error.startswith("verdict parse")
+    assert call.verdict is None
+    # TASK-27: the failure was retried; error aggregates every attempt.
+    assert call.retries == 2
+    assert call.error.count("verdict parse") == 3
+    assert call.error.startswith("attempt 1: verdict parse")
 
 
 def test_one_bad_call_does_not_sink_the_others():
@@ -125,3 +129,31 @@ def test_one_bad_call_does_not_sink_the_others():
 
 def test_empty_docs_returns_empty():
     assert _judger().judge("intent", []) == []
+
+
+def test_transient_failure_retried_then_succeeds():
+    # TASK-27: attempt 1 returns an empty completion (the observed vLLM hiccup),
+    # attempt 2 succeeds -> a normal verdict with retries recorded.
+    state = {"n": 0}
+
+    def flaky(kwargs):
+        state["n"] += 1
+        if state["n"] == 1:
+            return _response("")  # empty completion -> Verdict parse failure
+        return _response(json.dumps({"reason": "fine", "grade": 2}))
+
+    [call] = _judger(flaky).judge("intent", _docs([2]))
+    assert call.verdict is not None and call.verdict.grade == 2
+    assert call.error is None
+    assert call.retries == 1
+    assert state["n"] == 2  # exactly one retry
+
+
+def test_permanent_transport_failure_aggregates_attempts():
+    def boom(kwargs):
+        raise RuntimeError("connection dropped")
+
+    [call] = _judger(boom).judge("intent", _docs([2]))
+    assert call.verdict is None
+    assert call.retries == 2
+    assert call.error.count("RuntimeError") == 3  # all three attempts recorded

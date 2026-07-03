@@ -3,10 +3,11 @@ id: TASK-27
 title: >-
   Judger resilience: retry failed judge calls, then record grade -2 instead of
   aborting the intent
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-03 12:59'
-updated_date: '2026-07-03 13:01'
+updated_date: '2026-07-03 14:55'
 labels: []
 dependencies: []
 priority: high

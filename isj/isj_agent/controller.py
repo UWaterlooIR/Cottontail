@@ -33,7 +33,22 @@ from isj_agent.protocol.search import Verdict
 
 
 class _JudgeFailure(Exception):
-    """A judge call failed (LLM error or unparseable Verdict) -> abort the intent."""
+    """An ENTIRE judge wave failed (after per-call retries) -> abort the intent.
+
+    A single failed call no longer aborts (TASK-27): it records a grade -2
+    sentinel entry instead. A fully-failed wave means an outage, not a hiccup."""
+
+
+# TASK-27: a doc whose judge call failed after all retries stays IN the ranked
+# list with this sentinel. model_construct BYPASSES pydantic validation, so the
+# Verdict wire schema (model_json_schema(), fed verbatim to guided decoding)
+# stays 0-3 -- the model can never emit -2 itself.
+FAILED_GRADE = -2
+FAILED_REASON = "Judger agent failed to assess the relevance."
+
+
+def _failed_verdict() -> Verdict:
+    return Verdict.model_construct(reason=FAILED_REASON, grade=FAILED_GRADE)
 
 
 class Controller:
@@ -189,6 +204,16 @@ class Controller:
             new = [h for h in wave if h.cp not in judged]   # only NEW docs go to the Judger
             docs = [(h.summary, (self.engine.read(h.cp) or "")[: self.max_doc_chars]) for h in new]
             calls_by_cp = {h.cp: c for h, c in zip(new, self.judger.judge(intent, docs))}  # PARALLEL
+            # Systemic guard (TASK-27): every call in the wave failed after retries
+            # -> an outage, not a hiccup; abort with the partial result as before.
+            if new and all(c.error or c.verdict is None for c in calls_by_cp.values()):
+                for c in calls_by_cp.values():
+                    emit("llm_call", time.time(), c.duration_ms, purpose="judge",
+                         request=c.request, content=c.content, reasoning=c.reasoning,
+                         error=c.error, retries=c.retries, **c.usage)
+                raise _JudgeFailure(
+                    f"entire judge wave failed ({len(new)} calls, after retries): "
+                    f"{next(iter(calls_by_cp.values())).error}")
 
             # RETAIN ALL: ONE pass in rank order. Record EVERY new doc -- even past the streak
             # trip -- and, on a judge failure, only AFTER recording the good docs ranked before it.
@@ -202,10 +227,17 @@ class Controller:
                 else:                          # NEW: emit the judge llm_call, then record
                     c = calls_by_cp[h.cp]
                     emit("llm_call", time.time(), c.duration_ms, purpose="judge", request=c.request,
-                         content=c.content, reasoning=c.reasoning, error=c.error, **c.usage)
+                         content=c.content, reasoning=c.reasoning, error=c.error,
+                         retries=c.retries, **c.usage)
                     if c.error or c.verdict is None:
-                        raise _JudgeFailure(f"judge failed for cp {h.cp}: {c.error}")
-                    v = c.verdict
+                        # TASK-27: retries exhausted -> record the -2 sentinel and
+                        # keep going; the doc consumes budget, enters the judged/
+                        # exclude set, and the Searcher sees the outcome.
+                        emit("judge_failed", time.time(), 0.0, cp=h.cp,
+                             retries=c.retries, error=c.error)
+                        v = _failed_verdict()
+                    else:
+                        v = c.verdict
                     judged[h.cp] = v
                     recorded.append(RankedEntry(rank=0, cp=h.cp, grade=v.grade, score=h.score,
                                                 summary=h.summary, reason=v.reason,
@@ -213,7 +245,9 @@ class Controller:
                     fresh.append((h, v))
                     emit("judge", time.time(), 0.0, cp=h.cp, grade=v.grade, reason=v.reason)
                     g = v.grade
-                if self._relevant(g):
+                if g < 0:      # TASK-27 sentinel: an ERROR is evidence of neither
+                    pass       # relevance nor irrelevance -- the streak is untouched
+                elif self._relevant(g):
                     streak = 0
                 else:
                     streak += 1
