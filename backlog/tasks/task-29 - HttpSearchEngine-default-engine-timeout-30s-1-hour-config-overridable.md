@@ -1,10 +1,11 @@
 ---
 id: TASK-29
 title: 'HttpSearchEngine: default engine timeout 30s -> 1 hour, config-overridable'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-03 13:25'
-updated_date: '2026-07-03 13:29'
+updated_date: '2026-07-03 15:07'
 labels: []
 dependencies: []
 priority: medium

@@ -3,11 +3,11 @@ id: TASK-27
 title: >-
   Judger resilience: retry failed judge calls, then record grade -2 instead of
   aborting the intent
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-03 12:59'
-updated_date: '2026-07-03 14:55'
+updated_date: '2026-07-03 15:07'
 labels: []
 dependencies: []
 priority: high
@@ -34,11 +34,11 @@ Fold into the current branch claude/ssr-parallel-etc (per the standing branch de
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A judge call that errors or fails Verdict validation is retried up to 2 more times; a retry success produces a normal verdict and the retries are visible in the trace
-- [ ] #2 After exhausted retries the doc is RECORDED in the ranked list with grade -2 and reason exactly 'Judger agent failed to assess the relevance.', consumes budget, enters the judged/exclude set, and is fed back to the Searcher like any judgment
-- [ ] #3 A -2 entry does not advance the non-relevant streak, and downstream consumers (run-output writer, summaries) handle -2 without error
-- [ ] #4 A fully-failed wave (every call in the wave failed after retries) still aborts the intent with today's partial-result behavior
-- [ ] #5 Unit tests cover retry-success, permanent-failure -> -2, full-wave abort, and streak behavior; the full isj pytest suite passes
+- [x] #1 A judge call that errors or fails Verdict validation is retried up to 2 more times; a retry success produces a normal verdict and the retries are visible in the trace
+- [x] #2 After exhausted retries the doc is RECORDED in the ranked list with grade -2 and reason exactly 'Judger agent failed to assess the relevance.', consumes budget, enters the judged/exclude set, and is fed back to the Searcher like any judgment
+- [x] #3 A -2 entry does not advance the non-relevant streak, and downstream consumers (run-output writer, summaries) handle -2 without error
+- [x] #4 A fully-failed wave (every call in the wave failed after retries) still aborts the intent with today's partial-result behavior
+- [x] #5 Unit tests cover retry-success, permanent-failure -> -2, full-wave abort, and streak behavior; the full isj pytest suite passes
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -73,3 +73,9 @@ Fold into the current branch claude/ssr-parallel-etc (per the standing branch de
 6. Finalize
    6.1 Task notes; check ACs; commit on the current branch; push (rides PR #9). Report; the A/B rerun decision stays with Mark (phrase pathology is the other blocker).
 <!-- SECTION:PLAN:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Implemented on claude/ssr-parallel-etc. Judger: up to 2 retries per failed call (fresh completions), retries recorded, errors aggregated across attempts. Controller: still-failed docs are recorded with the grade -2 sentinel and reason 'Judger agent failed to assess the relevance.' via Verdict.model_construct (wire schema untouched at 0-3), consume budget, enter judged/exclude, reach the Searcher; judge_failed trace event; -2 is streak-neutral; only a fully-failed wave aborts. RankedEntry.grade widened internally to include -2. isj suite 138 passed / 1 skipped incl. new tests for every AC. README Judger section documents the policy.
+<!-- SECTION:FINAL_SUMMARY:END -->

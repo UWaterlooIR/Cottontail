@@ -33,13 +33,26 @@ def _server_error(r: httpx.Response) -> str:
 
 
 class HttpSearchEngine:
-    """A SearchEngine backed by an HTTP cottontail-jsonl-server."""
+    """A SearchEngine backed by an HTTP cottontail-jsonl-server.
+
+    The default query timeout is ONE HOUR (TASK-29), deliberately: an httpx
+    timeout is not a cancel — the server keeps computing an abandoned request,
+    so a short timeout wastes the server's work, snowballs under retries (this
+    wedged the 1M dev server for hours during the TASK-22 A/B), and the timeout
+    bounce misleads the model into rewriting perfectly good queries. Slow
+    queries should surface as slow turns in the trace, not as bounces.
+    CONNECTION establishment still fails fast (10 s): a down server is down,
+    not slow. Override via [cottontail_http_json_server].timeout_s.
+    """
+
+    DEFAULT_TIMEOUT_S: float = 3600.0
+    CONNECT_TIMEOUT_S: float = 10.0
 
     def __init__(
         self,
         base_url: str,
         token: str | None = None,
-        timeout: float = 30.0,
+        timeout: float = DEFAULT_TIMEOUT_S,
         client: httpx.Client | None = None,
         transport: httpx.BaseTransport | None = None,
     ):
@@ -50,7 +63,7 @@ class HttpSearchEngine:
         self._client = client or httpx.Client(
             base_url=base_url.rstrip("/"),
             headers=headers,
-            timeout=timeout,
+            timeout=httpx.Timeout(timeout, connect=self.CONNECT_TIMEOUT_S),
             transport=transport,
         )
 

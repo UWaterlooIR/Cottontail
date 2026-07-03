@@ -115,6 +115,11 @@ binary = "bazel-bin/apps/cottontail-jsonl-query"
 # ---------------------------------------------------------------------------
 [cottontail_http_json_server]
 base_url = "http://127.0.0.1:8080"
+# Query timeout in seconds (default 3600 = 1 hour). Deliberately LONG: an HTTP
+# client timeout is not a cancel — the server keeps computing the abandoned
+# request — so short timeouts waste server work and bounce misleading errors to
+# the model. Connection establishment fails fast (10s) regardless.
+# timeout_s = 3600
 # The burrow the server is serving. Its <burrow>/docno-cp.sqlite is the cp<->docno
 # map the CLI opens read-only to rewrite cp->docno when writing run output. Omit (or
 # point at a docno-less burrow) to persist raw cps; --burrow overrides per run.

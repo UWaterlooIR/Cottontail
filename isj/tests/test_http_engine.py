@@ -163,3 +163,19 @@ def test_live_cover_search_round_trip():
     # A malformed query is rejected by the engine -> EngineError.
     with pytest.raises(EngineError):
         eng.search("(^ unbalanced")
+
+
+def test_default_timeout_is_one_hour_with_fast_connect():
+    # TASK-29: read/query timeout 3600s (a client timeout is not a cancel);
+    # connection establishment still fails fast.
+    eng = HttpSearchEngine(base_url="http://127.0.0.1:9")
+    t = eng._client.timeout
+    assert t.read == 3600.0 and t.write == 3600.0 and t.pool == 3600.0
+    assert t.connect == 10.0
+
+
+def test_config_timeout_s_overrides(monkeypatch):
+    from isj_agent.config import build_search_engine
+    eng = build_search_engine({"base_url": "http://127.0.0.1:9", "timeout_s": 45})
+    assert eng._client.timeout.read == 45.0
+    assert eng._client.timeout.connect == 10.0
