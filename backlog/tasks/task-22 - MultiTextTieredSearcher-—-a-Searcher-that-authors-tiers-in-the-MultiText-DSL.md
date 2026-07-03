@@ -4,7 +4,7 @@ title: MultiTextTieredSearcher — a Searcher that authors tiers in the MultiTex
 status: To Do
 assignee: []
 created_date: '2026-07-02 16:10'
-updated_date: '2026-07-03 03:52'
+updated_date: '2026-07-03 04:05'
 labels:
   - enhancement
 dependencies:
@@ -29,9 +29,9 @@ DE-RISKED by TASK-26 (isj/scouting/multitext-dsl-2/captured/FINDINGS.md) — all
 - stem* composes end-to-end: Mt passes starred quoted tokens; cover_rewrite desugars them to the stemmed family; the LLM stars ~38% of tokens with 0 bad placements.
 - The multi-turn loop is stable: 16/17 turns clean over live feedback, reasoning flat at 1-2K chars, programs adapt; a compile-error bounce self-repairs in 1 retry 2/3 of the time (worst case 2 — the controller's normal bounce loop already allows this).
 
-Carry-ins from scouting (bake into the implementation): (1) the no-underscore macro-name prompt rule; (2) the word* prompt rule + starred worked example; (3) filter pure-numeric leaves (the N of '(# N)') out of atom_counts in the multitext handler; (4) add a proximity-join idiom example (((a ^ b)) < [N]) — the one observed failure wanted that semantics; (5) the validated multi-turn prompt is isj/scouting/multitext-dsl-2/prompt-turns.md — adapt it, do not rewrite from scratch.
+Carry-ins from scouting (bake into the implementation): (1) the no-underscore macro-name prompt rule; (2) the word* prompt rule + starred worked example; (3) [DONE 2026-07-03, folded into the ssr-parallel-etc branch: cover_leaves now skips a digits-only token iff it follows the '#' operator, fixing cover_search + tiered + the future multitext path at the source — no handler-side filter needed]; (4) add a proximity-join idiom example (((a ^ b)) < [N]) — the one observed failure wanted that semantics; (5) the validated multi-turn prompt is isj/scouting/multitext-dsl-2/prompt-turns.md — adapt it, do not rewrite from scratch.
 
-Architecture (settled during TASK-26 study): a new server endpoint /tools/multitext_tiered_search takes {program, top_k, exclude, window}; the handler compiles the program server-side with a fresh Mt (statement walk exactly like apps/mt-compile.cc), returns HTTP 400 with per-statement diagnostics on any compile error (the controller's existing EngineError bounce carries it back to the model verbatim), and on success feeds the compiled tier s-expressions into jsonl_tiered_query_search. Python side: a MultiTextProgram Queryable (LLM tool name: submit_tiered_query, the scouted name) + engine.multitext_search + a thin MultiTextTieredSearcher(BaseSearcher). //apps:mt-compile remains the warren-free oracle for tests. Build on a fresh branch off main AFTER PR #9 (TASK-25 + race fix + scouting) merges.
+Architecture (settled during TASK-26 study): a new server endpoint /tools/multitext_tiered_search takes {program, top_k, exclude, window}; the handler compiles the program server-side with a fresh Mt (statement walk exactly like apps/mt-compile.cc), returns HTTP 400 with per-statement diagnostics on any compile error (the controller's existing EngineError bounce carries it back to the model verbatim), and on success feeds the compiled tier s-expressions into jsonl_tiered_query_search. Python side: a MultiTextProgram Queryable (LLM tool name: submit_tiered_query, the scouted name) + engine.multitext_search + a thin MultiTextTieredSearcher(BaseSearcher). //apps:mt-compile remains the warren-free oracle for tests. Per Mark (2026-07-03): build on the CURRENT branch claude/ssr-parallel-etc (no new branch).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -39,19 +39,18 @@ Architecture (settled during TASK-26 study): a new server endpoint /tools/multit
 - [ ] #1 New class isj_agent.agents.mt_tiered_searcher.MultiTextTieredSearcher subclasses BaseSearcher, is config-selectable via [agents.searcher].class, and needs NO base/controller changes
 - [ ] #2 It exposes a single tool named submit_tiered_query (the scouted name) that accepts {program: string} — a MultiText DSL program (macros + one @rank line), NOT a JSON tiers list
 - [ ] #3 The program is compiled server-side by a new /tools/multitext_tiered_search handler using a fresh cottontail::Mt per request (statement walk like apps/mt-compile.cc); any compile error returns HTTP 400 whose body carries the per-statement diagnostics, and the controller's existing EngineError bounce delivers them to the model as the tool result (verified self-repair in TASK-26); //apps:mt-compile is the warren-free oracle in unit tests
-- [ ] #4 The compiled tiers feed the SAME jsonl_tiered_query_search cascade (ranking, summaries, cascade semantics identical to the JSON TieredSearcher), and the multitext handler filters pure-numeric leaves (the N of '(# N)') out of atom_counts
+- [ ] #4 The compiled tiers feed the SAME jsonl_tiered_query_search cascade (ranking, summaries, cascade semantics, and atom_counts identical to the JSON TieredSearcher — the (# N) width-operand leaf fix already landed at the source in cover_leaves, 2026-07-03, so no handler-side filtering)
 - [ ] #5 The prompt is the TASK-26-validated multi-turn prompt (isj/scouting/multitext-dsl-2/prompt-turns.md) carrying the no-underscore macro rule and the word* rule, plus a proximity-join idiom example; reasoning_effort defaults to medium
 - [ ] #6 A live end-to-end smoke: the isj CLI runs one real question with [agents.searcher].class set to MultiTextTieredSearcher against the 1M dev server, producing a normal run-output directory with valid traces
 - [ ] #7 An A/B procedure compares MultiTextTieredSearcher vs the JSON TieredSearcher vs the plain Searcher on the same scoped needs (query validity, retrieval quality via judged grades, latency) and reports results; the question set and run budget are checkpointed with Mark before the runs
-- [ ] #8 Unit tests cover the new Queryable (schema/args/execute/trace), the searcher class, the C++ handler (valid program parity with tiered_query_search, compile-error diagnostics, numeric-leaf filter, underscore diagnostic), and the compile-bounce path; bazel test //test:all and the full isj pytest suite pass
+- [ ] #8 Unit tests cover the new Queryable (schema/args/execute/trace), the searcher class, the C++ handler (valid program parity with tiered_query_search, compile-error diagnostics, underscore diagnostic), and the compile-bounce path; bazel test //test:all and the full isj pytest suite pass
 <!-- AC:END -->
 
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
 0. Preconditions
-   0.1 PR #9 (TASK-25 + vector<bool> race fix + TASK-26 scouting) is merged to main.
-   0.2 Fresh branch off main (e.g. claude/mt-tiered-searcher). Mark TASK-22 In Progress.
+   0.1 Work on the CURRENT branch claude/ssr-parallel-etc (Mark, 2026-07-03: no new branch). Mark TASK-22 In Progress.
 
 1. C++ — the multitext handler (apps/jsonl_core.{h,cc}, apps/cottontail-jsonl-server.cc)
    1.1 jsonl_core.h: struct MtSpec { std::string program; size_t top_k = 10; std::vector<addr> exclude; size_t window = 75; size_t max_covers = 1; size_t max_words = 150; size_t rank_threads = 1; } and
@@ -60,9 +59,8 @@ Architecture (settled during TASK-26 study): a new server endpoint /tools/multit
        a. Statement walk exactly as apps/mt-compile.cc: split program on newlines, trim, skip blank/#/;; lines; a line starting with @ must be a well-formed '@rank name...' (tolerate the legacy numeric topic label); anything else is a definition fed to a FRESH per-call cottontail::Mt.
        b. Collect per-statement failures as mt-compile-style diagnostic lines ('DEF ERR <line>: <msg>' / 'TIER ERR <name>: <msg>'). ANY failure -> return false with *error = the joined diagnostics (this becomes the bounce text). Also fail on: no @rank line, an @rank naming zero tiers, more than one @rank.
        c. On success: TieredSpec{tiers = the compiled tier s-expressions, top_k/exclude/window/max_covers/max_words/rank_threads copied} -> jsonl_tiered_query_search.
-       d. Post-filter out->atom_counts: drop entries whose term is all digits (the '(# N)' width leaves; TASK-26 wart). Only in this path — the JSON-tiers tool keeps its existing behavior.
    1.3 Server: POST /tools/multitext_tiered_search; body {program (required), top_k, exclude, window, max_covers?, max_words?}; mt_spec_from() stamps g_rank_threads like the other builders; compile/validation failure -> fail(res, 400, error, "multitext_tiered_search") — rides the existing EngineError bounce. Request/response logging identical to tiered_query_search.
-   1.4 Tests: test/jsonl.cc — (i) PARITY: a fixed valid program vs jsonl_tiered_query_search called directly with the same tiers pre-compiled via Mt in the test -> identical CoverResponse; (ii) underscore macro name -> false, diagnostic names the line; (iii) malformed proximity chain (the captured 't0 = (a) < [5] b ^ c' shape) -> false with 'Extra characters' diagnostic; (iv) numeric-leaf filter: a program with '< [N]' yields atom_counts without the N, JSON-tiers path unchanged; (v) missing @rank / empty @rank -> false. test/jsonl_server.cc — endpoint 200 happy path; 400 body carries the diagnostics; bad-shape body -> 400.
+   1.4 Tests: test/jsonl.cc — (i) PARITY: a fixed valid program vs jsonl_tiered_query_search called directly with the same tiers pre-compiled via Mt in the test -> identical CoverResponse; (ii) underscore macro name -> false, diagnostic names the line; (iii) malformed proximity chain (the captured 't0 = (a) < [5] b ^ c' shape) -> false with 'Extra characters' diagnostic; (iv) missing @rank / empty @rank -> false. test/jsonl_server.cc — endpoint 200 happy path; 400 body carries the diagnostics; bad-shape body -> 400.
    1.5 bazel test //test:all green.
 
 2. Python — Queryable, engine, searcher (isj/)
