@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 23:26'
+updated_date: '2026-07-07 23:38'
 labels: []
 dependencies: []
 priority: medium
@@ -86,8 +86,12 @@ NOT enumerate regular word forms ("adult" already matches adults; "recycle" matc
 DO list what the stemmer will not merge: true synonyms ("car" "automobile"), irregular forms ("sink"
 "sank" "sunk"), spelling variants ("tire" "tyre"), and abbreviations ("uv" "ultraviolet").
 
+An OPERAND (written X, Y below) is a quoted word/phrase OR another operator -- operators nest freely,
+which is how you build a facet and then combine facets. (Quoted words are shown as "a" "b" in a few
+signatures below, but any operand can be an operator.)
+
 RANKING operators -- these score documents; use them at the top level:
-  #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft -- a
+  #combine(X Y ...)       the workhorse: rank documents by how well they match ALL operands. Soft -- a
                           document missing some still ranks (just lower), not excluded. Build a CONCEPT
                           (facet) as a #combine of its words -- list synonyms and variants as separate
                           operands; do NOT merge them with #syn. Build the whole query as a #combine of
@@ -165,8 +169,8 @@ Need: Identify instances in which weather was a main or contributing factor in t
             #syn("storm" "hurricane" "typhoon" "gale" "cyclone"))
 )
 
-The title is only "ship losses," but the need is weather-caused losses -- so there is a weather facet,
-and the #uw12 rewards documents where a loss word sits close to a weather word (the cause).
+A bare-words query would be just ship + loss, but the Need turns on WEATHER as the cause -- so there is
+a weather facet, and the #uw12 rewards documents where a loss word sits close to a weather word.
 
 Now write the query for the need you are given and submit it with one `submit_query` tool call. Each
 following turn, read the results and submit an ADAPTED query.
