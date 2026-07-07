@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:11'
+updated_date: '2026-07-07 22:16'
 labels: []
 dependencies: []
 priority: medium
@@ -95,8 +95,9 @@ Ways to express ONE concept -- use these as operands of the ranking operators (t
   #syn(X Y ...)           SYNONYMS/variants treated as one term: #syn("car" "automobile" "vehicle").
   #1("word word ...")     exact PHRASE (adjacent, in order): #1("time restricted eating"). THIS is how
                           you write a phrase.
-  #N("a" "b")             ordered window: a ... b in order within N tokens (#1 is tightest = phrase).
-  #uwN("a" "b" ...)       unordered window: all operands within N tokens, any order -- #uw8("mountain" "rescue").
+  #N("a" "b")             ordered window: a ... b in order, at most N-1 tokens between ADJACENT terms
+                          (#1 = exact adjacent phrase; the per-gap limit, not a total span).
+  #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order -- #uw8("mountain" "rescue").
   #band("a" "b" ...)      Boolean AND: every operand must appear somewhere in the document.
 
 KEY RULE -- phrases inside #syn: a multi-word variant must be wrapped in #1, because a bare multi-word
