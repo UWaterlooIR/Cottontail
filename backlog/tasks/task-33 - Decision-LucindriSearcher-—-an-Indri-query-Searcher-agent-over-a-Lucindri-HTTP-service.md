@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 18:12'
+updated_date: '2026-07-07 21:53'
 labels: []
 dependencies: []
 priority: medium
@@ -41,3 +41,12 @@ Deliverable of THIS task: a go/no-go decision + the pinned identity choice + a s
 - [ ] #2 A prompt-validity scout is planned (oracle = Lucindri parser/service) as the gating de-risk step before committing to the adapter/searcher/prompt build
 - [ ] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract are captured: /search {query,count,summaries} -> [{docno,score,summary?}] (ISJ sets summaries=true), /document {docno} -> {fulltext}
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Adapter design notes from reviewing the Lucindri service spec (TASK-0019) + docno-lookup fix (TASK-0020), 2026-07-07:
+- NO exclude parameter on Lucindri /search. Its wire contract is {query,count,summaries} only. The LucindriSearchEngine must do exclude/paging CLIENT-SIDE: over-fetch (count > needed) and drop already-judged docnos before handing results to the controller. (The controller passes the full judged/exclude set each call; the adapter filters it out itself, since Lucindri is stateless and deterministic.)
+- SCORES ARE NEGATIVE. Indri returns Dirichlet-LM negative log-probabilities, best-first (least-negative first). The adapter/controller must NOT assume positive scores. Preserve the server's returned rank order; do not naively re-sort assuming higher-positive-is-better without accounting for sign. RankedEntry.score just carries the value through, which is fine.
+- Docno round-trip is exact/verbatim (TASK-0020 makes externalId a non-analyzed keyword), including ClimbMix's shard_NNNNN_MMM underscores; the docno /search returns is exactly what /document accepts. Identity plumbing (synthetic-int-per-docno per this task's decision) is unaffected.
+<!-- SECTION:NOTES:END -->
