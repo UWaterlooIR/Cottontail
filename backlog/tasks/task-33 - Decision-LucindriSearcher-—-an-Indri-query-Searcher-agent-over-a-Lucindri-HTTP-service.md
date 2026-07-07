@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 23:38'
+updated_date: '2026-07-07 23:41'
 labels: []
 dependencies: []
 priority: medium
@@ -86,9 +86,8 @@ NOT enumerate regular word forms ("adult" already matches adults; "recycle" matc
 DO list what the stemmer will not merge: true synonyms ("car" "automobile"), irregular forms ("sink"
 "sank" "sunk"), spelling variants ("tire" "tyre"), and abbreviations ("uv" "ultraviolet").
 
-An OPERAND (written X, Y below) is a quoted word/phrase OR another operator -- operators nest freely,
-which is how you build a facet and then combine facets. (Quoted words are shown as "a" "b" in a few
-signatures below, but any operand can be an operator.)
+Operators NEST: an operand can be a quoted word/phrase OR another operator -- that is how you build a
+facet (a #combine of words) and then combine facets into the full query.
 
 RANKING operators -- these score documents; use them at the top level:
   #combine(X Y ...)       the workhorse: rank documents by how well they match ALL operands. Soft -- a
