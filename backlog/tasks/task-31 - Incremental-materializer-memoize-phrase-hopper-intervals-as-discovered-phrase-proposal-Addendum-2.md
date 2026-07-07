@@ -1,12 +1,10 @@
 ---
 id: TASK-31
-title: >-
-  Incremental materializer: memoize phrase-hopper intervals as discovered
-  (phrase proposal Addendum 2)
-status: To Do
+title: SUPERSEDED by upstream 04b711a — incremental materializer
+status: Done
 assignee: []
 created_date: '2026-07-03 14:53'
-updated_date: '2026-07-03 14:53'
+updated_date: '2026-07-07 15:30'
 labels: []
 dependencies:
   - TASK-30
@@ -45,3 +43,9 @@ Validation (proposal Part IV, plus the TASK-28 scout as the regression suite):
 - [ ] #4 No regressions: the TASK-28 scout's broad query stays ~4s, dense fast phrases stay fast, and bazel //test:all + the isj suite are green
 - [ ] #5 The captured A/B killer request completes fast enough to unblock the TASK-22 A/B rerun; timings recorded in task notes
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Superseded 2026-07-07: upstream commit 04b711a (PR #11) is exactly this — incremental hopper memoization in gcl/materialize.* plus a default-on optimizer. Validated post-merge (see TASK-30 notes / PR #11). Not implementing in the fork; the proposal doc's Addendum 2 predicted this design and stands as the record.
+<!-- SECTION:NOTES:END -->

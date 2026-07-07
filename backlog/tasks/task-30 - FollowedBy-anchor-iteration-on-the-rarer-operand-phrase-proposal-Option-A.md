@@ -1,9 +1,10 @@
 ---
 id: TASK-30
-title: 'FollowedBy: anchor iteration on the rarer operand (phrase proposal Option A)'
-status: To Do
+title: SUPERSEDED by upstream 04b711a — FollowedBy anchor-on-rarer (Option A)
+status: Done
 assignee: []
 created_date: '2026-07-03 14:52'
+updated_date: '2026-07-07 15:30'
 labels: []
 dependencies: []
 priority: high
@@ -30,3 +31,9 @@ Validation (proposal Part IV): identical total_matches and top-k on ALL Part I/I
 - [ ] #2 Semantics gate passed: all Part I/III validation queries return identical total_matches and top-k; the bare-FollowedBy identity question (Open Question 3) is resolved and documented in the code and task notes
 - [ ] #3 The diff is confined to gcl/ (construction/drive logic), minimal and upstreamable; bazel //test:all and the isj suite stay green
 <!-- AC:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Superseded 2026-07-07: upstream commit 04b711a (merged via PR #11) shipped hopper memoization + query optimization (default-on), which fixes the phrase pathology this task targeted. Measured on 100M, single-threaded, identical results: tier2 712s->152s, camp-placement skeleton 651s->36s (18x). The rarest-term-anchor idea is subsumed by the optimizer/memoizer; keep docs/design/phrase-search-performance-and-proposal.md as the investigation record. Not implementing in the fork.
+<!-- SECTION:NOTES:END -->
