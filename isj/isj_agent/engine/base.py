@@ -62,6 +62,24 @@ class SearchEngine(Protocol):
         """
         ...
 
+    def multitext_search(
+        self,
+        program: str,
+        *,
+        top_k: int = 10,
+        exclude: Sequence[int] = (),
+        window: int = 75,
+    ) -> SearchResponse:
+        """Run a MultiText DSL program (multitext_tiered_search, TASK-22).
+
+        The program (macro definitions + one @rank line) is compiled SERVER-side;
+        the compiled tiers run the same cascade as `tiered_search`, so the
+        response shape is identical. MAY raise EngineError; on a compile failure
+        the message carries the per-statement compiler diagnostics, which the
+        controller bounces to the model verbatim for self-correction.
+        """
+        ...
+
     def read(self, cp: int) -> str | None:
         """Return the full document body for `cp`, or None if cp is unknown.
 

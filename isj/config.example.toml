@@ -44,6 +44,9 @@ class = "isj_agent.agents.searcher.Searcher"
 llm = "default"
 # To author TIERED precise->broad GCL cascades instead of single covers, swap in:
 #   class = "isj_agent.agents.tiered_searcher.TieredSearcher"
+# Or to author the tiers as a MultiText DSL PROGRAM (macros + @rank; compiled
+# server-side, compile errors bounce back for self-correction -- TASK-22):
+#   class = "isj_agent.agents.mt_tiered_searcher.MultiTextTieredSearcher"
 # It exposes the tiered_query_search tool (needs the cottontail server built after
 # TASK-19); everything else here (llm, reasoning_effort, fetch_k, window, max_queries)
 # applies unchanged. KEEP reasoning_effort = "medium" for the tiered searcher: at
@@ -112,6 +115,11 @@ binary = "bazel-bin/apps/cottontail-jsonl-query"
 # ---------------------------------------------------------------------------
 [cottontail_http_json_server]
 base_url = "http://127.0.0.1:8080"
+# Query timeout in seconds (default 3600 = 1 hour). Deliberately LONG: an HTTP
+# client timeout is not a cancel — the server keeps computing the abandoned
+# request — so short timeouts waste server work and bounce misleading errors to
+# the model. Connection establishment fails fast (10s) regardless.
+# timeout_s = 3600
 # The burrow the server is serving. Its <burrow>/docno-cp.sqlite is the cp<->docno
 # map the CLI opens read-only to rewrite cp->docno when writing run output. Omit (or
 # point at a docno-less burrow) to persist raw cps; --burrow overrides per run.

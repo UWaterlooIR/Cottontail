@@ -198,6 +198,33 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
                                const TieredSpec &spec, CoverResponse *out,
                                std::string *error = nullptr);
 
+// ---- multitext_tiered_search: a MultiText DSL program front end (TASK-22) --
+// The MultiTextTieredSearcher's tool. `program` is a MultiText DSL program --
+// `name = expr` macro definitions (one per line) ending in one `@rank t0 t1 ...`
+// line naming the tier macros, most precise first. The program is compiled
+// server-side with a fresh cottontail::Mt (gcl/mt.h; the statement walk mirrors
+// apps/mt-compile.cc, including tolerating a legacy numeric topic label after
+// @rank and skipping blank/#/;; lines); the compiled tier s-expressions feed the
+// SAME jsonl_tiered_query_search cascade above, so ranking, summaries, and
+// atom_counts behave identically to the JSON-tiers tool. Returns false on ANY
+// compile problem with *error carrying the per-statement diagnostics (one per
+// line, mt-compile style) -- the server returns them as the HTTP 400 body and
+// the agent controller bounces them to the model for self-correction.
+struct MtSpec {
+  std::string program;       // the full MultiText program text
+  size_t top_k = 10;
+  std::vector<addr> exclude; // judged/consumed cp integers to skip
+  size_t window = 75;        // summary window in tokens
+  size_t max_covers = 1;     // summary is built from the best K covers
+  size_t max_words = 150;    // cap the whole summary to this many tokens (0 = uncapped)
+  size_t rank_threads = 1;   // threads INSIDE each tier's ranking pass (TASK-25);
+                             // 0 = allowed_threads cap. Binary policy, never wire.
+};
+
+bool jsonl_multitext_tiered_search(std::shared_ptr<Warren> warren,
+                                   const MtSpec &spec, CoverResponse *out,
+                                   std::string *error = nullptr);
+
 // Fetch the full body of the document at `cp` (the :item container start, as
 // returned by search). Sets *found=false (not an error) when `cp` is not an :item
 // start. Returns false only on a hard error. cp-native: no docno, no map.

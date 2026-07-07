@@ -459,3 +459,67 @@ TEST(JsonlServer, RankThreadsFlagAndStartupLog) {
   ::kill(pid, SIGTERM);
   ::waitpid(pid, &st, 0);
 }
+
+// TASK-22: /tools/multitext_tiered_search — compile a MultiText program
+// server-side; 200 with the cover-response shape on success; 400 whose error
+// body carries the per-statement compiler diagnostics (the bounce text).
+TEST(JsonlServer, MultitextTieredSearch) {
+  std::string burrow = tmpdir() + "/server_mt.burrow";
+  std::string build = std::string(kIndexBin) + " --input test/jsonl/plain --burrow " +
+                      burrow + " --overwrite >/dev/null 2>&1";
+  ASSERT_EQ(std::system(build.c_str()), 0);
+
+  int port = free_port();
+  pid_t pid = start_server(burrow, port);
+  ASSERT_GT(pid, 0);
+  httplib::Client cli("127.0.0.1", port);
+  cli.set_connection_timeout(2, 0);
+  bool up = false;
+  for (int i = 0; i < 100 && !up; ++i) {
+    if (auto r = cli.Get("/healthz"); r && r->status == 200)
+      up = true;
+    else
+      ::usleep(50 * 1000);
+  }
+  ASSERT_TRUE(up) << "server did not start";
+  const httplib::Headers auth = {
+      {"Authorization", std::string("Bearer ") + kToken}};
+
+  // Happy path: same response shape as tiered_query_search.
+  {
+    json body;
+    body["program"] = "f0 = \"quick\" <> \"brown\"\nf1 = \"fox\"\n"
+                      "q0 = f0 ^ f1\n@rank q0 f1\n";
+    auto r = cli.Post("/tools/multitext_tiered_search", auth, body.dump(),
+                      "application/json");
+    ASSERT_TRUE(r);
+    ASSERT_EQ(r->status, 200) << r->body;
+    json j = json::parse(r->body);
+    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+    ASSERT_FALSE(j["results"].empty());
+    EXPECT_TRUE(j["results"][0].contains("cp"));
+    EXPECT_TRUE(j["results"][0].contains("summary"));
+  }
+  // Compile failure -> 400, diagnostics in the error body.
+  {
+    json body;
+    body["program"] = "q_0 = \"fox\"\n@rank q_0\n";
+    auto r = cli.Post("/tools/multitext_tiered_search", auth, body.dump(),
+                      "application/json");
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->status, 400);
+    json j = json::parse(r->body);
+    EXPECT_NE(j["error"].get<std::string>().find("DEF ERR q_0"),
+              std::string::npos) << r->body;
+  }
+  // Missing program -> 400.
+  {
+    auto r = cli.Post("/tools/multitext_tiered_search", auth, R"({"top_k":5})",
+                      "application/json");
+    ASSERT_TRUE(r);
+    EXPECT_EQ(r->status, 400);
+  }
+  ::kill(pid, SIGTERM);
+  int st;
+  ::waitpid(pid, &st, 0);
+}

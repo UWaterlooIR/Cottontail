@@ -1,11 +1,18 @@
 ---
 name: climbmix-corpus-location
-description: Where the ClimbMix corpus shard files live (outside the repo)
+description: What ClimbMix is (general web corpus — NOT about climbing) and where its shard files live (outside the repo)
 metadata:
   type: reference
 ---
 
-The ClimbMix corpus (the dataset the climbmix POC indexes) lives **outside the
+**ClimbMix is a general web/pretraining corpus. It has NOTHING to do with
+climbing** — do not craft climbing-themed test queries on that assumption; it
+covers broad web/educational text. Provenance: NVIDIA's ClimbMix via
+https://huggingface.co/datasets/karpathy/climbmix-400b-shuffle, processed to
+JSONL with
+https://github.com/TREC-RAG/trec-rag-skills/tree/main/skills/trec-rag-climbmix-corpus-creation.
+
+The corpus (the dataset the climbmix POC indexes) lives **outside the
 repo** at `/share/corpora/climbmix-400b-corpus-jsonl/`.
 
 - Files are gzip'd JSONL shards named `shard_NNNNN.jsonl.gz`.

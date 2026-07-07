@@ -1,0 +1,18 @@
+{"arm": "cover", "qid": "fasting", "ok": true, "wall_s": 264.0, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/fasting  interpretations=2  succeeded=2  failed=0\n"}
+{"arm": "cover", "qid": "solarloss", "ok": true, "wall_s": 292.9, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/solarloss  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "cover", "qid": "reading", "ok": true, "wall_s": 178.7, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/reading  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "cover", "qid": "invasive", "ok": true, "wall_s": 835.2, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/invasive  interpretations=3  succeeded=3  failed=0\n"}
+{"arm": "cover", "qid": "inflation", "ok": true, "wall_s": 789.3, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/inflation  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "cover", "qid": "vaccines", "ok": true, "wall_s": 179.1, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/cover/vaccines  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "tiered", "qid": "fasting", "ok": true, "wall_s": 3513.9, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/tiered/fasting  interpretations=3  succeeded=3  failed=0\n"}
+{"arm": "tiered", "qid": "solarloss", "ok": true, "wall_s": 2201.4, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/tiered/solarloss  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "tiered", "qid": "reading", "ok": true, "wall_s": 3877.5, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/tiered/reading  interpretations=3  succeeded=3  failed=0\n"}
+{"arm": "tiered", "qid": "invasive", "ok": false, "wall_s": 14400.1, "tail": "HARNESS CAP: exceeded 14400s"}
+{"arm": "tiered", "qid": "inflation", "ok": false, "wall_s": 14400.1, "tail": "HARNESS CAP: exceeded 14400s"}
+{"arm": "tiered", "qid": "vaccines", "ok": true, "wall_s": 4777.4, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/tiered/vaccines  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "multitext", "qid": "fasting", "ok": true, "wall_s": 242.7, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/fasting  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "multitext", "qid": "solarloss", "ok": true, "wall_s": 263.0, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/solarloss  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "multitext", "qid": "reading", "ok": true, "wall_s": 190.1, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/reading  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "multitext", "qid": "invasive", "ok": true, "wall_s": 6935.8, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/invasive  interpretations=3  succeeded=3  failed=0\n"}
+{"arm": "multitext", "qid": "inflation", "ok": true, "wall_s": 1280.4, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/inflation  interpretations=1  succeeded=1  failed=0\n"}
+{"arm": "multitext", "qid": "vaccines", "ok": true, "wall_s": 200.5, "tail": "\nrun: /home/smucker/git-repos/Cottontail/isj/scouting/searcher-ab/results/multitext/vaccines  interpretations=1  succeeded=1  failed=0\n"}

@@ -7,7 +7,7 @@
 - [Cottontail overview](project-cottontail-overview.md) — what the project is, authoritative docs, and where active work sits
 - [Hazel not ready](hazel-not-ready.md) — not declared ready; fork builds nothing on it (upstream's Bigwig integration merged 2026-07 doesn't change that)
 - [Upstream sync (claclark)](upstream-sync-claclark.md) — upstream remote, standing merge-resolution policy, 2026-07 sync facts + SSR notes
-- [ClimbMix corpus location](climbmix-corpus-location.md) — gzip'd JSONL shards at /share/corpora/climbmix-400b-corpus-jsonl/ (outside repo)
+- [ClimbMix corpus](climbmix-corpus-location.md) — general web corpus, NOT about climbing (karpathy/climbmix-400b-shuffle); shards at /share/corpora/climbmix-400b-corpus-jsonl/ (outside repo)
 - [SimpleWarren scaling model](simplewarren-scaling-model.md) — external-memory build, on-demand posting reads, WAND ranking; tuning levers + stats caveat
 - [ClimbMix POC plan](climbmix-poc-plan.md) — pivot the POC to SimpleWarren, scaling target ~6500 shards, 512GB machine
 - [Dev burrow (climbmix-100k-porter)](dev-burrow-climbmix-100k.md) — new-style porter dev index for Searcher cp/sidecar work
@@ -16,4 +16,6 @@
 - [Naming: docno/text](naming-docno-text.md) — canonical docno+text downstream of the indexer; docid/contents only as JSON field config (doc-7); query path (A3) still pending
 - [StemmingTokenizer](stemming-tokenizer.md) — merged to main (PR #2); --stem + --tokenizer CLI and example agent shipped in open PR #3
 - [Trace must be heavy/detailed](trace-must-be-heavy-detailed.md) — capture model reasoning + token usage per turn; never discard a failed intent's trace
+- [pkill self-match footgun](pkill-self-match-footgun.md) — -f patterns match the wrapper shell itself (exit 143/144); use [b]racket patterns or exact PIDs
+- [Interruption resets consent](interruption-resets-consent.md) — a mid-task question/interrupt pauses work: answer, propose, WAIT; never silently resume
 - [Leave dev server running](leave-dev-server-running.md) — don't ask about killing the 100M cottontail-jsonl-server; leave it up unless something server-side changes

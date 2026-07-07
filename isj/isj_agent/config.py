@@ -55,7 +55,10 @@ def build_search_engine(cfg: dict) -> HttpSearchEngine:
             raise RuntimeError(
                 f"environment variable '{env_var}' (api_key_env) is not set"
             )
-    return HttpSearchEngine(base_url=cfg["base_url"], token=token)
+    kwargs = {}
+    if "timeout_s" in cfg:
+        kwargs["timeout"] = float(cfg["timeout_s"])
+    return HttpSearchEngine(base_url=cfg["base_url"], token=token, **kwargs)
 
 
 def build_docno_map(cfg: dict, burrow_override: str | None = None) -> DocnoMap | None:

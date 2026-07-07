@@ -1,0 +1,23 @@
+       arm        qid judged   >=1   >=2   =3 rel2/judged turns            bounces s_tokens  wall_s
+     cover    fasting    259   227    83   10        0.32    14    {'no_query': 1}     5809     264
+     cover  inflation    254   101    19    0        0.07     4                 {}     1254     789
+     cover   invasive    300   277   149   23        0.50     3                 {}     1050     835
+     cover    reading    252   169    34    0        0.13     2                 {}      779     179
+     cover  solarloss    258    92    16    1        0.06    15    {'no_query': 3}     6795     293
+     cover   vaccines    250   233    98    3        0.39     1                 {}      185     179
+ multitext    fasting    260   216    71    1        0.27     6    {'no_query': 1}     4233     243
+ multitext  inflation    252   120    18    0        0.07    36   {'no_query': 15}    17739    1280
+ multitext   invasive    283   216    75    9        0.27    16 {'engine_error': 5, 'no_query': 4}    11096    6936
+ multitext    reading    250   190    64    6        0.26     1                 {}      816     190
+ multitext  solarloss    264   155    17    1        0.06     2                 {}     2654     263
+ multitext   vaccines    250   232    80    1        0.32     1                 {}      795     200
+    tiered    fasting    300   272    67    1        0.22     5    {'no_query': 2}     7392    3514
+    tiered    reading    300   244    46    3        0.15     3                 {}     3654    3878
+    tiered  solarloss    250   142    12    0        0.05     1                 {}     1274    2201
+    tiered   vaccines    250   142    54    1        0.22     1                 {}     1304    4777
+
+per-arm rollup:
+       arm  judged    >=1    >=2    =3 rel2/judged  turns  bounces  s_tokens  wall_s
+     cover    1573   1099    399    37        0.25     39        4     15872    2539
+    tiered    1100    800    179     5        0.16     10        2     13624   14370
+ multitext    1559   1129    325    18        0.21     62       25     37333    9112

@@ -453,3 +453,126 @@ We will not implement until you have weighed in on (1) and the overall approach.
   L_/R_) · `src/gcl.cc:136` (`Containing::rho_`) · `src/gcl.cc:34,38,52`
   (`Combinational` tau_/rho_/ohr_) · `src/array_hopper.cc:14` (`hopping`) ·
   `src/array_hopper.h` (`ArrayHopper::make`).
+
+---
+
+## Addendum (2026-07-04) — `(materialize …)` wrapping tested at 100M scale: rejected
+
+After the upstream sync brought in Clarke's `(materialize X)` operator
+(`gcl/materialize.{h,cc}`: lazily enumerate `X` once, snapshot to an array,
+answer later probes by binary search — his `ai/improvements.md` suggests exactly
+this manual fix for our query shape), we scouted **blanket phrase-wrapping** —
+every multi-atom quoted phrase wrapped in `(materialize …)` — as a candidate
+app-layer fix (backlog TASK-28). A 1M-burrow validation looked promising
+(killer tier 6.0 s → 1.25 s, identical results). **At 100M scale it fails:**
+
+| case (100M, `top_k=200`, `rank_threads=8`) | plain | wrapped |
+|---|---|---|
+| tier1 baseline (no deadly phrase) | 15.1 s | — |
+| `+ "camp placement"` killer | 728.4 s | 353.8 s (2.1×; still 24× over baseline) |
+| tier2 (all three added phrases) | ~712 s (doc.) | 519.5 s |
+| facet with reversed `"selection campsite"` | ~806 s (doc.) | 256.4 s |
+| broad many-results query | **4.0 s** | **127.5 s (32× worse)** |
+| `"camp placement"` standalone | 0.5 s | 3.8 s (7.6× worse) |
+
+(Data: `isj/scouting/multitext-dsl-2/captured/2026-07-04-materialize-100m.jsonl`;
+harness `…/run_materialize_100m.py`. Server freshly restarted per run set;
+client timeouts disabled.)
+
+**Why it fails.** `Materialize` enumerates the wrapped expression over the
+*full shard*, unconditionally — and in our parallel ranking
+(`parallel_cover_ranking`, TASK-25), *once per rank-worker*, since workers build
+their own hoppers. Plain evaluation never pays that: the cover recurrence only
+**probes** the phrase at candidate positions, and the range split already
+confines each worker's re-driving to its slice. So wrapping converts cheap lazy
+probing into mandatory global enumeration — a `"food storage"`-class phrase
+(frequent first word) costs ~2 minutes to enumerate at 100M. Wrapping wins only
+when *this query's* accumulated re-drive cost exceeds the phrase's full
+enumeration cost, which cannot be known in advance: the ρ trigger's denominator
+(phrase occurrence count) is only learned *by* enumerating.
+
+**Consequence for the proposal above.** See Addendum 2 below: the scout
+falsifies the "self-selecting cap" argument in Option B *as written* (eager
+build), and the revised recommendation is Option A plus an **incremental**
+materializer (Option D matured into B), replacing the eager-build design.
+(Clarke's own optimizer checkpoint reaches a compatible "not ready to be
+default-on" conclusion for eager materialization from the other direction.)
+
+---
+
+## Addendum 2 (2026-07-04) — revised recommendation in light of the scout
+
+The 100M scout (Addendum 1) changes Part III in one fundamental way and leaves
+the rest intact.
+
+### What the scout falsifies: Option B's "self-selecting cap"
+
+Part III argued materialization is self-selecting — "deadly phrases are rare
+(few hits) → they materialize cheaply." This **conflates memory with time**. An
+interval cap bounds the *stored hits*, but the *build* cost of enumerating a
+phrase is `O(freq(driving word))` regardless of how few hits emerge: enumerating
+`"food storage"` walks every `food` (12.2M) to find its hits, and you only learn
+the cardinality *by doing that walk*, so the cap cannot rescue the build. The
+scout measured exactly this: eager wrapping forced minutes-long full-shard
+builds — once per rank-worker, since the parallel ranking (2026-07-03) builds
+per-worker hoppers — on phrases the lazy evaluator would barely have probed
+(broad query 4.0 s → 127.5 s). Eager-build Option B, shipped as written, would
+regress ordinary phrase queries.
+
+A second post-proposal fact cuts the other way too: the ranking pass is now
+range-partitioned across workers, so the *re-drive multiplier itself* is divided
+by the worker count per worker — while an eager build is paid at full-shard cost
+*per worker*. Eager materialization is doubly mismatched to the parallel engine.
+
+### Revised recommendation
+
+1. **Option A first, unchanged** — anchor `FollowedBy` on the rarer operand at
+   construction time using `idx()->count()`. Cheap, local, semantics-preserving;
+   eliminates the order-asymmetry class outright (`"selection campsite"`,
+   53×). It also makes phrase costs *predictable up front*: with A in place,
+   both streaming and any build are `O(freq(rarer constituent))` — a number
+   known before running anything. A alone still does not fix `"camp placement"`
+   (its rare word already leads).
+
+2. **Option B rebuilt as an *incremental* materializer — i.e. Option D matured
+   into B, not subsumed by it.** Instead of enumerating the wrapped expression
+   to exhaustion on first touch, the wrapper **memoizes intervals as the stream
+   discovers them**: a growing sorted array of found intervals plus frontier
+   bookkeeping ("all positions below x are fully known"). Probes inside covered
+   territory are array gallops; probes beyond the frontier stream the wrapped
+   hopper and extend the memo. Properties:
+   - The first pass costs what streaming costs today — **no upfront global
+     enumeration**, so the scout's failure mode is gone by construction.
+   - Re-drives — the entire 328–4000× pathology — hit the memo. `camp
+     placement` gets the full Option-B win.
+   - Under the parallel ranking, each worker memoizes only the slice it
+     actually walks: cost proportional to work, not to shard size × workers.
+   - No cap *policy* problem: time is never worse than streaming; a memory cap
+     can simply stop growing the memo and fall back to streaming past it.
+   - It is also what the operator's author asked for: the upstream note
+     accompanying `(materialize …)` says *"Materialization should be lazy"* —
+     the current upstream implementation (enumerate-all-on-first-probe) is not
+     yet.
+   The bidirectional probing (the profile's heavy `uat/ohr` traffic) makes the
+   frontier bookkeeping the main design work — likely a frontier per direction,
+   or a conservative "known range" interval set.
+
+3. **Fallback if incremental proves fiddly:** eager materialization **gated by
+   an up-front count test** — materialize only when `freq(rarer constituent)`
+   (known from `idx()->count()`, especially meaningful once A lands) is below a
+   threshold that bounds the build. This answers Open Question 2 with "a cost
+   model using counts," not an interval cap. The interval cap alone is NOT a
+   safe gate (see above).
+
+4. Options **C** and **E** are unchanged: C is still the principled long-term
+   primitive but does not fix the re-drive case without B, and E stays out of
+   scope.
+
+### Where it lives (revised answer to Open Question 1)
+
+The incremental materializer is a wrapper hopper with no semantic surface, so
+option (a) — inserted by the phrase expander around `(>> (# N) (...))` — remains
+the right v1, now safe to apply **unconditionally** because the wrapper never
+costs more than streaming. The explicit `(materialize …)` operator (c) exists
+upstream today and stays useful for experiments; the planner pass (b) becomes
+unnecessary for phrases once the wrapper is free to apply always.
