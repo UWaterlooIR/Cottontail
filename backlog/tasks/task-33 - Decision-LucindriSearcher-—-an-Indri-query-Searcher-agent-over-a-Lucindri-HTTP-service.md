@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:25'
+updated_date: '2026-07-07 22:30'
 labels: []
 dependencies: []
 priority: medium
@@ -61,7 +61,7 @@ Taught operator subset (deliberately narrow — omit the unintuitive ones):
 - Concept/proximity: #syn, #1 (teach #1 as THE way to write a phrase), #N, #uwN, #band.
 - OMIT #token: the agent never sees the index's surface tokens, so verbatim lookup is useless; an analyzed quoted literal already handles punctuation consistently with the index (same analyzer query-side and index-side).
 - All text quoted; escapes are \" and \\ only.
-- Two semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is NOT a hard Boolean AND -- it is a SCORED proximity op (unordered window the size of the document; ranks all-terms docs high but does not exclude others). A HARD require-all needs #scoreif(#band(...) ...).
+- Three semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is NOT a hard Boolean AND -- it is a SCORED proximity op (unordered window the size of the document; ranks all-terms docs high but does not exclude others); a HARD require-all needs #scoreif(#band(...) ...); (3) #scoreif/#scoreifnot's condition C must be a TERM or proximity op (has a "document contains it" match set) -- NOT a belief op (#combine/#weight), whose match set is the UNION of its operands, so it acts as an OR-filter, not the requirement intended. (Confirmed in Lucindri code 2026-07-07: the parser does NOT enforce this -- #scoreif(#combine(...)) parses -- but IndriFilterRequireScorer gates on the condition query's doc-match iterator, and IndriDisjunctionScorer's iterator is a DisjunctionDISIApproximation = union of operands.)
 
 Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint.
 
@@ -88,12 +88,15 @@ Operators that RANK documents -- use these at the top level:
   #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft: a
                           document missing some operands still ranks (just lower), it is not excluded.
   #weight(w1 X w2 Y ...)  like #combine but weighted, e.g. #weight(0.7 X 0.3 Y) (weights are numbers).
-  #scoreif(C S)           REQUIRE (hard filter): keep only documents that match condition C, and rank
-                          them by S. C must be a HARD gate: a single term -- #scoreif("vaccine" S) --
-                          or, to require SEVERAL terms all present, a #band of them --
-                          #scoreif(#band("vaccine" "efficacy") S). (Do NOT use #combine as C: smoothing
-                          makes every document "match" it, so it filters nothing.)
-  #scoreifnot(C S)        REJECT: keep only documents that do NOT match C, rank by S -- to exclude a sense.
+  #scoreif(C S)           REQUIRE (hard filter): keep only documents that match condition C, rank them
+                          by S. C must be a TERM or a proximity op (#1/#uwN/#band/#syn) -- something
+                          whose match means "the document contains it." One must-have word ->
+                          #scoreif("vaccine" S); several words all required -> #band them ->
+                          #scoreif(#band("vaccine" "efficacy") S). Do NOT use #combine/#weight as C: a
+                          ranking op matches the UNION of its operands (any one), so as a filter it
+                          means OR, not the requirement you intend.
+  #scoreifnot(C S)        REJECT: keep only documents that do NOT match C (same rule for C), rank by S --
+                          to exclude a sense.
 
 Ways to express ONE concept -- use these as operands of the ranking operators (they do not rank alone):
   #syn(X Y ...)           SYNONYMS/variants treated as one term: #syn("car" "automobile" "vehicle").
