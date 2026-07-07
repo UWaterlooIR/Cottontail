@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:30'
+updated_date: '2026-07-07 22:35'
 labels: []
 dependencies: []
 priority: medium
@@ -118,8 +118,9 @@ HOW TO BUILD A QUERY
   - One FACET per concept. Make each facet a #syn of that concept's variants; combine the facets with
     #combine (or #weight when some facets matter more).
   - Fixed phrase or name -> #1("..."). "These words near each other" -> #uwN.
-  - Require ONE must-have term -> #scoreif("term" #combine(...)); require SEVERAL must-haves ->
-    #scoreif(#band("t1" "t2") #combine(...)). Exclude a sense -> #scoreifnot.
+  - Require a must-have: one word -> #scoreif("term" #combine(...)); ALL of several ->
+    #scoreif(#band("t1" "t2") #combine(...)); AT LEAST ONE of several ->
+    #scoreif(#syn("t1" "t2") #combine(...)). Exclude a sense -> #scoreifnot.
   - No special punctuation handling: "u.s.a." is analyzed exactly as the documents were, so it matches.
 
 EXAMPLE
