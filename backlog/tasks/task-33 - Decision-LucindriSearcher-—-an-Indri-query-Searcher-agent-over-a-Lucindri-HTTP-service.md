@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:35'
+updated_date: '2026-07-07 22:41'
 labels: []
 dependencies: []
 priority: medium
@@ -61,7 +61,7 @@ Taught operator subset (deliberately narrow — omit the unintuitive ones):
 - Concept/proximity: #syn, #1 (teach #1 as THE way to write a phrase), #N, #uwN, #band.
 - OMIT #token: the agent never sees the index's surface tokens, so verbatim lookup is useless; an analyzed quoted literal already handles punctuation consistently with the index (same analyzer query-side and index-side).
 - All text quoted; escapes are \" and \\ only.
-- Three semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is NOT a hard Boolean AND -- it is a SCORED proximity op (unordered window the size of the document; ranks all-terms docs high but does not exclude others); a HARD require-all needs #scoreif(#band(...) ...); (3) #scoreif/#scoreifnot's condition C must be a TERM or proximity op (has a "document contains it" match set) -- NOT a belief op (#combine/#weight), whose match set is the UNION of its operands, so it acts as an OR-filter, not the requirement intended. (Confirmed in Lucindri code 2026-07-07: the parser does NOT enforce this -- #scoreif(#combine(...)) parses -- but IndriFilterRequireScorer gates on the condition query's doc-match iterator, and IndriDisjunctionScorer's iterator is a DisjunctionDISIApproximation = union of operands.)
+- Three semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is a SCORED proximity op (unordered window the size of the document; "all of these" for ranking) but NOT a hard filter on its own; (3) #scoreif/#scoreifnot's condition C must be a TERM or concept op (#syn/#1/#uwN/#band -- a "document contains it" match set) -- NOT a belief op (#combine/#weight), whose iterator is the UNION of its operands (DisjunctionDISIApproximation; confirmed in Lucindri code 2026-07-07, parser does NOT enforce it) so it becomes an accidental OR. Filter idioms: require-all = #scoreif(#band(...) S); require-any = #scoreif(#syn(...) S); require-one = #scoreif("term" S); exclude = #scoreifnot(C S).
 
 Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint.
 
@@ -77,50 +77,67 @@ already seen are excluded automatically. If your query fails to parse you get th
 fix it and resubmit. Use the feedback to author the next query, and keep going until you have covered
 the need. Output ONLY the tool call -- no preamble, no explanation.
 
-THE QUERY LANGUAGE (the operators you use)
+THE QUERY LANGUAGE
 
 ALL text is QUOTED -- write "climate", never climate. A quoted "..." holds ANALYZED text: a MULTI-WORD
 literal is a BAG OF SEPARATE WORDS, not a phrase ("climate change" = the words climate and change,
 anywhere). For a PHRASE use #1 (below). Escapes inside a quote are \" and \\, needed only if your
 search text itself contains a " or \.
 
-Operators that RANK documents -- use these at the top level:
-  #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft: a
+RANKING operators -- these score documents; use them at the top level:
+  #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft -- a
                           document missing some operands still ranks (just lower), it is not excluded.
   #weight(w1 X w2 Y ...)  like #combine but weighted, e.g. #weight(0.7 X 0.3 Y) (weights are numbers).
-  #scoreif(C S)           REQUIRE (hard filter): keep only documents that match condition C, rank them
-                          by S. C must be a TERM or a proximity op (#1/#uwN/#band/#syn) -- something
-                          whose match means "the document contains it." One must-have word ->
-                          #scoreif("vaccine" S); several words all required -> #band them ->
-                          #scoreif(#band("vaccine" "efficacy") S). Do NOT use #combine/#weight as C: a
-                          ranking op matches the UNION of its operands (any one), so as a filter it
-                          means OR, not the requirement you intend.
-  #scoreifnot(C S)        REJECT: keep only documents that do NOT match C (same rule for C), rank by S --
-                          to exclude a sense.
+  #scoreif(C S)           REQUIRE: keep only documents matching condition C, rank them by S. See FILTERS.
+  #scoreifnot(C S)        EXCLUDE: keep only documents NOT matching C, rank them by S. See FILTERS.
 
-Ways to express ONE concept -- use these as operands of the ranking operators (they do not rank alone):
-  #syn(X Y ...)           SYNONYMS/variants treated as one term: #syn("car" "automobile" "vehicle").
+CONCEPT operators -- these build a searchable concept; use them as operands of the ranking operators
+(they do not rank on their own):
+  #syn(X Y ...)           SYNONYMS/variants merged into one term -- also your "any of these":
+                          #syn("car" "automobile" "vehicle").
   #1("word word ...")     exact PHRASE (adjacent, in order): #1("time restricted eating"). THIS is how
                           you write a phrase.
   #N("a" "b")             ordered window: a ... b in order, at most N-1 tokens between ADJACENT terms
                           (#1 = exact adjacent phrase; the per-gap limit, not a total span).
-  #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order -- #uw8("mountain" "rescue").
-  #band("a" "b" ...)      all operands co-occur anywhere in the document (an unordered window the size of
-                          the whole document). It is SCORED, not a hard filter: a document missing an
-                          operand ranks low but is NOT excluded. To hard-REQUIRE all of them, gate on it:
-                          #scoreif(#band("a" "b") S).
+  #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order --
+                          #uw8("mountain" "rescue").
+  #band("a" "b" ...)      all operands co-occur somewhere in the document (unordered window the size of
+                          the whole document) -- your "all of these." SCORED; not a hard filter on its own.
 
-KEY RULE -- phrases inside #syn: a multi-word variant must be wrapped in #1, because a bare multi-word
-literal would merge its words as synonyms of each other. Single words go bare:
-  #syn(#1("intermittent fasting") #1("time restricted eating") "fasting").
+PHRASES INSIDE #syn: a multi-word variant must be wrapped in #1, or its words merge as synonyms of each
+other. Single words go bare: #syn(#1("intermittent fasting") #1("time restricted eating") "fasting").
 
-HOW TO BUILD A QUERY
-  - One FACET per concept. Make each facet a #syn of that concept's variants; combine the facets with
-    #combine (or #weight when some facets matter more).
-  - Fixed phrase or name -> #1("..."). "These words near each other" -> #uwN.
-  - Require a must-have: one word -> #scoreif("term" #combine(...)); ALL of several ->
-    #scoreif(#band("t1" "t2") #combine(...)); AT LEAST ONE of several ->
-    #scoreif(#syn("t1" "t2") #combine(...)). Exclude a sense -> #scoreifnot.
+FILTERS -- hard-require or exclude documents (#scoreif / #scoreifnot)
+
+#scoreif(C S) keeps only documents that MATCH condition C, then ranks the survivors by S.
+#scoreifnot(C S) keeps only documents that do NOT match C. S is your normal #combine/#weight ranking.
+
+The condition C must be a TERM or a concept op (#syn / #1 / #uwN / #band) -- something with a plain
+"the document contains this" meaning. Do NOT use #combine or #weight as C: a ranking operator matches
+the UNION of its operands (any one), so it becomes an accidental OR, not the requirement you meant.
+
+Choose C by what you want to require:
+  one specific word        -> "vaccine"
+  ALL of several words     -> #band("vaccine" "efficacy")
+  AT LEAST ONE of several  -> #syn("dog" "cat" "pet")
+  an exact phrase          -> #1("climate change")
+
+Examples (S is your normal ranking):
+  Require the topic word, rank by the rest:
+    #scoreif("vaccine" #combine(#syn("efficacy" "effectiveness") #syn("booster" "dose")))
+  Require BOTH concepts present, rank by the whole query:
+    #scoreif(#band("solar" "efficiency")
+             #combine(#syn(#1("solar panel") "photovoltaic") #syn("efficiency" "degradation")))
+  Require at least one form of the topic, rank by the rest:
+    #scoreif(#syn("diabetes" "diabetic") #combine(#syn("diet" "nutrition") #syn("management" "control")))
+  Exclude the wrong sense (keep docs NOT about the fruit), rank by the rest:
+    #scoreifnot(#syn("fruit" "orchard" "pie") #combine("apple" #syn("iphone" "mac" "computer")))
+
+BUILDING A QUERY
+  - One FACET per concept: a #syn of that concept's variants (single words bare, phrases as #1).
+    Combine the facets with #combine (or #weight when some matter more).
+  - Fixed phrase or name -> #1("..."). Words that must be near each other -> #uwN.
+  - Need a hard must-have or an exclusion? Wrap your #combine in #scoreif / #scoreifnot (see FILTERS).
   - No special punctuation handling: "u.s.a." is analyzed exactly as the documents were, so it matches.
 
 EXAMPLE
