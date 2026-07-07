@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:46'
+updated_date: '2026-07-07 23:26'
 labels: []
 dependencies: []
 priority: medium
@@ -52,18 +52,15 @@ Adapter design notes from reviewing the Lucindri service spec (TASK-0019) + docn
 
 LUCINDRI QUERY LANGUAGE + SEARCHER PROMPT (owner-decided 2026-07-07)
 
-NAMING (important): do NOT call this "Indri" in ANY LLM-facing text — prompt, tool name, or tool description. Lucindri's language is a VARIANT of Indri (quote-only grammar, no field syntax, string-literal splices, etc.); naming "Indri" invites the model to import real-Indri behavior it shouldn't and get confused. Teach the language SELF-CONTAINED (as the MultiText librarian prompt does) so the prompt is the model's only source of truth. In our own prose it's fine to note the language is Indri-derived.
+NAMING (important): do NOT call this "Indri" in ANY LLM-facing text — prompt, tool name, or tool description. Lucindri's language is a VARIANT of Indri; naming "Indri" invites the model to import real-Indri behavior it shouldn't. Teach the language SELF-CONTAINED (as the MultiText librarian prompt does). In our own prose it's fine to note the language is Indri-derived.
 
-Structure: the LucindriSearcher authors ONE full valid query in Lucindri's query language per turn (a single query string, NOT tiers) — structurally like the plain cover Searcher's loop, not the tiered/multitext ones. Queryable: LucindriQuery {query: str}; LLM tool: submit_query({query}); LucindriSearcher(BaseSearcher) with query_types=[LucindriQuery]; no base/controller changes. (Internal Python names may keep "Lucindri"; only LLM-facing strings avoid "Indri".)
+Structure: the LucindriSearcher authors ONE full valid query per turn (a single query string, NOT tiers) — like the plain cover Searcher's loop. Queryable: LucindriQuery {query: str}; LLM tool: submit_query({query}); LucindriSearcher(BaseSearcher) with query_types=[LucindriQuery]; no base/controller changes. (Internal Python names may keep "Lucindri"; only LLM-facing strings avoid "Indri".)
 
-Taught operator subset (deliberately narrow — omit the unintuitive ones):
-- Belief/ranking: #combine, #weight, #scoreif, #scoreifnot. OMIT #or, #not, #wsum, #max (strange/unintuitive).
-- Concept/proximity: #syn, #1 (teach #1 as THE way to write a phrase), #N, #uwN, #band.
-- OMIT #token: the agent never sees the index's surface tokens, so verbatim lookup is useless; an analyzed quoted literal already handles punctuation consistently with the index (same analyzer query-side and index-side).
-- All text quoted; escapes are \" and \\ only.
-- Three semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is a SCORED proximity op (unordered window the size of the document; "all of these" for ranking) but NOT a hard filter on its own; (3) #scoreif/#scoreifnot's condition C must be a TERM or concept op (#syn/#1/#uwN/#band -- a "document contains it" match set) -- NOT a belief op (#combine/#weight), whose iterator is the UNION of its operands (DisjunctionDISIApproximation; confirmed in Lucindri code 2026-07-07, parser does NOT enforce it) so it becomes an accidental OR. Filter idioms: require-all = #scoreif(#band(...) S); require-any = #scoreif(#syn(...) S); require-one = #scoreif("term" S); exclude = #scoreifnot(C S).
+Taught operator subset: RANKING #combine, #weight, #scoreif, #scoreifnot (OMIT #or, #not, #wsum, #max); PROXIMITY/WORD-SET #1, #N, #uwN, #syn, #band (OMIT #token). All text quoted; escapes \" and \\.
 
-Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint.
+Craft rules taught (all self-contained in the prompt): (1) quote all text; a multi-word literal is a BAG OF WORDS -- use #1 for a phrase. (2) The index is Krovetz-stemmed with stopwords, so DON'T enumerate regular forms (adult=adults); DO list irregulars/synonyms/spellings/abbrevs. (3) Build a FACET as a #combine of its words (synonyms/variants as separate operands), and the query as a #combine of facet-#combines (even concept weighting). (4) #syn is a SET-UNION that blends the words' stats into one mega-word -- so use it ONLY inside a proximity window ("this set near that set") or as a #scoreif condition, NEVER as a plain ranking operand. (5) #uwN is the precision booster (reward concepts co-occurring close). (6) #band is SCORED, not a hard filter (require-all = #scoreif(#band(...))). (7) #scoreif's condition C must be a term/set-op (#syn/#1/#uwN/#band), never a belief op (#combine as C = accidental OR); the filter adds no score, so repeat the required concept in S.
+
+Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint. NOTE: the drafted worked example (TREC-8 topic 448) is grammar-checked against the parser source but NOT yet run through the real parser -- validate in the scout.
 
 DRAFT PROMPT (becomes isj/isj_agent/agents/lucindri_searcher.md when built):
 ----------------------------------------------------------------------
@@ -84,41 +81,48 @@ literal is a BAG OF SEPARATE WORDS, not a phrase ("climate change" = the words c
 anywhere). For a PHRASE use #1 (below). Escapes inside a quote are \" and \\, needed only if your
 search text itself contains a " or \.
 
+The index is STEMMED (Krovetz) with stopwords, and your query text is analyzed the same way -- so do
+NOT enumerate regular word forms ("adult" already matches adults; "recycle" matches recycled/recycling).
+DO list what the stemmer will not merge: true synonyms ("car" "automobile"), irregular forms ("sink"
+"sank" "sunk"), spelling variants ("tire" "tyre"), and abbreviations ("uv" "ultraviolet").
+
 RANKING operators -- these score documents; use them at the top level:
   #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft -- a
-                          document missing some operands still ranks (just lower), it is not excluded.
+                          document missing some still ranks (just lower), not excluded. Build a CONCEPT
+                          (facet) as a #combine of its words -- list synonyms and variants as separate
+                          operands; do NOT merge them with #syn. Build the whole query as a #combine of
+                          your facet-#combines, so each concept is weighted evenly.
   #weight(w1 X w2 Y ...)  like #combine but weighted, e.g. #weight(0.7 X 0.3 Y) (weights are numbers).
   #scoreif(C S)           REQUIRE: keep only documents matching condition C, rank them by S. See FILTERS.
   #scoreifnot(C S)        EXCLUDE: keep only documents NOT matching C, rank them by S. See FILTERS.
 
-CONCEPT operators -- these build a searchable concept; use them as operands of the ranking operators
-(they do not rank on their own):
-  #syn(X Y ...)           SYNONYMS/variants merged into one term -- also your "any of these":
-                          #syn("car" "automobile" "vehicle").
-  #1("word word ...")     exact PHRASE (adjacent, in order): #1("time restricted eating"). THIS is how
-                          you write a phrase.
+PROXIMITY / WORD-SET operators -- each produces a "term" scored by its occurrences; use them as operands
+of the ranking operators:
+  #1("word word ...")     exact PHRASE (adjacent, in order): #1("rough seas"). THIS is how you phrase.
   #N("a" "b")             ordered window: a ... b in order, at most N-1 tokens between ADJACENT terms
                           (#1 = exact adjacent phrase; the per-gap limit, not a total span).
-  #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order --
-                          #uw8("mountain" "rescue").
-  #band("a" "b" ...)      all operands co-occur somewhere in the document (unordered window the size of
-                          the whole document) -- your "all of these." SCORED; not a hard filter on its own.
+  #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order. POWERFUL
+                          for PRECISION -- reward documents where your concepts actually co-occur close:
+                          #uw12(#syn("sink" "wreck") #syn("storm" "hurricane")).
+  #syn(X Y ...)           a SET-UNION of words treated as ONE term. Use it (a) INSIDE a window -- "any of
+                          this set near any of that set" -- or (b) as a #scoreif/#scoreifnot condition
+                          (below). Do NOT use #syn as a plain ranking operand: it blends the words'
+                          statistics into one mega-word and distorts scores -- build concepts with
+                          #combine instead.
+  #band("a" "b" ...)      all operands co-occur somewhere in the document (window the size of the whole
+                          document) -- "all of these." SCORED; not a hard filter on its own.
 
-PHRASES INSIDE #syn: a multi-word variant must be wrapped in #1, or its words merge as synonyms of each
-other. Single words go bare: #syn(#1("intermittent fasting") #1("time restricted eating") "fasting").
+PHRASE INSIDE A WORD-SET: if a variant in a #syn (or window) is multi-word, wrap it in #1 --
+#syn(#1("rough seas") "gale" "storm") -- a bare "rough seas" would be two loose words.
 
 FILTERS -- hard-require or exclude documents (#scoreif / #scoreifnot)
 
 #scoreif(C S) keeps only documents that MATCH condition C, then ranks the survivors by S.
-#scoreifnot(C S) keeps only documents that do NOT match C. S is your normal #combine/#weight ranking.
+#scoreifnot(C S) keeps only documents that do NOT match C. S is your normal ranking (a #combine/#weight).
 
-The condition C must be a TERM or a concept op (#syn / #1 / #uwN / #band) -- something with a plain
-"the document contains this" meaning. Do NOT use #combine or #weight as C: a ranking operator matches
-the UNION of its operands (any one), so it becomes an accidental OR, not the requirement you meant.
-
-IMPORTANT: the filter C adds NO score -- it only decides membership. Put the required concept in S
-(your #combine) as well, or documents that merely mention it once will rank the same as documents that
-are actually about it.
+C must be a TERM or a word-set/proximity op (#syn / #1 / #uwN / #band) -- something with a "the document
+contains this" meaning. Do NOT use #combine/#weight as C: a ranking op matches the UNION of its operands
+(any one), so it becomes an accidental OR, not the requirement you meant.
 
 Choose C by what you want to require:
   one specific word        -> "vaccine"
@@ -126,36 +130,43 @@ Choose C by what you want to require:
   AT LEAST ONE of several  -> #syn("dog" "cat" "pet")
   an exact phrase          -> #1("climate change")
 
-Examples (note the required concept ALSO appears in the #combine, so ranking rewards it):
-  Require the topic:
+IMPORTANT: the filter C adds NO score -- it only decides membership. Put the required concept in S (your
+#combine) too, or documents that merely mention it once rank the same as documents actually about it.
+
+Examples:
+  Require the topic word, and rank including it:
     #scoreif("vaccine"
-             #combine(#syn("vaccine" "vaccination" "immunization") #syn("efficacy" "effectiveness") #syn("booster" "dose")))
-  Require BOTH concepts present:
-    #scoreif(#band("solar" "efficiency")
-             #combine(#syn("solar" #1("solar panel") "photovoltaic") #syn("efficiency" "degradation")))
+             #combine(#combine("vaccine" "vaccination" "immunization") #combine("efficacy" "effectiveness")))
   Require at least one form of the topic:
     #scoreif(#syn("diabetes" "diabetic")
-             #combine(#syn("diabetes" "diabetic") #syn("diet" "nutrition") #syn("management" "control")))
+             #combine(#combine("diabetes" "diabetic") #combine("diet" "nutrition" "management")))
   Exclude the wrong sense (keep docs NOT about the fruit), rank by the rest:
-    #scoreifnot(#syn("fruit" "orchard" "pie")
-                #combine("apple" #syn("iphone" "mac" "computer")))
+    #scoreifnot(#syn("fruit" "orchard" "pie") #combine("apple" #combine("iphone" "mac" "computer")))
 
 BUILDING A QUERY
-  - One FACET per concept: a #syn of that concept's variants (single words bare, phrases as #1).
-    Combine the facets with #combine (or #weight when some matter more).
-  - Fixed phrase or name -> #1("..."). Words that must be near each other -> #uwN.
-  - Need a hard must-have or an exclusion? Wrap your #combine in #scoreif / #scoreifnot (see FILTERS).
-  - No special punctuation handling: "u.s.a." is analyzed exactly as the documents were, so it matches.
+  - One FACET per concept: a #combine of that concept's words (synonyms/variants as separate operands;
+    the stemmer already folds regular forms). Combine the facets with an outer #combine (or #weight when
+    some matter more) so each concept is weighted evenly.
+  - Phrase or name -> #1("..."). Boost PRECISION -> add a #uwN that puts your key concepts near each
+    other, using #syn to group "any of these": #uwN(#syn(...) #syn(...)).
+  - Hard must-have or exclusion -> #scoreif / #scoreifnot (see FILTERS).
 
 EXAMPLE
 
-Need: the health effects of intermittent fasting on adults.
+Need: Identify instances in which weather was a main or contributing factor in the loss of a ship at sea.
 
-#combine(
-  #syn(#1("intermittent fasting") #1("time restricted eating") #1("alternate day fasting") #1("5:2 diet"))
-  #syn("health" "effect" "benefit" "risk" #1("weight loss") "metabolic")
-  #syn("adult" "adults" "participant")
+#weight(
+  0.6 #combine(
+        #combine("ship" "vessel" "boat" "tanker" "freighter" "trawler")
+        #combine("sink" "sank" "sunk" "capsize" "founder" "wreck")
+        #combine("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("bad weather") #1("rough seas"))
+      )
+  0.4 #uw12(#syn("sink" "sank" "sunk" "capsize" "founder" "wreck")
+            #syn("storm" "hurricane" "typhoon" "gale" "cyclone"))
 )
+
+The title is only "ship losses," but the need is weather-caused losses -- so there is a weather facet,
+and the #uw12 rewards documents where a loss word sits close to a weather word (the cause).
 
 Now write the query for the need you are given and submit it with one `submit_query` tool call. Each
 following turn, read the results and submit an ADAPTED query.
