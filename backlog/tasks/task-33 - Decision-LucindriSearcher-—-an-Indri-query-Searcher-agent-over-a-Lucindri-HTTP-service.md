@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:16'
+updated_date: '2026-07-07 22:25'
 labels: []
 dependencies: []
 priority: medium
@@ -61,7 +61,7 @@ Taught operator subset (deliberately narrow — omit the unintuitive ones):
 - Concept/proximity: #syn, #1 (teach #1 as THE way to write a phrase), #N, #uwN, #band.
 - OMIT #token: the agent never sees the index's surface tokens, so verbatim lookup is useless; an analyzed quoted literal already handles punctuation consistently with the index (same analyzer query-side and index-side).
 - All text quoted; escapes are \" and \\ only.
-- Critical semantic rule taught: a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase). Use #1("...") for a phrase; INSIDE #syn, wrap any multi-word variant in #1, else its words merge as synonyms of each other.
+- Two semantic rules taught explicitly: (1) a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase) -- use #1("...") for a phrase, and inside #syn wrap any multi-word variant in #1 or its words merge as synonyms; (2) #band is NOT a hard Boolean AND -- it is a SCORED proximity op (unordered window the size of the document; ranks all-terms docs high but does not exclude others). A HARD require-all needs #scoreif(#band(...) ...).
 
 Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint.
 
@@ -85,11 +85,15 @@ anywhere). For a PHRASE use #1 (below). Escapes inside a quote are \" and \\, ne
 search text itself contains a " or \.
 
 Operators that RANK documents -- use these at the top level:
-  #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands.
+  #combine("a" "b" ...)   the workhorse: rank documents by how well they match ALL operands. Soft: a
+                          document missing some operands still ranks (just lower), it is not excluded.
   #weight(w1 X w2 Y ...)  like #combine but weighted, e.g. #weight(0.7 X 0.3 Y) (weights are numbers).
-  #scoreif(C S)           REQUIRE: keep only documents matching C, rank them by S. Wrap your whole
-                          query to force a must-have: #scoreif("vaccine" #combine(...)).
-  #scoreifnot(C S)        REJECT: keep only documents NOT matching C, rank by S -- to exclude a sense.
+  #scoreif(C S)           REQUIRE (hard filter): keep only documents that match condition C, and rank
+                          them by S. C must be a HARD gate: a single term -- #scoreif("vaccine" S) --
+                          or, to require SEVERAL terms all present, a #band of them --
+                          #scoreif(#band("vaccine" "efficacy") S). (Do NOT use #combine as C: smoothing
+                          makes every document "match" it, so it filters nothing.)
+  #scoreifnot(C S)        REJECT: keep only documents that do NOT match C, rank by S -- to exclude a sense.
 
 Ways to express ONE concept -- use these as operands of the ranking operators (they do not rank alone):
   #syn(X Y ...)           SYNONYMS/variants treated as one term: #syn("car" "automobile" "vehicle").
@@ -98,7 +102,10 @@ Ways to express ONE concept -- use these as operands of the ranking operators (t
   #N("a" "b")             ordered window: a ... b in order, at most N-1 tokens between ADJACENT terms
                           (#1 = exact adjacent phrase; the per-gap limit, not a total span).
   #uwN("a" "b" ...)       unordered window: all operands within a span of N tokens, any order -- #uw8("mountain" "rescue").
-  #band("a" "b" ...)      Boolean AND: every operand must appear somewhere in the document.
+  #band("a" "b" ...)      all operands co-occur anywhere in the document (an unordered window the size of
+                          the whole document). It is SCORED, not a hard filter: a document missing an
+                          operand ranks low but is NOT excluded. To hard-REQUIRE all of them, gate on it:
+                          #scoreif(#band("a" "b") S).
 
 KEY RULE -- phrases inside #syn: a multi-word variant must be wrapped in #1, because a bare multi-word
 literal would merge its words as synonyms of each other. Single words go bare:
@@ -108,7 +115,8 @@ HOW TO BUILD A QUERY
   - One FACET per concept. Make each facet a #syn of that concept's variants; combine the facets with
     #combine (or #weight when some facets matter more).
   - Fixed phrase or name -> #1("..."). "These words near each other" -> #uwN.
-  - Must-have term -> wrap everything in #scoreif("term" #combine(...)). Exclude a sense -> #scoreifnot.
+  - Require ONE must-have term -> #scoreif("term" #combine(...)); require SEVERAL must-haves ->
+    #scoreif(#band("t1" "t2") #combine(...)). Exclude a sense -> #scoreifnot.
   - No special punctuation handling: "u.s.a." is analyzed exactly as the documents were, so it matches.
 
 EXAMPLE
