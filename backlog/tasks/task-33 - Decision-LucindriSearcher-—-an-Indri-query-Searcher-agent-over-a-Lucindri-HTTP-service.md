@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
+updated_date: '2026-07-07 18:12'
 labels: []
 dependencies: []
 priority: medium
@@ -26,7 +27,7 @@ Enabling facts (from a 2026-07-07 deep read of the cloned Lucindri repo, /home/s
 Cottontail-side scope (if yes):
 1. LucindriQuery(Queryable): tool takes {query: indri string}; execute -> engine.lucindri_search(...); trace/query_string forms.
 2. LucindriSearcher(BaseSearcher): prompt teaches the Indri language (quoted terms; #combine, #weight/#wand, #or, #not, #wsum, #max, #syn, proximity #N/#uwN, #token verbatim). Note: #token maps neatly onto the hi-tech/u.s.a. tokenization issues we hit in GCL.
-3. LucindriSearchEngine (implements SearchEngine): search() -> POST /search; read() -> POST /document (Lucindri serves full text, so NO delegation to the Cottontail server, NO docno-cp.sqlite dependency); paging/exclude client-side (Lucindri has no exclude -- over-fetch + drop judged); atom_counts dropped (or omitted from the Indri prompt's feedback contract). Share HttpSearchEngine plumbing (httpx, 1h timeout, error->EngineError).
+3. LucindriSearchEngine (implements SearchEngine): search() -> POST /search WITH summaries=true (the endpoint's summaries flag is opt-in/default-off per Lucindri TASK-0019; ISJ wants summaries, so the adapter requests them); read() -> POST /document (Lucindri serves full text, so NO delegation to the Cottontail server, NO docno-cp.sqlite dependency); paging/exclude client-side (Lucindri has no exclude -- over-fetch + drop judged); atom_counts dropped (or omitted from the Indri prompt's feedback contract). Share HttpSearchEngine plumbing (httpx, 1h timeout, error->EngineError).
 4. Identity: Lucindri speaks docno (string); our controller keys on cp (int). DECISION to record: (a) assign a stable synthetic int id per docno in the adapter (controller unchanged, run-output emits the real docno) -- recommended, keeps the Lucindri searcher decoupled from any Cottontail index; or (b) map docno->cp via a Cottontail sqlite map (only if we want cross-system cp comparability, reintroduces a burrow dependency). doc-5/doc-8 already bless docno-on-the-wire.
 
 GATING STEP before the full build: a prompt-validity SCOUT (like TASK-26 for MultiText) -- can gpt-oss-120b write valid Indri queries? Lucindri's parser / the /search endpoint is the validity oracle. Cheap, and it de-risks the whole thing; if the model can't author Indri reliably, that changes the plan.
@@ -38,5 +39,5 @@ Deliverable of THIS task: a go/no-go decision + the pinned identity choice + a s
 <!-- AC:BEGIN -->
 - [ ] #1 Go/no-go decision recorded for a LucindriSearcher, with the identity choice pinned (synthetic-int-per-docno vs docno->cp map)
 - [ ] #2 A prompt-validity scout is planned (oracle = Lucindri parser/service) as the gating de-risk step before committing to the adapter/searcher/prompt build
-- [ ] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract ({docno,score,summary} / {docno,fulltext}) are captured
+- [ ] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract are captured: /search {query,count,summaries} -> [{docno,score,summary?}] (ISJ sets summaries=true), /document {docno} -> {fulltext}
 <!-- AC:END -->
