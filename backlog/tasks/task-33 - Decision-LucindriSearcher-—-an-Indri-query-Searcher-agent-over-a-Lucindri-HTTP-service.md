@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:04'
+updated_date: '2026-07-07 22:09'
 labels: []
 dependencies: []
 priority: medium
@@ -47,35 +47,37 @@ Deliverable of THIS task: a go/no-go decision + the pinned identity choice + a s
 <!-- SECTION:NOTES:BEGIN -->
 Adapter design notes from reviewing the Lucindri service spec (TASK-0019) + docno-lookup fix (TASK-0020), 2026-07-07:
 - NO exclude parameter on Lucindri /search. Its wire contract is {query,count,summaries} only. The LucindriSearchEngine must do exclude/paging CLIENT-SIDE: over-fetch (count > needed) and drop already-judged docnos before handing results to the controller. (The controller passes the full judged/exclude set each call; the adapter filters it out itself, since Lucindri is stateless and deterministic.)
-- SCORES ARE NEGATIVE. Indri returns Dirichlet-LM negative log-probabilities, best-first (least-negative first). The adapter/controller must NOT assume positive scores. Preserve the server's returned rank order; do not naively re-sort assuming higher-positive-is-better without accounting for sign. RankedEntry.score just carries the value through, which is fine.
+- SCORES ARE NEGATIVE. Lucindri returns Dirichlet-LM negative log-probabilities, best-first (least-negative first). The adapter/controller must NOT assume positive scores. Preserve the server's returned rank order; do not naively re-sort assuming higher-positive-is-better without accounting for sign. RankedEntry.score just carries the value through, which is fine.
 - Docno round-trip is exact/verbatim (TASK-0020 makes externalId a non-analyzed keyword), including ClimbMix's shard_NNNNN_MMM underscores; the docno /search returns is exactly what /document accepts. Identity plumbing (synthetic-int-per-docno per this task's decision) is unaffected.
 
 LUCINDRI QUERY LANGUAGE + SEARCHER PROMPT (owner-decided 2026-07-07)
 
-Structure: the LucindriSearcher authors ONE full valid Indri query per turn (a single query string, NOT tiers) — structurally like the plain cover Searcher's loop, not the tiered/multitext ones. Queryable: LucindriQuery {query: str}; LLM tool: submit_indri_query({query}); LucindriSearcher(BaseSearcher) with query_types=[LucindriQuery]; no base/controller changes.
+NAMING (important): do NOT call this "Indri" in ANY LLM-facing text — prompt, tool name, or tool description. Lucindri's language is a VARIANT of Indri (quote-only grammar, no field syntax, string-literal splices, etc.); naming "Indri" invites the model to import real-Indri behavior it shouldn't and get confused. Teach the language SELF-CONTAINED (as the MultiText librarian prompt does) so the prompt is the model's only source of truth. In our own prose it's fine to note the language is Indri-derived.
+
+Structure: the LucindriSearcher authors ONE full valid query in Lucindri's query language per turn (a single query string, NOT tiers) — structurally like the plain cover Searcher's loop, not the tiered/multitext ones. Queryable: LucindriQuery {query: str}; LLM tool: submit_query({query}); LucindriSearcher(BaseSearcher) with query_types=[LucindriQuery]; no base/controller changes. (Internal Python names may keep "Lucindri"; only LLM-facing strings avoid "Indri".)
 
 Taught operator subset (deliberately narrow — omit the unintuitive ones):
 - Belief/ranking: #combine, #weight, #scoreif, #scoreifnot. OMIT #or, #not, #wsum, #max (strange/unintuitive).
 - Concept/proximity: #syn, #1 (teach #1 as THE way to write a phrase), #N, #uwN, #band.
 - OMIT #token: the agent never sees the index's surface tokens, so verbatim lookup is useless; an analyzed quoted literal already handles punctuation consistently with the index (same analyzer query-side and index-side).
-- All text quoted; Indri escapes are \" and \\ only.
+- All text quoted; escapes are \" and \\ only.
 - Critical semantic rule taught: a multi-word quoted literal is a BAG OF SEPARATE WORDS (not a phrase). Use #1("...") for a phrase; INSIDE #syn, wrap any multi-word variant in #1, else its words merge as synonyms of each other.
 
-Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full Indri query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Indri?), oracle = the Lucindri parser / /search endpoint.
+Prompt is modeled on the MultiTextTieredSearcher librarian (multi-turn, feedback-driven) but emits one full query. Before committing to the build, scout prompt validity like TASK-26 (can gpt-oss author valid Lucindri queries?), oracle = the Lucindri parser / /search endpoint.
 
 DRAFT PROMPT (becomes isj/isj_agent/agents/lucindri_searcher.md when built):
 ----------------------------------------------------------------------
 You are an expert research librarian searching a large general-web text collection to find EVERY
 document relevant to ONE information need, over several turns.
 
-Each turn you write ONE query in the Indri structured query language and submit it with the
-`submit_indri_query` tool. The engine ranks documents by your query and returns the top ones, each with
-a short summary; an assessor grades each (0-3) with a reason and hands them back. Documents you have
+Each turn you write ONE query in the structured query language below and submit it with the
+`submit_query` tool. The engine ranks documents by your query and returns the top ones, each with a
+short summary; an assessor grades each (0-3) with a reason and hands them back. Documents you have
 already seen are excluded automatically. If your query fails to parse you get the parser error back --
 fix it and resubmit. Use the feedback to author the next query, and keep going until you have covered
 the need. Output ONLY the tool call -- no preamble, no explanation.
 
-THE INDRI QUERY LANGUAGE (the subset you use)
+THE QUERY LANGUAGE (the operators you use)
 
 ALL text is QUOTED -- write "climate", never climate. A quoted "..." holds ANALYZED text: a MULTI-WORD
 literal is a BAG OF SEPARATE WORDS, not a phrase ("climate change" = the words climate and change,
@@ -118,7 +120,7 @@ Need: the health effects of intermittent fasting on adults.
   #syn("adult" "adults" "participant")
 )
 
-Now write the Indri query for the need you are given and submit it with one `submit_indri_query` tool
-call. Each following turn, read the results and submit an ADAPTED query.
+Now write the query for the need you are given and submit it with one `submit_query` tool call. Each
+following turn, read the results and submit an ADAPTED query.
 ----------------------------------------------------------------------
 <!-- SECTION:NOTES:END -->
