@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 23:41'
+updated_date: '2026-07-07 23:47'
 labels: []
 dependencies: []
 priority: medium
@@ -165,7 +165,7 @@ Need: Identify instances in which weather was a main or contributing factor in t
         #combine("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("bad weather") #1("rough seas"))
       )
   0.4 #uw12(#syn("sink" "sank" "sunk" "capsize" "founder" "wreck")
-            #syn("storm" "hurricane" "typhoon" "gale" "cyclone"))
+            #syn("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("bad weather")))
 )
 
 A bare-words query would be just ship + loss, but the Need turns on WEATHER as the cause -- so there is
