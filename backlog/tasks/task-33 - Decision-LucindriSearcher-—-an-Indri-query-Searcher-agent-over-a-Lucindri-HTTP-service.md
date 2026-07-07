@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-07 22:41'
+updated_date: '2026-07-07 22:46'
 labels: []
 dependencies: []
 priority: medium
@@ -116,22 +116,29 @@ The condition C must be a TERM or a concept op (#syn / #1 / #uwN / #band) -- som
 "the document contains this" meaning. Do NOT use #combine or #weight as C: a ranking operator matches
 the UNION of its operands (any one), so it becomes an accidental OR, not the requirement you meant.
 
+IMPORTANT: the filter C adds NO score -- it only decides membership. Put the required concept in S
+(your #combine) as well, or documents that merely mention it once will rank the same as documents that
+are actually about it.
+
 Choose C by what you want to require:
   one specific word        -> "vaccine"
   ALL of several words     -> #band("vaccine" "efficacy")
   AT LEAST ONE of several  -> #syn("dog" "cat" "pet")
   an exact phrase          -> #1("climate change")
 
-Examples (S is your normal ranking):
-  Require the topic word, rank by the rest:
-    #scoreif("vaccine" #combine(#syn("efficacy" "effectiveness") #syn("booster" "dose")))
-  Require BOTH concepts present, rank by the whole query:
+Examples (note the required concept ALSO appears in the #combine, so ranking rewards it):
+  Require the topic:
+    #scoreif("vaccine"
+             #combine(#syn("vaccine" "vaccination" "immunization") #syn("efficacy" "effectiveness") #syn("booster" "dose")))
+  Require BOTH concepts present:
     #scoreif(#band("solar" "efficiency")
-             #combine(#syn(#1("solar panel") "photovoltaic") #syn("efficiency" "degradation")))
-  Require at least one form of the topic, rank by the rest:
-    #scoreif(#syn("diabetes" "diabetic") #combine(#syn("diet" "nutrition") #syn("management" "control")))
+             #combine(#syn("solar" #1("solar panel") "photovoltaic") #syn("efficiency" "degradation")))
+  Require at least one form of the topic:
+    #scoreif(#syn("diabetes" "diabetic")
+             #combine(#syn("diabetes" "diabetic") #syn("diet" "nutrition") #syn("management" "control")))
   Exclude the wrong sense (keep docs NOT about the fruit), rank by the rest:
-    #scoreifnot(#syn("fruit" "orchard" "pie") #combine("apple" #syn("iphone" "mac" "computer")))
+    #scoreifnot(#syn("fruit" "orchard" "pie")
+                #combine("apple" #syn("iphone" "mac" "computer")))
 
 BUILDING A QUERY
   - One FACET per concept: a #syn of that concept's variants (single words bare, phrases as #1).
