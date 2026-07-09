@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-09 23:51'
+updated_date: '2026-07-09 23:56'
 labels: []
 dependencies: []
 priority: medium
@@ -39,6 +39,126 @@ Cottontail-side scope (follow-on build):
 - [x] #2 A prompt-validity scout is planned (oracle = Lucindri parser/service) as the gating de-risk step before committing to the adapter/searcher/prompt build
 - [x] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract are captured: /search {query,count,summaries} -> [{docno,score,summary?}] (ISJ sets summaries=true), /document {docno} -> {fulltext}
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+DETAILED IMPLEMENTATION PLAN (LucindriSearcher). Status: FOR REVIEW. Live end-to-end is
+GATED on a running Lucindri service + a Lucindri-built index of the same corpus; everything
+below is buildable + unit-testable WITHOUT a live server (mocked httpx). See OPEN QUESTIONS
+at the end -- several need a decision before coding.
+
+PHASE 0 -- Opaque id (int | str) [shared; touches the live Cottontail path -- keep it green]
+  - protocol/search.py: Hit.cp -> Id where `Id = int | str` (a shared alias). Use a STRICT
+    pydantic union so a numeric-looking docno is never coerced to int (StrictInt | StrictStr).
+  - engine/base.py (SearchEngine Protocol): widen exclude: Sequence[int] -> Sequence[Id] on
+    search/tiered_search/multitext_search, and read(cp: int) -> read(cp: Id).
+  - protocol/queryable.py: Queryable.execute(exclude: Sequence[Id]); update the 3 concrete
+    execute() signatures.
+  - controller.py: annotate judged: dict[Id, Verdict], seen: set[Id], again: list[tuple[Id,int]]
+    -- ANNOTATIONS ONLY; the logic is already id-agnostic (membership + pass-through).
+  - Cottontail path is unaffected at runtime (cp stays int). Regression gate: the full
+    existing test suite stays green.
+
+PHASE 1 -- Directable prompt [generalizes to ALL searchers]
+  - agents/searcher.py BaseSearcher.__init__: add prompt: str | Path | None = None. If set,
+    read the file (resolve a relative path against repo root) and set the INSTANCE
+    system_prompt (shadowing the class default); if None, keep the bundled <role>.md.
+    FAIL LOUD (raise) if a named prompt file is missing -- no silent fallback.
+  - cli.py _build_agent whitelist: add "prompt" for the searcher role; resolve it against
+    _REPO_ROOT before passing.
+  - config.example.toml: document the optional [agents.searcher] prompt field.
+  - Test: prompt=path overrides system_prompt; prompt=None uses the bundled default; a
+    missing path raises.
+
+PHASE 2 -- LucindriQuery + LucindriSearcher
+  - protocol/queryable.py: LucindriQuery(Queryable), frozen dataclass {query: str},
+    tool_name = "submit_query" (NOT "indri"). tool_schema: one string param `query`.
+    from_tool_arguments: require a non-empty str (else raise -> BaseSearcher bounces).
+    execute -> engine.search(self.query, top_k=, exclude=, window=) (window is ignored by
+    the Lucindri engine). trace_arguments {"query": ...}; query_string -> the query.
+  - agents/lucindri_searcher.py: LucindriSearcher(BaseSearcher) with
+    query_types=[LucindriQuery] and system_prompt loaded from the bundled
+    agents/lucindri_searcher.md (already committed = the vDefault prompt). No base changes.
+  - Test: schema shape; from_tool_arguments happy/malformed; execute routes to engine.search.
+
+PHASE 3 -- LucindriSearchEngine (the httpx adapter)
+  - engine/lucindri.py: implements the SearchEngine Protocol. Shares HttpSearchEngine
+    plumbing style (httpx client, configurable timeout, errors -> EngineError). Endpoints
+    per the finalized TASK-0019 wire contract (see the task's WIRE CONTRACT note).
+  - search(query, top_k, exclude, window):
+      * paging/exclude CLIENT-side (Lucindri has no exclude, no cursor). exclude is the
+        CURRENT query's consumed ids (per the corrected note). Request
+        count = len(exclude) + top_k (Lucindri is stateless/deterministic, so the top
+        (len(exclude)+top_k) by rank contain the next top_k unseen), POST /search with
+        summaries=true, drop the ids in exclude, keep top_k. "Dry" = fewer than top_k fresh
+        returned (list exhausted -> controller breaks on empty results).
+      * synthesize SearchResponse: results -> Hit(rank, score, cp=docno, summary). Lucindri
+        returns no counts, so total_matches / unjudged_matches are SYNTHESIZED (see OPEN Q3)
+        and atom_counts = [] (Lucindri has none; the prompt must not promise them).
+      * negative Dirichlet-LM scores pass through as-is; preserve server rank order.
+  - read(cp): POST /document {docno: cp}; 200 -> fulltext (incl "" for an empty body);
+    404 {error:"unknown docno"} -> None (per the read contract).
+  - error mapping: malformed query -> 400 {error} -> EngineError(msg) (controller bounces to
+    the LLM). A degenerate/null parse is 200 {results:[]} -> a VALID EMPTY result, NOT an
+    error. 405/404-route/400-bad-JSON -> EngineError (adapter bugs). Parse the JSON {error}.
+  - startup: poll GET /healthz (200 {ok:true}) before the first search (see OPEN Q6).
+  - tiered_search / multitext_search: stub -> raise NotImplementedError (a LucindriQuery
+    never calls them; present only for Protocol conformance).
+  - Test (mock httpx / a tiny local stub server): search happy path + client-side
+    exclude/paging + summaries=true; 400 -> EngineError; 200 empty -> empty result;
+    read hit/404; negative scores preserved.
+
+PHASE 4 -- Engine selection + run-output + config
+  - Engine selection: cli.py currently hardcodes build_search_engine(config[
+    "cottontail_http_json_server"]) and build_docno_map(...). Make the engine SELECTABLE
+    (see OPEN Q1). For a Lucindri run: build LucindriSearchEngine from
+    [lucindri_http_json_server]; docno_map = None (ids already are docnos).
+  - run_output.py: for an already-docno id, write it under the `docno` key WITHOUT a
+    DocnoMap (see OPEN Q5 for the mechanism). Cottontail path (int cp + sqlite map)
+    unchanged.
+  - config.example.toml: add [lucindri_http_json_server] base_url (+ optional timeout_s,
+    api_key_env); document the searcher/engine pairing.
+  - Test: run_output writes docnos for a Lucindri-style (already-docno) outcome; CLI wires
+    the Lucindri engine + no docno_map from a Lucindri config.
+
+PHASE 5 -- Docs + finalize
+  - running-the-search-stack.md: a Lucindri-searcher subsection (start the Lucindri server,
+    point [lucindri_http_json_server] at it, run cottontail-isj with the Lucindri config).
+  - bazel/pytest green; check ACs; task-finalization.
+
+GATED (separate, needs the live Lucindri service + its index; outside-repo build/run not yet
+authorized): end-to-end live run + the A/B vs cover/multitext by docs-judged.
+
+======================= OPEN QUESTIONS / DECISIONS NEEDED =======================
+Q1 (engine selection): the CLI hardcodes the Cottontail engine + docno-map. How should the
+   engine be made selectable? Recommend an [engine] config (class + config-section pointer)
+   mirroring [agents.*].class, so build_search_engine becomes generic. Alt: a simple
+   cottontail|lucindri toggle. -- DECISION NEEDED.
+Q2 (searcher<->engine pairing): nothing enforces that the searcher's query type matches the
+   engine (a LucindriSearcher on a Cottontail engine would POST Lucindri queries to
+   cover_search). Add a startup guard/assert, or just document that config must pair them?
+Q3 (missing counts): Lucindri /search returns no total_matches / unjudged_matches /
+   atom_counts. Proposed: total_matches = hits returned before exclude, unjudged_matches =
+   hits after client-side exclude, atom_counts = []. Confirm -- this drives the "N matches"
+   the controller surfaces to the LLM and the trace; the Lucindri prompt must not reference
+   atom_counts.
+Q4 (paging/dry model): confirm the stateless re-request paging (count = |consumed| + top_k,
+   drop consumed, dry when fewer than top_k fresh). Acceptable that each refill re-runs the
+   query server-side (deterministic, so stable)?
+Q5 (run-output field naming): mechanism to write an already-docno id under `docno` with no
+   map -- an ids_are_docnos flag on write_run, or a trivial identity DocnoMap? Recommend the
+   flag.
+Q6 (startup + server lifecycle): assume the Lucindri server is operator-launched and give a
+   base_url + a /healthz poll (like the Cottontail server), OR have the agent launch the
+   server subprocess? Recommend operator-launched + health poll for v1.
+Q7 (task scoping): TASK-33 is scoped as a DECISION task ("implementation is follow-on"). Do
+   we execute the implementation UNDER TASK-33, or spin a new implementation task carrying
+   this plan (TASK-33 stays the decision of record)? Recommend a new task.
+Q8 (opaque-id blast radius): confirm we do the full int|str widening now (Phase 0), accepting
+   it touches shared code on the live Cottontail path (kept green by the existing tests),
+   rather than a narrower interim.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
