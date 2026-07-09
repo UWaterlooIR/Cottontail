@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-09 23:15'
+updated_date: '2026-07-09 23:51'
 labels: []
 dependencies: []
 priority: medium
@@ -51,10 +51,15 @@ and in git history -- it is NOT the design.
 
 ADAPTER DESIGN (from the Lucindri service spec TASK-0019 + docno fix TASK-0020, 2026-07-07):
 - NO exclude parameter on Lucindri /search (wire contract is {query,count,summaries}).
-  The LucindriSearchEngine does exclude/paging CLIENT-SIDE: over-fetch (count > needed)
-  and drop already-judged docnos before returning to the controller. (The controller
-  passes the full judged/exclude set each call; the adapter filters, since Lucindri is
-  stateless and deterministic.)
+  The LucindriSearchEngine replicates Cottontail's SERVER-side exclude CLIENT-side:
+  over-fetch (count > needed) and drop the ids in the passed `exclude`, returning top_k.
+  IMPORTANT -- what `exclude` actually is: the controller passes only the CURRENT query's
+  consumed ids (per-query paging dedup, so refills keep descending the ranking), NOT the
+  global judged set. Cross-query "already judged" filtering is the CONTROLLER's job and is
+  engine-agnostic (controller.py: `h.cp not in judged` gates the Judger; a re-encountered
+  judged doc becomes a count-only "revisit") -- the engine/adapter never sees the global
+  judged set and may freely re-return a judged doc. So the adapter only mirrors Cottontail's
+  per-query paging exclude; Lucindri being stateless/deterministic, it filters deterministically.
 - SCORES ARE NEGATIVE: Lucindri returns Dirichlet-LM negative log-probs, best-first
   (least-negative first). Do NOT assume positive scores; preserve the server's rank
   order, do not re-sort assuming higher-positive-is-better. RankedEntry.score carries
