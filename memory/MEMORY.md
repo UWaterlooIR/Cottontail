@@ -19,3 +19,4 @@
 - [pkill self-match footgun](pkill-self-match-footgun.md) — -f patterns match the wrapper shell itself (exit 143/144); use [b]racket patterns or exact PIDs
 - [Interruption resets consent](interruption-resets-consent.md) — a mid-task question/interrupt pauses work: answer, propose, WAIT; never silently resume
 - [Leave dev server running](leave-dev-server-running.md) — don't ask about killing the 100M cottontail-jsonl-server; leave it up unless something server-side changes
+- [gpt-oss reasoning medium](gpt-oss-reasoning-medium.md) — use reasoning_effort medium not high for local gpt.oss.120b (high makes it go nuts)
