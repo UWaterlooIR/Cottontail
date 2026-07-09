@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-09 03:00'
+updated_date: '2026-07-09 23:15'
 labels: []
 dependencies: []
 priority: medium
@@ -24,7 +24,7 @@ Enabling facts (2026-07-07 read of the cloned Lucindri repo, /home/smucker/git-r
 - The agent seam already exists (Queryable + SearchEngine Protocol, TASK-18): a new searcher = new Queryable + BaseSearcher subclass + prompt, with ZERO base/controller changes (done 3x already).
 - Docno alignment is FREE: Lucindri's ClimbmixJsonlDocumentParser maps docid->externalId and contents->fulltext -- the SAME docid/contents JSONL schema our indexer reads. Index the same corpus in both -> identical docnos, no mapping layer.
 - Lucindri is self-contained on its own index: it serves query-biased summaries (UnifiedHighlighter) AND full documents by docno, so a Lucindri-backed searcher needs NO Cottontail burrow for ranking OR text.
-- Depends on the Lucindri HTTP service (Lucindri TASK-0019): POST /search {query,count,summaries} -> [{docno,score,summary?}], POST /document {docno} -> {fulltext}, /healthz. Malformed query -> 4xx with the parser message (maps to our compile-bounce).
+- The Lucindri HTTP service (Lucindri TASK-0019) is IMPLEMENTED (JDK HttpServer + Gson, 13/13 conformance): POST /search {query,count,summaries} -> {results:[{docno,score,summary?}]}, POST /document {docno} -> {docno,fulltext}, GET /healthz. The final wire contract + HTTP-status/error mapping + server startup config are captured in the Implementation Notes -- talk to it exactly per those.
 
 Cottontail-side scope (follow-on build):
 1. LucindriQuery(Queryable): tool submit_query takes {query: a full query string}; execute -> engine.lucindri_search(...).
@@ -62,6 +62,41 @@ ADAPTER DESIGN (from the Lucindri service spec TASK-0019 + docno fix TASK-0020, 
 - Docno round-trip is exact/verbatim (TASK-0020 makes externalId a non-analyzed keyword),
   including ClimbMix's shard_NNNNN_MMM underscores; the docno /search returns is exactly
   what /document accepts.
+
+WIRE CONTRACT (final -- Lucindri TASK-0019 is IMPLEMENTED, 2026-07-08, 13/13 conformance;
+JDK com.sun.net.httpserver + Gson. Code the adapter to these exact paths / methods / fields):
+- POST /search  req {query: str, count: int, summaries: bool}. query + count REQUIRED; count
+  must be a POSITIVE INTEGER (missing / non-positive / non-integer -> 400). NO server cap on
+  count, so the client-side over-fetch for exclude is explicitly safe (Lucene caps its PQ to
+  maxDoc). summaries is optional, DEFAULT FALSE -> the adapter MUST send summaries=true.
+  Resp {results: [{docno: str, score: number, summary?: str}]}. summary present iff
+  summaries=true; with summaries=true EVERY hit has a NON-EMPTY summary (no query-term match
+  -> leading-sentence fallback; only an empty fulltext yields "").
+- POST /document  req {docno: str} -> {docno: str, fulltext: str}. Unknown docno -> 404
+  {error:"unknown docno"} => read() returns None (its contract). Matched-but-empty body ->
+  200 {fulltext:""} => return "" (NOT None).
+- GET /healthz  -> 200 {ok:true} once the index is open. The adapter/CLI must POLL this on
+  startup before the first search (the server warms up while opening the index).
+- STATUS -> ADAPTER MAPPING:
+    * malformed query (syntax; QueryParseException) -> 400 {error:msg} => raise EngineError(msg);
+      the controller bounces it to the LLM (our compile-bounce). Keep msg verbatim.
+    * DEGENERATE / null parse (NOT a syntax error, e.g. all-stopword) -> 200 {results:[]} => a
+      VALID EMPTY result, NOT an error. Never treat empty results as failure.
+    * wrong method on a known path -> 405 (+Allow header); unknown route -> 404; bad JSON /
+      missing field -> 400. Those would be adapter bugs (we send POST/GET + fields correctly)
+      -> surface as EngineError. EVERY response (incl 400/404/405) carries a JSON {error} body.
+- SUMMARIES are STARTUP-configured, not per-request: sentence UnifiedHighlighter, maxPassages
+  default 4 (TASK-0022), joined by a single space, capped at --maxSummaryWords, term-based with
+  a leading-sentence fallback. The adapter cannot vary passage count per query.
+- OPS / CONFIG: the Lucindri server runs SEPARATELY, launched as
+    java -jar LucindriServer-2.0-*.jar --index <TASK-0020-built index dir> --port <n>
+       [--host 127.0.0.1] [--rule dirichlet:2000] [--stemmer kstem] [--removeStopwords true]
+       [--ignoreCase true] [--maxPassages 4]
+  The analysis flags (kstem / removeStopwords / ignoreCase) MUST match how that index was built;
+  loopback by default; it logs "listening on host:port". ISJ side: add a
+  [lucindri_http_json_server] base_url = "http://127.0.0.1:<port>" config key (mirrors
+  [cottontail_http_json_server]). Prereqs TASK-0020 (keyword externalId docno) + TASK-0021
+  (reactor / 2.0) are LANDED.
 
 SEARCHER STRUCTURE:
 - Authors ONE full valid query per turn (a single query string, NOT tiers) -- like the
