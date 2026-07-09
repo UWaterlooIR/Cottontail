@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-09 02:11'
+updated_date: '2026-07-09 03:00'
 labels: []
 dependencies: []
 priority: medium
@@ -30,7 +30,7 @@ Cottontail-side scope (follow-on build):
 1. LucindriQuery(Queryable): tool submit_query takes {query: a full query string}; execute -> engine.lucindri_search(...).
 2. LucindriSearcher(BaseSearcher): query_types=[LucindriQuery]; the prompt teaches the query language SELF-CONTAINED and NEVER names "Indri" to the model. Prompt content + configurability: see Implementation Notes.
 3. LucindriSearchEngine (implements SearchEngine): search() -> POST /search with summaries=true; read() -> POST /document (Lucindri serves full text, so NO Cottontail server, NO docno-cp.sqlite); paging/exclude CLIENT-SIDE (Lucindri has no exclude -- over-fetch + drop judged); atom_counts omitted. Share HttpSearchEngine plumbing (httpx, 1h timeout, error->EngineError).
-4. Identity: synthetic-int-per-docno (pinned -- see Notes). Run-output emits the real docno.
+4. Identity: an OPAQUE id (int | str) -- the controller keys on a hashable id, not an int per se. Cottontail uses cp (int); Lucindri uses the docno string directly, so results/traces carry docnos with no resolver (see Notes).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -113,10 +113,25 @@ just Lucindri):
   prompt file is missing (no silent fallback). Add a test. ~3 files touched:
   agents/searcher.py (base __init__), cli.py, config.example.toml (document the field).
 
-IDENTITY (pinned -- AC#1): synthetic-int-per-docno. Assign a stable synthetic int id per
-docno in the adapter (controller keys on int cp, unchanged; run-output emits the real
-docno). Keeps the Lucindri searcher decoupled from any Cottontail index. Alternative
-docno->cp sqlite map rejected: reintroduces a burrow dependency for no benefit here.
+IDENTITY (pinned -- AC#1): OPAQUE id (int | str), NOT a synthetic int. The controller uses
+the document id purely as a hashable key -- dict/set membership, the exclude list,
+engine.read, and the trace/run-output -- and never does int arithmetic on it, so the id
+type widens from int to `int | str` with NO controller LOGIC change. Cottontail keeps cp
+(int); the Lucindri adapter sets Hit.cp = the docno STRING directly. Consequences:
+  - no synthetic-int interner and no in-memory reverse map in the adapter;
+  - the results/trace writers need NO resolver for Lucindri -- the id already IS the docno,
+    so write_run persists it as-is; Cottontail is unchanged (cp -> docno via the sqlite
+    DocnoMap at write time).
+This SUPERSEDES the earlier synthetic-int-per-docno pin (AC#1's parenthetical names the two
+options first weighed; opaque-id is strictly simpler and removes the write-time resolver
+coupling that synthetic ints would force onto write_run and the trace log). Small edits it
+implies:
+  (a) type the id as `int | str` (a shared Id alias) on Hit.cp, the SearchEngine Protocol
+      (search exclude=, read cp=), and the controller dict/set annotations -- annotations
+      only. Use a STRICT union so pydantic never coerces a numeric-looking docno to int.
+  (b) run_output currently renames cp->docno only when a DocnoMap is present; for an
+      already-docno id, write it under the `docno` key with no map (a small ids_are_docnos
+      flag or a trivial identity map).
 doc-5 / doc-8 already bless docno-on-the-wire.
 
 FOLLOW-ON (implementation, gated on the Lucindri TASK-0019 service): build LucindriQuery /
