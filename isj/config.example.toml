@@ -141,3 +141,18 @@ burrow = "Scrapheap/climbmix-1M-porter.burrow"  # served burrow; --burrow overri
 #   class = "isj_agent.engine.lucindri.LucindriSearchEngine"
 #   base_url = "http://127.0.0.1:9000"
 #   # timeout_s = 3600
+#
+# --- Sharded Cottontail (TASK-34): fan out across N single-burrow servers ---------
+# The corpus is PARTITIONED into N sub-burrows (build-test-shards.sh), each served by its
+# own cottontail-jsonl-server (launch-test-shard-servers.sh, ports 7000+). The engine runs
+# the query on all N in parallel and merges by score into the true global top_k -- exact
+# because the cover-density ranker is stats-free. Each shard entry is a single-Cottontail
+# config (base_url + burrow, so each shard emits real docnos). Any shard error fails the
+# whole search (no silent partial results); every shard's /healthz is checked on startup.
+#   class = "isj_agent.engine.multishard.MultiShardSearchEngine"
+#   shards = [
+#     { base_url = "http://127.0.0.1:7000", burrow = "/share/indexes/climbmix_test_shards/part00.burrow" },
+#     { base_url = "http://127.0.0.1:7001", burrow = "/share/indexes/climbmix_test_shards/part01.burrow" },
+#     { base_url = "http://127.0.0.1:7002", burrow = "/share/indexes/climbmix_test_shards/part02.burrow" },
+#     { base_url = "http://127.0.0.1:7003", burrow = "/share/indexes/climbmix_test_shards/part03.burrow" },
+#   ]

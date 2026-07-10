@@ -20,6 +20,7 @@ path never opens it; the only C++ reader is the boundary ``--get <docno>`` (A3).
 from __future__ import annotations
 
 import sqlite3
+import threading
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -39,14 +40,19 @@ class DocnoMap:
         if not self.path.exists():
             raise FileNotFoundError(f"docno map not found: {self.path}")
         # immutable=1 => read-only, no locking, no -wal; the burrow is static.
+        # check_same_thread=False: the connection may be used from a worker thread
+        # (MultiShardSearchEngine fans queries out across threads); the lock serializes
+        # access so the single read-only connection is used one thread at a time.
         uri = f"file:{self.path}?immutable=1"
-        self._conn = sqlite3.connect(uri, uri=True)
+        self._conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        self._lock = threading.Lock()
 
     def docno(self, cp: int) -> str | None:
         """The docno for one cp, or None if cp is not a document start."""
-        row = self._conn.execute(
-            f"SELECT docno FROM {_TABLE} WHERE cp = ?", (cp,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT docno FROM {_TABLE} WHERE cp = ?", (cp,)
+            ).fetchone()
         return row[0] if row is not None else None
 
     def docnos(self, cps: Iterable[int]) -> dict[int, str]:
@@ -57,17 +63,20 @@ class DocnoMap:
         for i in range(0, len(wanted), _CHUNK):
             chunk = wanted[i : i + _CHUNK]
             placeholders = ",".join("?" * len(chunk))
-            for cp, docno in self._conn.execute(
-                f"SELECT cp, docno FROM {_TABLE} WHERE cp IN ({placeholders})", chunk
-            ):
+            with self._lock:
+                rows = self._conn.execute(
+                    f"SELECT cp, docno FROM {_TABLE} WHERE cp IN ({placeholders})", chunk
+                ).fetchall()
+            for cp, docno in rows:
                 out[cp] = docno
         return out
 
     def cp(self, docno: str) -> int | None:
         """The cp for one docno, or None if the docno is unknown."""
-        row = self._conn.execute(
-            f"SELECT cp FROM {_TABLE} WHERE docno = ?", (docno,)
-        ).fetchone()
+        with self._lock:
+            row = self._conn.execute(
+                f"SELECT cp FROM {_TABLE} WHERE docno = ?", (docno,)
+            ).fetchone()
         return row[0] if row is not None else None
 
     def close(self) -> None:

@@ -110,14 +110,44 @@ def build_engine(config: dict, burrow_override: str | None = None):
     [cottontail_http_json_server] section still builds the Cottontail HTTP engine.
     """
     from isj_agent.engine.lucindri import LucindriSearchEngine
+    from isj_agent.engine.multishard import MultiShardSearchEngine
 
     if "engine" in config:
         eng = config["engine"]
         cls = load_class(eng["class"])
         if cls is LucindriSearchEngine:
             return build_lucindri_engine(eng)
+        if cls is MultiShardSearchEngine:
+            return build_multishard_engine(eng)
         return build_search_engine(eng, burrow_override=burrow_override)
     # legacy: no [engine] -> the Cottontail HTTP engine from its section
     return build_search_engine(
         config["cottontail_http_json_server"], burrow_override=burrow_override
     )
+
+
+def build_multishard_engine(cfg: dict):
+    """Construct a MultiShardSearchEngine over N single-burrow Cottontail shards (TASK-34).
+
+    `shards` is a non-empty list; each entry IS a single-Cottontail-engine config
+    (base_url + burrow -- the burrow gives that shard its docno-cp.sqlite; without it the
+    shard would emit stringified cps that collide across shards). Each is built via the
+    existing build_search_engine. Health-checks every shard on build (fail fast, Q2).
+    """
+    from isj_agent.engine.multishard import MultiShardSearchEngine
+
+    shards = cfg.get("shards")
+    if not isinstance(shards, list) or not shards:
+        raise SystemExit(
+            "[engine] MultiShardSearchEngine requires a non-empty `shards` list"
+        )
+    for i, s in enumerate(shards):
+        if not isinstance(s, dict) or "base_url" not in s or "burrow" not in s:
+            raise SystemExit(
+                f"[engine] shard {i} needs both base_url and burrow (burrow is required "
+                "so the shard emits real docnos, not colliding cps)"
+            )
+    engines = [build_search_engine(s) for s in shards]
+    eng = MultiShardSearchEngine(engines)
+    eng.healthz()  # fail fast if any shard server is down
+    return eng

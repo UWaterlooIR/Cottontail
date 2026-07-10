@@ -144,6 +144,21 @@ class HttpSearchEngine:
             raise EngineError(_server_error(r))
         return r.json()
 
+    # -- lifecycle ---------------------------------------------------------------
+
+    def healthz(self) -> None:
+        """Poll GET /healthz; raise EngineError (fail fast) if the server is not ready.
+
+        The cottontail-jsonl-server reports {"burrow":..,"status":"ok"}. Used by the
+        MultiShardSearchEngine to fail fast when a shard server is down (TASK-34)."""
+        try:
+            r = self._client.get("/healthz")
+        except httpx.HTTPError as exc:
+            raise EngineError(f"cottontail server unreachable at healthz: {exc}") from exc
+        body = r.json() if r.status_code == 200 else None
+        if not (isinstance(body, dict) and body.get("status") == "ok"):
+            raise EngineError(f"cottontail server not healthy: {_server_error(r)}")
+
     # -- SearchEngine Protocol ---------------------------------------------------
 
     def search(
