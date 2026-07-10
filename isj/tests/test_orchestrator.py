@@ -15,7 +15,7 @@ from isj_agent.run_output import RunError, write_run
 
 def _result(intent):
     rl = RankedList(intent=intent, entries=[
-        RankedEntry(rank=1, cp=100, grade=3, score=5.0, summary="s", reason="r", surfacing_query="(^ a*)"),
+        RankedEntry(rank=1, id="100", grade=3, score=5.0, summary="s", reason="r", surfacing_query="(^ a*)"),
     ])
     return SearcherResult(ranked_list=rl, events=[])
 
@@ -120,13 +120,13 @@ def test_outputs_plug_into_write_run(tmp_path):
 
     got_intents, outcomes, run_error = orch.run_question("Q?")
     out = tmp_path / "run"
-    write_run(out, got_intents, outcomes, docno_map=None, run_error=run_error)
+    write_run(out, got_intents, outcomes, run_error=run_error)
 
     assert (out / "intent-00.json").exists()
     assert not (out / "intent-01.json").exists()  # the failed intent has no ranked list
     assert "intent 01 (bad): RuntimeError: boom" in (out / "errors.log").read_text()
     rl = json.loads((out / "intent-00.json").read_text())
-    assert rl["entries"][0]["cp"] == 100  # no docno map -> raw cp persisted
+    assert rl["entries"][0]["docno"] == "100"  # id is the docno; written under `docno`
 
 
 def test_analysis_failure_plugs_into_write_run(tmp_path):

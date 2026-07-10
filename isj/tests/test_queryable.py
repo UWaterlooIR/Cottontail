@@ -1,7 +1,13 @@
 import pytest
 
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.queryable import CoverQuery, MultiTextProgram, Queryable, TieredQuery
+from isj_agent.protocol.queryable import (
+    CoverQuery,
+    LucindriQuery,
+    MultiTextProgram,
+    Queryable,
+    TieredQuery,
+)
 from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
 
 
@@ -38,13 +44,13 @@ def test_cover_execute_forwards_args_and_returns_engine_response():
     resp = SearchResponse(
         total_matches=3, unjudged_matches=3,
         atom_counts=[AtomCount(term="a", count=5)],
-        results=[Hit(rank=1, score=1.0, cp=10, summary="s")],
+        results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
     out = CoverQuery("(^ a b)").execute(eng, top_k=7, exclude=[], window=50)
     # execute() passes (gcl, top_k, exclude, window) straight through to engine.search
     assert eng.calls[0] == {"query": "(^ a b)", "top_k": 7, "exclude": [], "window": 50}
-    assert out.total_matches == 3 and out.results[0].cp == 10
+    assert out.total_matches == 3 and out.results[0].id == "10"
 
 
 # --- TieredQuery (TASK-19) -------------------------------------------------
@@ -95,14 +101,14 @@ def test_tiered_execute_forwards_tiers_to_engine_tiered_search():
     resp = SearchResponse(
         total_matches=4, unjudged_matches=4,
         atom_counts=[AtomCount(term="a", count=5)],
-        results=[Hit(rank=1, score=2.0, cp=11, summary="s")],
+        results=[Hit(rank=1, score=2.0, id="11", summary="s")],
     )
     eng = FakeEngine([resp])
-    out = TieredQuery(("(^ a b)", "(^ a)")).execute(eng, top_k=7, exclude=[1], window=50)
+    out = TieredQuery(("(^ a b)", "(^ a)")).execute(eng, top_k=7, exclude=["1"], window=50)
     # execute() forwards the tiers (as a list) + paging args to engine.tiered_search;
     # the recorded call carries a `tiers` key (not `query`), proving the tiered path.
-    assert eng.calls[0] == {"tiers": ["(^ a b)", "(^ a)"], "top_k": 7, "exclude": [1], "window": 50}
-    assert out.total_matches == 4 and out.results[0].cp == 11
+    assert eng.calls[0] == {"tiers": ["(^ a b)", "(^ a)"], "top_k": 7, "exclude": ["1"], "window": 50}
+    assert out.total_matches == 4 and out.results[0].id == "11"
 
 
 def test_tiered_single_tier_execute_still_uses_tiered_search():
@@ -157,9 +163,48 @@ def test_multitext_execute_forwards_program_to_engine_multitext_search():
     resp = SearchResponse(
         total_matches=2, unjudged_matches=2,
         atom_counts=[AtomCount(term="bear*", count=9)],
-        results=[Hit(rank=1, score=1.0, cp=10, summary="s")],
+        results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
-    out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=[3], window=60)
-    assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": [3], "window": 60}
-    assert out.results[0].cp == 10
+    out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=["3"], window=60)
+    assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": ["3"], "window": 60}
+    assert out.results[0].id == "10"
+
+
+# --- LucindriQuery (TASK-33) -----------------------------------------------
+
+def test_lucindri_is_a_queryable_with_submit_query_tool():
+    assert issubclass(LucindriQuery, Queryable)
+    sch = LucindriQuery.tool_schema()
+    assert sch["function"]["name"] == "submit_query"  # NEVER "indri"
+    assert sch["function"]["parameters"]["required"] == ["query"]
+
+
+def test_lucindri_from_tool_arguments_validates():
+    assert LucindriQuery.from_tool_arguments({"query": '#combine("a")'}).query == '#combine("a")'
+    with pytest.raises(ValueError):
+        LucindriQuery.from_tool_arguments({"query": "   "})
+    with pytest.raises(KeyError):
+        LucindriQuery.from_tool_arguments({})
+
+
+def test_lucindri_execute_forwards_query_to_engine_search():
+    # A Lucindri response omits the optional counts (Q3) and carries negative scores.
+    resp = SearchResponse(results=[Hit(rank=1, score=-4.5, id="shard_0_1", summary="s")])
+    eng = FakeEngine([resp])
+    out = LucindriQuery('#combine("weather")').execute(eng, top_k=5, exclude=["x"], window=75)
+    assert eng.calls[0] == {"query": '#combine("weather")', "top_k": 5, "exclude": ["x"], "window": 75}
+    assert out.results[0].id == "shard_0_1" and out.results[0].score == -4.5
+    assert out.total_matches is None and out.atom_counts is None  # omitted, not faked
+
+
+def test_lucindri_trace_and_string_forms():
+    q = LucindriQuery('#combine("a" "b")')
+    assert q.trace_arguments() == {"query": '#combine("a" "b")'}
+    assert q.query_string() == '#combine("a" "b")'
+
+
+def test_lucindri_searcher_wires_the_query_type_and_bundled_prompt():
+    from isj_agent.agents.lucindri_searcher import LucindriSearcher
+    assert LucindriSearcher.query_types == [LucindriQuery]
+    assert LucindriSearcher.system_prompt  # bundled lucindri_searcher.md is non-empty

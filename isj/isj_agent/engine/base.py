@@ -25,19 +25,22 @@ class EngineError(Exception):
 
 @runtime_checkable
 class SearchEngine(Protocol):
-    """The typed boundary between the Searcher and an engine (cp-native)."""
+    """The typed boundary between the Searcher and an engine (docno on the wire).
+
+    `id`/`exclude` are opaque str docnos; the engine owns any translation to its
+    native id space (e.g. the Cottontail engine maps docno<->cp internally)."""
 
     def search(
         self,
         query: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         """Run a cover query; return the enriched cover_search response.
 
-        `exclude` is the judged set as cp integers (the engine is stateless; the
+        `exclude` is the per-query consumed set as docno strings (client-side paging; the
         agent passes its whole judged set each call). MAY raise EngineError on any
         engine-side failure (e.g. an invalid query the engine rejects).
         """
@@ -48,7 +51,7 @@ class SearchEngine(Protocol):
         tiers: Sequence[str],
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         """Run an ordered cascade of GCL cover tiers (tiered_query_search).
@@ -56,7 +59,7 @@ class SearchEngine(Protocol):
         The cascade itself -- per-tier ranking, cross-tier de-duplication, per-tier
         summaries, the union `atom_counts`, and the exact distinct match count -- runs
         server-side; this returns the merged, cover_search-shaped `SearchResponse`.
-        `exclude` is the judged/consumed set as cp integers (the engine is stateless).
+        `exclude` is the per-query consumed set as docno strings (the engine is stateless).
         MAY raise EngineError on any engine-side failure -- notably a malformed tier,
         which fails the WHOLE request (naming the offending tier).
         """
@@ -67,7 +70,7 @@ class SearchEngine(Protocol):
         program: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         """Run a MultiText DSL program (multitext_tiered_search, TASK-22).
@@ -80,8 +83,8 @@ class SearchEngine(Protocol):
         """
         ...
 
-    def read(self, cp: int) -> str | None:
-        """Return the full document body for `cp`, or None if cp is unknown.
+    def read(self, id: str) -> str | None:
+        """Return the full document body for docno `id`, or None if it is unknown.
 
         Intentionally part of the engine contract for FUTURE use -- a possible
         agent read-tool and the downstream RAG grounding / Writer step -- even

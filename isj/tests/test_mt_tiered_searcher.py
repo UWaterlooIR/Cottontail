@@ -110,13 +110,13 @@ def test_real_searcher_runs_end_to_end_through_controller():
     resp = SearchResponse(
         total_matches=2, unjudged_matches=2,
         atom_counts=[AtomCount(term="bear*", count=9)],
-        results=[Hit(rank=1, score=3.0, cp=10, summary="s10"),
-                 Hit(rank=2, score=2.0, cp=20, summary="s20")],
+        results=[Hit(rank=1, score=3.0, id="10", summary="s10"),
+                 Hit(rank=2, score=2.0, id="20", summary="s20")],
     )
-    engine = FakeEngine([resp], {10: "body-10", 20: "body-20"})
+    engine = FakeEngine([resp], {"10": "body-10", "20": "body-20"})
     ctl = Controller(searcher, _StubJudger(), engine, nonrelevant_streak=9, max_queries=1)
     result = ctl.run("black bear safety", intent_budget=100)
-    assert {e.cp for e in result.ranked_list.entries} == {10, 20}
+    assert {e.id for e in result.ranked_list.entries} == {"10", "20"}
     # the controller drove multitext_search (its call carries a `program` key)
     assert engine.calls[0]["program"] == PROGRAM
     assert result.ranked_list.entries[0].surfacing_query == PROGRAM
@@ -134,8 +134,8 @@ def test_compile_error_bounces_diagnostics_to_the_next_turn():
     searcher = MultiTextTieredSearcher(client, "stub-model")
     ok = SearchResponse(total_matches=1, unjudged_matches=1,
                         atom_counts=[AtomCount(term="bear*", count=9)],
-                        results=[Hit(rank=1, score=1.0, cp=10, summary="s10")])
-    engine = FakeEngine([EngineError(diagnostics), ok], {10: "body-10"})
+                        results=[Hit(rank=1, score=1.0, id="10", summary="s10")])
+    engine = FakeEngine([EngineError(diagnostics), ok], {"10": "body-10"})
     ctl = Controller(searcher, _StubJudger(), engine, nonrelevant_streak=9, max_queries=2)
     result = ctl.run("black bear safety", intent_budget=100)
     # the bounce surfaced the diagnostics as the tool result of turn 1
@@ -148,4 +148,4 @@ def test_compile_error_bounces_diagnostics_to_the_next_turn():
             return diagnostics in content
     assert any(carries_diagnostics(m["content"]) for m in tool_results)
     # and the run recovered: turn 2's program produced the judged doc
-    assert {e.cp for e in result.ranked_list.entries} == {10}
+    assert {e.id for e in result.ranked_list.entries} == {"10"}

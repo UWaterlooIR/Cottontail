@@ -1,0 +1,208 @@
+LucindriSearcher query scout — RAG25 dev topics — arm: v4 (proximity-first)
+model: gpt.oss.120b | reasoning: medium | temperature: 0 | tool_choice: required
+prompt: lucindri_prompt_v4.txt | topics: rag25-topics-dev.tsv | date: 2026-07-08
+
+
+==========================================================================================
+### TOPIC 14: I'm interested in sports' societal impact, particularly concerning athlete compensation, inclusion, cultural influence, and the business side. I also want to understand how evolving equipment, training, and mindset shape both athletes and the popularity of different sports.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1238/367
+  QUERY:
+    #uw80( #syn("sports" "sport") #syn("athlete" "player") #syn("compensation" "salary" "pay" "wage") #syn("business" "economics" "revenue" "commercial") )
+  SHAPE: root=#uw80 combine=0 weight=0 uw=1 phrase#1=0 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 31: I'm seeking to understand the environmental and health impacts of e-waste and other waste, along with how proper recycling benefits sustainability and local economies. Could you explain the risks of improper waste management, recent recycling innovations, and practical steps individuals and businesses can take for responsible waste handling?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1247/418
+  QUERY:
+    #uw50( #syn(#1("e-waste") "electronic" "waste") #syn("environmental" "health" "human") #syn("impact" "risk" "effect" "pollution") )
+  SHAPE: root=#uw50 combine=0 weight=0 uw=1 phrase#1=1 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 37: I'm hoping to gain a deeper understanding of how family structures, childhood experiences, and parenting styles influence children's development and well-being. Could you explain the effects of divorce, trauma, adoption, and having single or working parents, along with strategies for building strong family foundations and overcoming common challenges?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1249/420
+  QUERY:
+    #uw100( #syn(#1("family structure") "family" "structure") #syn(#1("parenting style") "parenting" "style") #syn("divorce" "trauma" "adoption" #1("single parent") #1("working parent")) #syn(#1("child development") "development" "well-being" "outcome") )
+  SHAPE: root=#uw100 combine=0 weight=0 uw=1 phrase#1=5 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 58: I'm interested in nuclear energy's pros, cons, safety, and accident risks, like Chernobyl, plus its uses and climate change impact. I also want to compare it to other energy forms like fusion and learn about sources such as bison energy and Peninsula Clean Energy.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1247/278
+  QUERY:
+    #uw60( #syn( #1("nuclear energy") "nuclear" "energy") #syn("pros" "benefits" "advantages" "cons" "drawbacks" "disadvantages") #syn("safety" "risk" "accident" "Chernobyl") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 72: I want to understand why deforestation is such a major problem. Specifically, how does it impact the environment, climate, animals, and humans? Could you also explain its main causes, effects on rainforests like the Amazon, and what actions can prevent it?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1245/316
+  QUERY:
+    #uw60( #1("deforestation") #syn("environment" "climate" "biodiversity" "animals" "human" "people" "society") #syn("impact" "effect" "consequence" "result") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=2 band=0 scoreif=0
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 84: I'm looking for detailed information about vaccines, including their safety, the causes of public hesitancy—especially around COVID-19—and the different types of human vaccines and their recommended schedules. I'm also interested in how vaccination affects global health, historical public health challenges, and recommendations for animal vaccinations.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1250/491
+  QUERY:
+    #uw60( #syn("vaccine" #1("vaccine") #1("vaccination")) #syn("safety" "adverse" "side effect" "risk") #syn("hesitancy" "reluctance" "refusal" "skepticism" "misinformation") #syn("COVID-19" "coronavirus" "SARS-CoV-2") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=2 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 144: I'm seeking a comprehensive understanding of financial institutions, specifically why banks like Silicon Valley Bank fail and the hidden risks investors face. Could you detail how banks and credit unions compare in terms of safety, trust, services, and regulation, while also outlining their roles in economic development?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1246/361
+  QUERY:
+    #uw60( #syn( #1("Silicon Valley Bank") ) #syn("fail" "collapse" "bankruptcy" "default") #syn("risk" "exposure" "hidden risk" "investor") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 161: I want to understand the main arguments surrounding abortion and why people hold such different views on it. I'm also curious how laws, beliefs like the Rapture or political ideologies, and historical changes have shaped abortion rights. Finally, I'd like to learn about current options, such as the abortion pill, and what women's rights groups are prioritizing today.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1261/470
+  QUERY:
+    #uw60( #syn("abortion") #syn("argument" "debate" "controversy" "ethics" "morality" "belief") #syn("pro-choice" "prolife" "pro-life" "anti-abortion" "supporters" "opponents") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=0 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 200: I want to deeply understand the Holocaust: what it was, why and how it transpired, who was responsible, and its profound historical and societal impact, particularly on European Jewry. I'm also curious about its conclusion, lasting effects, and how it aligns with other destructive historical events like Sodom and Gomorrah.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1256/411
+  QUERY:
+    #uw80( #syn("Holocaust" "Shoah") #syn("Nazi" "Germany" "Hitler") #syn("cause" "reason" "motivation") #syn("responsible" "perpetrator" "accountability") #syn("impact" "consequence" "effect") #1("European Jewry") )
+  SHAPE: root=#uw80 combine=0 weight=0 uw=1 phrase#1=1 syn=5 band=0 scoreif=0
+  SYN:   in-window(ok)=5  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 213: I'm looking into the Korean War to learn about its origins, how it ended, and why the US got involved, particularly in the context of Cold War strategy. I also want to understand its effects on US politics, any major errors that occurred, and how different presidents perceived the conflict.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1249/332
+  QUERY:
+    #uw60( #syn(#1("Korean War") "Korean" "War") #syn("origin" "cause" "trigger" "background") #syn("United States" "US" "America") #syn("Cold War" "containment" "strategy") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 219: I'm interested in understanding technology's societal impact, exploring its positive and negative effects on daily life, government, and business sectors like telehealth. Could you also explain the role of technical societies and why rationing devices might be needed with technological advancements?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1241/267
+  QUERY:
+    #uw60( #syn("technology" "tech") #syn(#1("societal impact") "social" "impact") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=2 band=0 scoreif=0
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 224: I want to understand why people immigrate or become refugees, the challenges they face, and how laws and different groups shape immigration policies. Additionally, I'm interested in how various countries and religions view immigrants, and what options migrant workers have to improve their lives.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1243/498
+  QUERY:
+    #uw60( #syn("immigrate" "migration" "refugee" "asylum") #syn("reason" "cause" "motivation" #1("push factor") #1("pull factor")) #syn("challenge" "difficulty" "obstacle" "hardship" "barrier") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=2 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 225: I'm exploring how exposure to violent video games and gory content affects human aggression, desensitization, and addiction. I'm also interested in the broader causes of aggression in both children and adults, the positive sides of gaming, and the historical background of these media trends.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1246/356
+  QUERY:
+    #uw50( #syn( #1("violent video game") "violent" "video" "game" ) #syn( "aggression" "aggressive" "aggressive behavior" ) #syn( "desensitization" "desensitise" "numbness" ) #syn( "addiction" "addictive" ) )
+  SHAPE: root=#uw50 combine=0 weight=0 uw=1 phrase#1=1 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 233: I'm interested in learning how social media affects mental health, particularly among teenagers. I want to know about both its positive and negative impacts, and understand why it might contribute to depression.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1228/295
+  QUERY:
+    #uw60( #syn( #1("social media") "social" "media") #syn( #1("mental health") "mental" "psychological" "wellbeing") #syn("teenager" "adolescent" "youth") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=2 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 273: I want to understand why Africa, despite its rich resources, is often seen as underdeveloped or poor. I'm particularly interested in how factors like resource distribution, historical events, and economic changes in specific countries contribute to this perception. Additionally, I'd like basic facts such as Morocco's location, Cameroon's most important resource, and how many continents could fit inside Africa.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1266/597
+  QUERY:
+    #uw100( #syn(#1("Africa")) #syn("underdeveloped" "poor" "development lag" "poverty") #syn("resource" "natural resource" "mineral" "oil" "gas" "diamond") #syn("distribution" "allocation" "inequality") #syn("colonial" "colonisation" "history" "historical" "post-colonial") #syn("economic" "economy" "growth" "change" "reform") #syn("perception" "view" "image") )
+  SHAPE: root=#uw100 combine=0 weight=0 uw=1 phrase#1=1 syn=7 band=0 scoreif=0
+  SYN:   in-window(ok)=7  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 300: I'm interested in learning about effective strategies to prevent and reduce global warming and climate change, including specific actions that can help regions like Antarctica. I’d also like to know what global measures can be taken and how the economic costs of addressing global warming compare to just dealing with its impacts.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1248/247
+  QUERY:
+    #uw50( #syn(#1("global warming") #1("climate change")) #syn("mitigation" "reduce" "prevent" "strategy" "approach") )
+  SHAPE: root=#uw50 combine=0 weight=0 uw=1 phrase#1=2 syn=2 band=0 scoreif=0
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 407: I'm curious why housing and rent prices have soared, particularly in places like Dubai, and what broader factors contribute to the high cost of living. Furthermore, how have policies like allowing REITs to buy single-family homes and public housing demolition affected the housing market and people's renting or buying choices?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1250/311
+  QUERY:
+    #uw60( #syn("housing" "home" "real" "estate") #syn("price" "cost" "rent" "rental") #syn("soar" "increase" "spike" "rise") #1("Dubai") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=1 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 477: I'm trying to understand the concept of race: how it's defined, debated as a social construct, and viewed differently in the U.S. versus Brazil. I also want to learn what modern science says, why Critical Race Theory faces objections, and how racial ideas affect college admissions and social outcomes.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1250/277
+  QUERY:
+    #uw80( #syn("race") #syn(#1("social construct") "definition") #syn(#1("United States") "U.S." "America") #syn(#1("Brazil")) )
+  SHAPE: root=#uw80 combine=0 weight=0 uw=1 phrase#1=3 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 499: I'm hoping to understand the arguments for and against legalizing euthanasia, including how it differs from physician-assisted suicide. I'm also interested in how cultural values and Western countries' perspectives influence these debates, and the moral justifications from both sides.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1240/727
+  QUERY:
+    #uw80( #syn( #1("euthanasia") #1("voluntary euthanasia") #1("active euthanasia") "euthanasia" ) #syn( "legal" "legislation" "legalization" "law" "decriminalize" ) #syn( #1("physician assisted suicide") #1("physician-assisted suicide") #1("assisted dying") "suicide" ) #syn( "argument" "justification" "reason" "objection" "criticism" "support" "pro" "con" "ethical" "moral" ) #syn( "culture" "cultural" "values" "Western" "Europe" "USA" "United Kingdom" "Canada" "Australia" ) )
+  SHAPE: root=#uw80 combine=0 weight=0 uw=1 phrase#1=6 syn=5 band=0 scoreif=0
+  SYN:   in-window(ok)=5  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 515: I'm interested in learning why cancer rates are rising, particularly among young people, and whether factors like cell phone use are connected. I’d also like up-to-date information on cancer mortality rates, including annual breast cancer deaths in the UK and the current life expectancy for lung cancer.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1247/450
+  QUERY:
+    #uw80( #syn("cancer" "malignancy") #syn("incidence" "rate" "prevalence" "increase") #syn("young" "youth" "adolescent" "teen") #syn(#1("cell phone") #1("mobile phone") "smartphone" "radiation") )
+  SHAPE: root=#uw80 combine=0 weight=0 uw=1 phrase#1=2 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 707: I'm trying to understand the health risks and potential dangers of various chemicals and substances, such as those found in antiperspirants, sorbitol, and organophosphate poisoning. I'd also like to know how integrating different actions at the operational level might impact health outcomes.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1246/390
+  QUERY:
+    #uw60( #syn(#1("antiperspirant") "antiperspirant") #syn(#1("sorbitol") "sorbitol") #syn(#1("organophosphate poisoning") "organophosphate" "poisoning") #syn("health" "risk" "danger" "toxicity" "adverse" "effect" "cancer" "irritation") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=3 syn=4 band=0 scoreif=0
+  SYN:   in-window(ok)=4  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 897: I'm trying to understand how alcohol use affects neighborhood quality of life, including genetic and gender factors in dependency. I also need to grasp the main causes, risks, and fatal consequences of alcohol and drug use, and their connection to broader community health issues.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1242/375
+  QUERY:
+    #uw60( #syn("alcohol" "drinking") #syn(#1("neighborhood") #1("community") "area") #syn(#1("quality of life") "wellbeing" "social impact") )
+  SHAPE: root=#uw60 combine=0 weight=0 uw=1 phrase#1=3 syn=3 band=0 scoreif=0
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+CLEAN queries:            22/22
+#syn in-window (ok):      79
+#syn as ranking operand:  0   <-- the anti-pattern; want 0
+filter-first (root=#scoreif): 0/22

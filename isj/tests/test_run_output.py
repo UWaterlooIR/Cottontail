@@ -2,38 +2,30 @@ import json
 
 import pytest
 
-from isj_agent.docno_map import DocnoMap
-from isj_agent.index import build_sqlite_map
 from isj_agent.protocol.intents import Intents
 from isj_agent.protocol.results import RankedEntry, RankedList, SearcherResult, TraceEvent
 from isj_agent.run_output import RunError, write_run
 
 
-def _docno_map(tmp_path, rows):
-    flat = tmp_path / "docno-cp.tsv"
-    flat.write_text("".join(f"{d}\t{cp}\n" for d, cp in rows), encoding="utf-8")
-    sqlite_path = tmp_path / "docno-cp.sqlite"
-    build_sqlite_map(flat, sqlite_path)
-    return DocnoMap(sqlite_path)
-
-
 def _result(intent):
+    # Docno on the wire (Option B): the id IS the docno; run_output does no mapping,
+    # it only renames the in-memory key `id` -> the on-disk key `docno`.
     rl = RankedList(intent=intent, entries=[
-        RankedEntry(rank=1, cp=100, grade=3, score=5.0, summary="s100", reason="r1", surfacing_query="(^ a*)"),
-        RankedEntry(rank=2, cp=200, grade=1, score=2.0, summary="s200", reason="r2", surfacing_query="(^ a*)"),
+        RankedEntry(rank=1, id="doc-A", grade=3, score=5.0, summary="s100", reason="r1", surfacing_query="(^ a*)"),
+        RankedEntry(rank=2, id="doc-B", grade=1, score=2.0, summary="s200", reason="r2", surfacing_query="(^ a*)"),
     ])
     events = [
         TraceEvent(type="llm_call", ts=1.0, duration_ms=10.0, purpose="searcher_turn", turn=1, tool="search", tool_calls=1),
         TraceEvent(type="propose", ts=1.02, duration_ms=0.0, query="(^ a*)"),
         TraceEvent(type="search_request", ts=1.05, duration_ms=0.0, query="(^ a*)", top_k=10,
-                   window=75, exclude=[100, 200]),
+                   window=75, exclude=["doc-A", "doc-B"]),
         TraceEvent(type="search", ts=1.1, duration_ms=5.0, query="(^ a*)", total_matches=2,
                    unjudged_matches=2, returned=2, atom_counts=[{"term": "a*", "count": 9}],
-                   results=[{"rank": 1, "score": 5.0, "cp": 100, "summary": "s100"},
-                            {"rank": 2, "score": 2.0, "cp": 200, "summary": "s200"}]),
-        TraceEvent(type="judge", ts=1.3, duration_ms=0.0, cp=100, grade=3, reason="r1"),
-        TraceEvent(type="judge", ts=1.31, duration_ms=0.0, cp=200, grade=1, reason="r2"),
-        TraceEvent(type="revisit", ts=1.32, duration_ms=0.0, cp=100, grade=3),
+                   results=[{"rank": 1, "score": 5.0, "id": "doc-A", "summary": "s100"},
+                            {"rank": 2, "score": 2.0, "id": "doc-B", "summary": "s200"}]),
+        TraceEvent(type="judge", ts=1.3, duration_ms=0.0, id="doc-A", grade=3, reason="r1"),
+        TraceEvent(type="judge", ts=1.31, duration_ms=0.0, id="doc-B", grade=1, reason="r2"),
+        TraceEvent(type="revisit", ts=1.32, duration_ms=0.0, id="doc-A", grade=3),
         TraceEvent(type="stop", ts=1.4, duration_ms=0.0, reason="intent_budget"),
     ]
     return SearcherResult(ranked_list=rl, events=events)
@@ -43,11 +35,10 @@ def _events(out, nn):
     return [json.loads(l) for l in (out / f"intent-{nn}.trace.jsonl").read_text().splitlines()]
 
 
-def test_all_success_writes_layout_with_docnos(tmp_path):
+def test_all_success_writes_docnos(tmp_path):
     intents = Intents(question="Q?", interpretations=["interp zero", "interp one"])
-    dm = _docno_map(tmp_path, [("doc-A", 100), ("doc-B", 200)])
     out = tmp_path / "run"
-    write_run(out, intents, [_result("interp zero"), _result("interp one")], docno_map=dm)
+    write_run(out, intents, [_result("interp zero"), _result("interp one")])
 
     assert Intents.model_validate_json((out / "intents.json").read_text()) == intents
     assert not (out / "errors.log").exists()  # absence => whole run succeeded
@@ -55,21 +46,21 @@ def test_all_success_writes_layout_with_docnos(tmp_path):
     for nn in ("00", "01"):
         rl = json.loads((out / f"intent-{nn}.json").read_text())
         assert [e["docno"] for e in rl["entries"]] == ["doc-A", "doc-B"]  # docno on disk
-        assert all("cp" not in e for e in rl["entries"])  # never a raw cp
+        assert all("cp" not in e and "id" not in e for e in rl["entries"])  # id -> docno
         evs = _events(out, nn)
         assert [e["type"] for e in evs] == [
             "llm_call", "propose", "search_request", "search", "judge", "judge", "revisit", "stop"
         ]
         req = next(e for e in evs if e["type"] == "search_request")
-        assert req["exclude"] == ["doc-A", "doc-B"]  # the request's exclude cps -> docnos
+        assert req["exclude"] == ["doc-A", "doc-B"]  # exclude is already docnos
         search = next(e for e in evs if e["type"] == "search")
         assert [r["docno"] for r in search["results"]] == ["doc-A", "doc-B"]
-        assert all("cp" not in r for r in search["results"])
-        judges = [e for e in evs if e["type"] == "judge"]  # each per-doc judge: cp -> docno
+        assert all("cp" not in r and "id" not in r for r in search["results"])
+        judges = [e for e in evs if e["type"] == "judge"]
         assert [j["docno"] for j in judges] == ["doc-A", "doc-B"]
-        assert all("cp" not in j for j in judges)
+        assert all("cp" not in j and "id" not in j for j in judges)
         revisit = next(e for e in evs if e["type"] == "revisit")
-        assert revisit["docno"] == "doc-A" and "cp" not in revisit
+        assert revisit["docno"] == "doc-A" and "id" not in revisit and "cp" not in revisit
 
 
 def test_empty_trace_writes_empty_file(tmp_path):
@@ -135,16 +126,3 @@ def test_intents_none_writes_only_errors_log(tmp_path):
     write_run(out, None, [], run_error="analysis failed: boom")
     assert not (out / "intents.json").exists()
     assert "run-level error: analysis failed: boom" in (out / "errors.log").read_text()
-
-
-def test_docnoless_corpus_persists_cps(tmp_path):
-    intents = Intents(question="Q?", interpretations=["a"])
-    out = tmp_path / "run"
-    write_run(out, intents, [_result("a")], docno_map=None)
-    rl = json.loads((out / "intent-00.json").read_text())
-    assert [e["cp"] for e in rl["entries"]] == [100, 200]  # cps kept, no map
-    assert all("docno" not in e for e in rl["entries"])
-    search = next(e for e in _events(out, "00") if e["type"] == "search")
-    assert [r["cp"] for r in search["results"]] == [100, 200]
-    req = next(e for e in _events(out, "00") if e["type"] == "search_request")
-    assert req["exclude"] == [100, 200]  # request's exclude cps kept, no map

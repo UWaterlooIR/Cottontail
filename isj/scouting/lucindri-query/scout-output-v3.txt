@@ -1,0 +1,82 @@
+LucindriSearcher query-generation scout — arm: v3 (rev: proper-noun #1 rule)
+model: gpt.oss.120b | reasoning: medium | temperature: 0 | tool_choice: required
+prompt: lucindri_prompt_v3.txt | date: 2026-07-08
+
+
+==========================================================================================
+### TOPIC 401: What language and cultural differences impede the integration of foreign minorities in Germany?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1601/673
+  QUERY:
+    #weight( 0.6 #combine( "Germany" "integration" "minority" "immigrant" #1("foreign minorities") ) 0.4 #combine( "language" "cultural" "impede" "hinder" "obstacle" #1("language barrier") #1("language differences") #1("cultural differences") #1("cultural barrier") ) )
+  SHAPE: root=#weight combine=2 weight=1 uw=0 phrase#1=5 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 403: Find information on the effects of the dietary intakes of potassium, magnesium and fruits and vegetables as determinants of bone mineral density in elderly men and women thus preventing osteoporosis (bone decay).
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1623/574
+  QUERY:
+    #weight( 0.5 #combine( "potassium" "magnesium" #1("fruits and vegetables") #1("bone mineral density") "elderly" "osteoporosis" ) 0.5 #combine( "dietary" "intake" "determinant" "prevent" "men" "women" "bone" "decay" ) )
+  SHAPE: root=#weight combine=2 weight=1 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 416: What is the status of The Three Gorges Project?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1598/189
+  QUERY:
+    #combine( #1("Three Gorges Project") "status" "progress" "completion" "operational" "construction" "update" "current" "phase" "dam" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=1 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 419: What new uses have been developed for old automobile tires as a means of tire recycling?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1604/585
+  QUERY:
+    #weight( 0.5 #combine( "tire" "recycling" #1("old automobile tires") #1("tire recycling") ) 0.5 #combine( "new" "use" "application" "product" "innovative" "novel" "development" "rubber" "crumb" "mulch" "road" "construction" "asphalt" "pavement" "playground" "surfacing" "fuel" "energy" "art" "building" "material" "soil" "amendment" "geotechnical" "engineering" ) )
+  SHAPE: root=#weight combine=2 weight=1 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 426: Provide information on the use of dogs worldwide for law enforcement purposes.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1600/491
+  QUERY:
+    #weight( 0.6 #combine( #combine( "dog" "dogs" #1("police dog") #1("K9") #1("working dog") ) #combine( "law" "enforcement" #1("law enforcement") ) ) 0.4 #combine( #combine( "worldwide" "global" "countries" "nation" "international" ) #combine( "tasks" "detection" "search" "patrol" "explosive" "narcotics" "drug" "human" "trafficking" "crowd" "control" ) #combine( "training" "agency" "police" "military" "civilian" ) ) )
+  SHAPE: root=#weight combine=7 weight=1 uw=0 phrase#1=4 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 438: What countries are experiencing an increase in tourism?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1596/382
+  QUERY:
+    #weight( 0.6 #combine( "tourism" #1("tourism increase") #1("tourism growth") #1("tourism rise") ) 0.4 #combine( "country" "countries" "nation" "states" "region" "areas" "trend" "rising" "upward" "growth" ) )
+  SHAPE: root=#weight combine=2 weight=1 uw=0 phrase#1=3 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 448: Identify instances in which weather was a main or contributing factor in the loss of a ship at sea.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1607/437
+  QUERY:
+    #weight( 0.5 #combine( #combine( "ship" "boat" "vessel" "cargo" "tanker" "ferry" "sailboat" ) #combine( "sank" "sinking" "capsize" "capsized" "foundered" "wreck" "grounded" "lost" ) #combine( #1("ship loss") #1("maritime disaster") ) ) 0.5 #combine( #combine( "weather" "storm" "gale" "hurricane" "typhoon" "cyclone" "tempest" #1("rough seas") "high winds" ) #combine( "contributing" "cause" "factor" "reason" ) ) )
+  SHAPE: root=#weight combine=7 weight=1 uw=0 phrase#1=3 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 450: How significant a figure over the years was the late Jordanian King Hussein in furthering peace in the Middle East?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1610/346
+  QUERY:
+    #weight( 0.6 #combine( #combine( "Jordan" #1("King Hussein") ) #combine( "peace" "process" "Middle" "East" ) #combine( #1("Arab-Israeli") #1("peace talks") ) ) 0.4 #combine( #combine( "significant" "role" "impact" "contribution" "legacy" ) #combine( "years" "over" "time" "historical" "timeline" ) ) )
+  SHAPE: root=#weight combine=7 weight=1 uw=0 phrase#1=3 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+CLEAN queries:            8/8
+#syn in-window (ok):      0
+#syn as ranking operand:  0   <-- the anti-pattern; want 0
+filter-first (root=#scoreif): 0/8

@@ -1,0 +1,82 @@
+LucindriSearcher query scout — TREC-8 subset — arm: vDefault (proofread; #weight removed)
+model: gpt.oss.120b | reasoning: medium | temperature: 0 | tool_choice: required
+prompt: lucindri_prompt_vDefault.txt | topics: built-in TREC-8 | date: 2026-07-09
+
+
+==========================================================================================
+### TOPIC 401: What language and cultural differences impede the integration of foreign minorities in Germany?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1010/225
+  QUERY:
+    #combine( #1("foreign minorities") "Germany" "integration" #1("language differences") #1("cultural differences") "impede" "barriers" "immigrants" "integration challenges" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=3 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 403: Find information on the effects of the dietary intakes of potassium, magnesium and fruits and vegetables as determinants of bone mineral density in elderly men and women thus preventing osteoporosis (bone decay).
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1032/374
+  QUERY:
+    #combine( #1("bone mineral density") #1("dietary intake") "potassium" "magnesium" "fruit" "vegetable" "elderly" "older" "men" "women" "osteoporosis" "prevention" "bone" "density" "fruits" "vegetables" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 416: What is the status of The Three Gorges Project?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1007/183
+  QUERY:
+    #combine( #1("Three Gorges") #1("Three Gorges Dam") "project" "status" "progress" "completion" "update" "construction" "operation" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 419: What new uses have been developed for old automobile tires as a means of tire recycling?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1013/284
+  QUERY:
+    #combine( #1("old automobile tires") #1("tire recycling") "new" "uses" "applications" "upcycling" "rubber" "construction" "road" "playground" "fuel" "art" "soil" "amendment" "recycled" "tire" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 426: Provide information on the use of dogs worldwide for law enforcement purposes.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1009/254
+  QUERY:
+    #combine( #1("police dog") #1("K9 unit") "dog" "law enforcement" "canine" "police" "detection" "search" "rescue" "explosives" "drugs" "worldwide" "countries" "applications" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 438: What countries are experiencing an increase in tourism?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1005/246
+  QUERY:
+    #combine( #1("tourism growth") #1("tourism increase") "tourism" "countries" "rise" "visitor" "numbers" "statistics" "trend" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 448: Identify instances in which weather was a main or contributing factor in the loss of a ship at sea.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1016/303
+  QUERY:
+    #combine( #1("shipwreck") "ship" "lost" "sank" "foundered" "capsized" "weather" "storm" "hurricane" "cyclone" "typhoon" "gale" #1("rough seas") "cause" "attributed" "investigation" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=2 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 450: How significant a figure over the years was the late Jordanian King Hussein in furthering peace in the Middle East?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1019/403
+  QUERY:
+    #combine( #1("King Hussein") #1("Camp David") #1("Oslo Accords") "peace" "Middle" "East" "Arab-Israeli" "negotiations" "treaty" "process" "legacy" "impact" "role" "Jordan" "Israel" "Palestine" "diplomacy" )
+  SHAPE: root=#combine combine=1 weight=0 uw=0 phrase#1=3 syn=0 band=0 scoreif=0
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+CLEAN queries:            8/8
+#syn in-window (ok):      0
+#syn as ranking operand:  0   <-- the anti-pattern; want 0
+filter-first (root=#scoreif): 0/8

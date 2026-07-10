@@ -2,9 +2,14 @@
 
 Implements B1's `SearchEngine` Protocol against a running `cottontail-jsonl-server`
 (the C++ JSON server). The Searcher (B2) is transport-agnostic -- in tests it gets
-the scripted `FakeEngine`; in live use it gets this, wired by C3. cp-native
-(doc-6): `exclude` is a list of cp integers, results carry `cp`, `get_document`
-takes a `cp`.
+the scripted `FakeEngine`; in live use it gets this, wired by C3.
+
+Docno on the wire (Option B): the agent speaks DOCNO strings, but the C++ server
+speaks integer `cp`s. This engine is the sole cp<->docno boundary: it maps a hit's
+`cp` -> docno on the way out, and a docno -> `cp` on the exclude list and on `read`,
+using the burrow's read-only DocnoMap (memoized in-process so recurring docs and the
+exclude translation are ~free). `cp` never leaves this engine. A docno-less burrow
+(no map) degrades to the stringified cp as the id.
 
 Every failure -- a non-2xx response (carrying the server's message) or an httpx
 transport error (connection refused, timeout) -- is mapped to `EngineError`, so the
@@ -16,8 +21,9 @@ from collections.abc import Sequence
 
 import httpx
 
+from isj_agent.docno_map import DocnoMap
 from isj_agent.engine.base import EngineError
-from isj_agent.protocol.search import SearchResponse
+from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
 
 
 def _server_error(r: httpx.Response) -> str:
@@ -55,6 +61,7 @@ class HttpSearchEngine:
         timeout: float = DEFAULT_TIMEOUT_S,
         client: httpx.Client | None = None,
         transport: httpx.BaseTransport | None = None,
+        docno_map: DocnoMap | None = None,
     ):
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         # Tests inject either a ready `client` or a `transport` (e.g.
@@ -66,79 +73,134 @@ class HttpSearchEngine:
             timeout=httpx.Timeout(timeout, connect=self.CONNECT_TIMEOUT_S),
             transport=transport,
         )
+        self._map = docno_map
+        self._docno_of: dict[int, str] = {}  # cp -> docno memo
+        self._cp_of: dict[str, int] = {}     # docno -> cp memo
+
+    # -- cp <-> docno translation (the only place cp is visible) -----------------
+
+    def _docno(self, cp: int) -> str:
+        """cp -> docno (memoized). Unmapped cp / docno-less burrow -> str(cp)."""
+        d = self._docno_of.get(cp)
+        if d is None:
+            d = self._map.docno(cp) if self._map is not None else None
+            if d is None:
+                d = str(cp)
+            self._docno_of[cp] = d
+            self._cp_of.setdefault(d, cp)
+        return d
+
+    def _cp(self, docno: str) -> int | None:
+        """docno -> cp (memoized). None if the docno is unknown to the map."""
+        c = self._cp_of.get(docno)
+        if c is None:
+            c = self._map.cp(docno) if self._map is not None else None
+            if c is None and self._map is None:
+                # docno-less burrow: the id IS the stringified cp.
+                try:
+                    c = int(docno)
+                except ValueError:
+                    return None
+            if c is not None:
+                self._cp_of[docno] = c
+                self._docno_of.setdefault(c, docno)
+        return c
+
+    def _exclude_cps(self, exclude: Sequence[str]) -> list[int]:
+        """Translate the exclude docnos to cps for the server (drop any unknown)."""
+        out = []
+        for docno in exclude:
+            c = self._cp(docno)
+            if c is not None:
+                out.append(c)
+        return out
+
+    def _hydrate(self, raw: dict) -> SearchResponse:
+        """Build the agent-facing (docno-keyed) SearchResponse from the C++ server's
+        cp-keyed JSON: map every hit's cp -> docno; pass the diagnostics through."""
+        results = [
+            Hit(
+                rank=h["rank"],
+                score=h["score"],
+                id=self._docno(h["cp"]),
+                summary=h["summary"],
+            )
+            for h in raw.get("results", [])
+        ]
+        atoms = raw.get("atom_counts")
+        return SearchResponse(
+            total_matches=raw.get("total_matches"),
+            unjudged_matches=raw.get("unjudged_matches"),
+            atom_counts=[AtomCount(**a) for a in atoms] if atoms is not None else None,
+            results=results,
+        )
+
+    def _post(self, path: str, body: dict, what: str) -> dict:
+        try:
+            r = self._client.post(path, json=body)
+        except httpx.HTTPError as exc:
+            raise EngineError(f"{what} transport error: {exc}") from exc
+        if r.status_code != 200:
+            raise EngineError(_server_error(r))
+        return r.json()
+
+    # -- SearchEngine Protocol ---------------------------------------------------
 
     def search(
         self,
         query: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         body = {
             "query": query,
             "top_k": top_k,
-            "exclude": list(exclude),
+            "exclude": self._exclude_cps(exclude),
             "window": window,
         }
-        try:
-            r = self._client.post("/tools/cover_search", json=body)
-        except httpx.HTTPError as exc:
-            raise EngineError(f"cover_search transport error: {exc}") from exc
-        if r.status_code != 200:
-            raise EngineError(_server_error(r))
-        return SearchResponse.model_validate(r.json())
+        return self._hydrate(self._post("/tools/cover_search", body, "cover_search"))
 
     def tiered_search(
         self,
         tiers: Sequence[str],
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         body = {
             "tiers": list(tiers),
             "top_k": top_k,
-            "exclude": list(exclude),
+            "exclude": self._exclude_cps(exclude),
             "window": window,
         }
-        try:
-            r = self._client.post("/tools/tiered_query_search", json=body)
-        except httpx.HTTPError as exc:
-            raise EngineError(f"tiered_query_search transport error: {exc}") from exc
-        if r.status_code != 200:
-            raise EngineError(_server_error(r))
-        return SearchResponse.model_validate(r.json())
+        return self._hydrate(
+            self._post("/tools/tiered_query_search", body, "tiered_query_search")
+        )
 
     def multitext_search(
         self,
         program: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         body = {
             "program": program,
             "top_k": top_k,
-            "exclude": list(exclude),
+            "exclude": self._exclude_cps(exclude),
             "window": window,
         }
-        try:
-            r = self._client.post("/tools/multitext_tiered_search", json=body)
-        except httpx.HTTPError as exc:
-            raise EngineError(f"multitext_tiered_search transport error: {exc}") from exc
-        if r.status_code != 200:
-            raise EngineError(_server_error(r))
-        return SearchResponse.model_validate(r.json())
+        return self._hydrate(
+            self._post("/tools/multitext_tiered_search", body, "multitext_tiered_search")
+        )
 
-    def read(self, cp: int) -> str | None:
-        try:
-            r = self._client.post("/tools/get_document", json={"cp": cp})
-        except httpx.HTTPError as exc:
-            raise EngineError(f"get_document transport error: {exc}") from exc
-        if r.status_code != 200:
-            raise EngineError(_server_error(r))
-        d = r.json()
+    def read(self, id: str) -> str | None:
+        cp = self._cp(id)
+        if cp is None:
+            return None  # unknown docno
+        d = self._post("/tools/get_document", {"cp": cp}, "get_document")
         return d["text"] if d.get("found") else None

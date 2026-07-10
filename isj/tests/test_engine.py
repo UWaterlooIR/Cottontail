@@ -8,7 +8,7 @@ from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
 
 def _resp(cps, total=None, unjudged=None, atoms=None):
     results = [
-        Hit(rank=i, score=10.0 - i, cp=cp, summary=f"summary-{cp}")
+        Hit(rank=i, score=10.0 - i, id=str(cp), summary=f"summary-{cp}")
         for i, cp in enumerate(cps, 1)
     ]
     return SearchResponse(
@@ -45,17 +45,17 @@ def test_search_response_extra_forbid():
         SearchResponse.model_validate(bad)
 
 
-def test_hit_cp_is_int():
-    h = Hit(rank=1, score=1.0, cp=12345, summary="s")
-    assert h.cp == 12345 and isinstance(h.cp, int)
+def test_hit_id_is_str():
+    h = Hit(rank=1, score=1.0, id="12345", summary="s")
+    assert h.id == "12345" and isinstance(h.id, str)
 
 
 # --- FakeEngine ------------------------------------------------------------
 
 def test_batches_in_order_then_dry():
     eng = FakeEngine([_resp([1, 2]), _resp([3])])
-    assert [h.cp for h in eng.search("q1").results] == [1, 2]
-    assert [h.cp for h in eng.search("q2").results] == [3]
+    assert [h.id for h in eng.search("q1").results] == ["1", "2"]
+    assert [h.id for h in eng.search("q2").results] == ["3"]
     dry = eng.search("q3")
     assert dry.results == [] and dry.total_matches == 0 and dry.unjudged_matches == 0
 
@@ -70,8 +70,8 @@ def test_scripted_engine_error_raises_and_records():
 
 def test_exclude_drops_decrements_and_reranks():
     eng = FakeEngine([_resp([10, 20, 30], total=3, unjudged=3)])
-    resp = eng.search("q", exclude=[20])
-    assert [h.cp for h in resp.results] == [10, 30]
+    resp = eng.search("q", exclude=["20"])
+    assert [h.id for h in resp.results] == ["10", "30"]
     assert [h.rank for h in resp.results] == [1, 2]  # re-ranked 1..N
     assert resp.unjudged_matches == 2  # decremented by 1 removed
     assert resp.total_matches == 3  # corpus breadth unchanged
@@ -79,19 +79,19 @@ def test_exclude_drops_decrements_and_reranks():
 
 def test_records_each_call_args():
     eng = FakeEngine([_resp([1])])
-    eng.search("blackbear", top_k=7, exclude=[1, 2], window=50)
+    eng.search("blackbear", top_k=7, exclude=["1", "2"], window=50)
     assert eng.calls[-1] == {
         "query": "blackbear",
         "top_k": 7,
-        "exclude": [1, 2],
+        "exclude": ["1", "2"],
         "window": 50,
     }
 
 
 def test_read_returns_text_or_none():
-    eng = FakeEngine([], docs={42: "the body"})
-    assert eng.read(42) == "the body"
-    assert eng.read(99) is None
+    eng = FakeEngine([], docs={"42": "the body"})
+    assert eng.read("42") == "the body"
+    assert eng.read("99") is None
 
 
 # --- Protocol conformance --------------------------------------------------

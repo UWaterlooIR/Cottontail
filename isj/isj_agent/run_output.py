@@ -12,10 +12,10 @@ One directory per run (one question)::
       errors.log              PRESENT ONLY IF SOMETHING FAILED -- its absence means the
                               whole run succeeded.
 
-cp-native boundary (doc-6 / TASK-6.3): results are `cp` in memory but **docno on disk**.
-This writer rewrites every persisted `cp` to its `docno` via the read-only DocnoMap --
-in the RankedList AND in the trace events -- so the saved files are portable. A
-docno-less corpus (no map) persists cps.
+Docno on the wire (Option B): the agent's id is already the docno for every engine
+(the engine translated it at its boundary), so this writer does NO id resolution --
+no DocnoMap, no lookup. It only renames the in-memory key `id` -> the portable
+external key `docno` on disk (in the RankedList AND the trace events).
 
 PURE filesystem: no network, no LLM, no Searcher logic, and no error CATCHING -- C3
 runs the pipeline, catches the errors, and passes them in as RunError outcomes / a
@@ -25,12 +25,11 @@ run-level error. C2 only persists.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from pathlib import Path
 
 from pydantic import BaseModel
 
-from isj_agent.docno_map import DocnoMap
 from isj_agent.protocol.intents import Intents
 from isj_agent.protocol.results import SearcherResult
 
@@ -50,7 +49,6 @@ def write_run(
     intents: Intents | None,
     outcomes: Sequence[Outcome],
     *,
-    docno_map: DocnoMap | None = None,
     run_error: str | None = None,
     overwrite: bool = False,
 ) -> None:
@@ -78,17 +76,6 @@ def write_run(
     ):
         p.unlink(missing_ok=True)
 
-    rename = docno_map is not None
-    cache: dict[int, int | str] = {}
-
-    def resolve(cp: int) -> int | str:
-        if docno_map is None:
-            return cp
-        if cp not in cache:
-            d = docno_map.docno(cp)
-            cache[cp] = d if d is not None else cp  # unmapped cp -> keep the cp
-        return cache[cp]
-
     if intents is not None:
         (out_dir / "intents.json").write_text(
             intents.model_dump_json(indent=2), encoding="utf-8"
@@ -100,13 +87,12 @@ def write_run(
             interp = intents.interpretations[i] if intents is not None else "?"
             errors.append(f"intent {i:02d} ({interp}): {outcome.message}")
             continue
-        rl = _ranked_list_dict(outcome.ranked_list, resolve, rename)
+        rl = _ranked_list_dict(outcome.ranked_list)
         (out_dir / f"intent-{i:02d}.json").write_text(
             json.dumps(rl, indent=2, ensure_ascii=False), encoding="utf-8"
         )
         lines = [
-            json.dumps(_event_dict(ev, resolve, rename), ensure_ascii=False)
-            for ev in outcome.events
+            json.dumps(_event_dict(ev), ensure_ascii=False) for ev in outcome.events
         ]
         (out_dir / f"intent-{i:02d}.trace.jsonl").write_text(
             "".join(line + "\n" for line in lines), encoding="utf-8"
@@ -124,39 +110,27 @@ def write_run(
         (out_dir / "errors.log").write_text("\n".join(errors) + "\n", encoding="utf-8")
 
 
-_Resolve = Callable[[int], "int | str"]
+def _rename_id(d: dict) -> None:
+    """Rename the in-memory scalar `id` to the portable on-disk key `docno`."""
+    d["docno"] = d.pop("id")
 
 
-def _rewrite_cp(d: dict, resolve: _Resolve, rename: bool) -> None:
-    """Rewrite a dict's scalar `cp` in place; rename the key to `docno` iff rename."""
-    cp = d.pop("cp")
-    if rename:
-        d["docno"] = resolve(cp)
-    else:
-        d["cp"] = resolve(cp)
-
-
-def _ranked_list_dict(ranked_list, resolve: _Resolve, rename: bool) -> dict:
+def _ranked_list_dict(ranked_list) -> dict:
     d = ranked_list.model_dump()
     for entry in d["entries"]:
-        _rewrite_cp(entry, resolve, rename)
+        _rename_id(entry)
     return d
 
 
-def _event_dict(event, resolve: _Resolve, rename: bool) -> dict:
+def _event_dict(event) -> dict:
     d = event.model_dump()
     t = d.get("type")
-    if t == "search_request":  # the request, logged going out: an exclude cp-list
-        if "exclude" in d:
-            d["exclude"] = [resolve(cp) for cp in d["exclude"]]
-    elif t == "search":  # the response: every returned hit carries a cp
-        if "exclude" in d:
-            d["exclude"] = [resolve(cp) for cp in d["exclude"]]
+    # `exclude` lists (search_request / search) are already docnos -> left as-is.
+    if t == "search":  # the response: every returned hit carries an id
         for hit in d.get("results", []):
-            _rewrite_cp(hit, resolve, rename)
-    elif t in ("judge", "revisit"):  # a per-doc verdict / re-encounter: a single cp
-        _rewrite_cp(d, resolve, rename)
-    # llm_call.request (the verbatim messages -- for judge calls, the full document),
-    # propose/list_exhausted/bounce/stop/error carry no portable cp field and are left
-    # as-is. Only the structured fields above are docno-rewritten.
+            _rename_id(hit)
+    elif t in ("judge", "revisit", "judge_failed"):  # a per-doc event: a single id
+        _rename_id(d)
+    # llm_call.request, propose/list_exhausted/bounce/stop/error carry no id field
+    # and are left as-is. Only the structured id fields above are renamed.
     return d

@@ -1,8 +1,32 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from isj_agent.agents.searcher import ProposeResult, Searcher
 from isj_agent.protocol.queryable import CoverQuery
+
+
+def _stub():
+    return StubClient(SimpleNamespace(content="", tool_calls=[_tool_call("(^ a)")]))
+
+
+def test_prompt_override_replaces_the_bundled_system_prompt(tmp_path):
+    p = tmp_path / "custom.md"
+    p.write_text("CUSTOM DIRECTED PROMPT", encoding="utf-8")
+    s = Searcher(_stub(), "stub-model", prompt=str(p))
+    assert s.system_prompt == "CUSTOM DIRECTED PROMPT"
+    assert s.system_prompt != Searcher.system_prompt  # differs from the bundled default
+
+
+def test_prompt_none_keeps_the_bundled_default():
+    s = Searcher(_stub(), "stub-model")
+    assert s.system_prompt == Searcher.system_prompt  # the class's bundled searcher.md
+
+
+def test_missing_prompt_file_fails_loud():
+    with pytest.raises(FileNotFoundError):
+        Searcher(_stub(), "stub-model", prompt="/no/such/prompt/file.md")
 
 
 # --- a stub OpenAI client returning one scripted assistant message ---------

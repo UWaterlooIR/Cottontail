@@ -1,0 +1,97 @@
+LucindriSearcher query-generation scout — arm: v2
+model: gpt.oss.120b | reasoning: medium | temperature: 0 | tool_choice: required
+prompt: lucindri_prompt_v2.txt | date: 2026-07-08
+
+
+==========================================================================================
+### TOPIC 401: What language and cultural differences impede the integration of foreign minorities in Germany?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1919/1543
+  QUERY:
+    #scoreif(#band("Germany" "integration")
+       #combine(
+          #combine("Germany" "German")
+          #combine("immigrant" "migrant" "refugee" "minority" "ethnic" "foreign" "non‑German")
+          #combine("integration" "assimilation" "inclusion")
+          #combine("language" "linguistic" "difference" "barrier" "obstacle" "challenge")
+          #combine("cultural" "culture" "difference" "barrier" "clash" "challenge")
+          #uw12(#combine("language" "linguistic") #combine("cultural" "culture") #combine("integration" "assimilation"))
+       )
+    )
+  SHAPE: root=#scoreif combine=9 weight=0 uw=1 phrase#1=0 syn=0 band=1 scoreif=1
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 403: Find information on the effects of the dietary intakes of potassium, magnesium and fruits and vegetables as determinants of bone mineral density in elderly men and women thus preventing osteoporosis (bone decay).
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1941/966
+  QUERY:
+    #scoreif(#band("osteoporosis" #1("bone mineral density") "elderly") #combine(#combine("osteoporosis" #1("bone mineral density") "bone" "density") #combine("elderly" "older" "senior" "aged") #combine("men" "male" "women" "female") #combine("diet" "dietary" "intake" "consumption" "nutrition") #combine("potassium" "magnesium" "fruit" "vegetable" "fruits" "vegetables") #uw12(#syn("potassium" "magnesium" "fruit" "vegetable" "fruits" "vegetables") #syn("bone" "density" "mineral" "osteoporosis" "BMD")))
+  SHAPE: root=#scoreif combine=6 weight=0 uw=1 phrase#1=2 syn=2 band=1 scoreif=1
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=0
+  VALID: PROBLEMS: unbalanced parens (13 vs 12); more than one top-level expression
+
+==========================================================================================
+### TOPIC 416: What is the status of The Three Gorges Project?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1916/432
+  QUERY:
+    #scoreif(#1("three gorges") #combine(#combine("dam" "project") #combine("status" "progress" "completion" "operational" "open" "phase" "construction" "finished")))
+  SHAPE: root=#scoreif combine=3 weight=0 uw=0 phrase#1=1 syn=0 band=0 scoreif=1
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 419: What new uses have been developed for old automobile tires as a means of tire recycling?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1922/805
+  QUERY:
+    #scoreif(#band("tire" "recycle")
+             #combine(
+               #combine("tire" "tyre" "automobile" "car")
+               #combine("recycle" "recycling" "reuse" "repurpose" "upcycle" "reclaimed")
+               #combine("use" "application" "product" "material" "construction" "road" "asphalt" "fuel" "energy" "art" "playground" "mat" "erosion" "control" "soil" "building" "shoe")
+               #uw12(#syn("tire" "tyre") #syn("recycle" "reuse" "repurpose" "upcycle"))
+             ))
+  SHAPE: root=#scoreif combine=4 weight=0 uw=1 phrase#1=0 syn=2 band=1 scoreif=1
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 426: Provide information on the use of dogs worldwide for law enforcement purposes.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1918/804
+  QUERY:
+    #scoreif(#band(#syn("dog" "canine" "k9" #1("police dog") #1("law enforcement dog")) #syn("law" "enforcement" "police" "security" "public" "safety" #1("law enforcement") #1("police department") #1("K9 unit"))), #combine(#combine("dog" "canine" "k9" #1("police dog") #1("law enforcement dog")) #combine("law" "enforcement" "police" "security" "public" "safety" #1("law enforcement") #1("police department") #1("K9 unit"))))
+  SHAPE: root=#scoreif combine=3 weight=0 uw=0 phrase#1=10 syn=2 band=1 scoreif=1
+  SYN:   in-window(ok)=0  ranking-operand(MISUSE)=2
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 438: What countries are experiencing an increase in tourism?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1914/789
+  QUERY:
+    #scoreif(#uw12(#syn("tourism" "tourist" "visitor" "travel" "arrival") #syn("increase" "growth" "rise" "surge" "upturn" "expansion" "boost") #syn("country" "nation" "state")), #combine(#uw12(#syn("tourism" "tourist" "visitor" "travel" "arrival") #syn("increase" "growth" "rise" "surge" "upturn" "expansion" "boost") #syn("country" "nation" "state"))))
+  SHAPE: root=#scoreif combine=1 weight=0 uw=2 phrase#1=0 syn=6 band=0 scoreif=1
+  SYN:   in-window(ok)=6  ranking-operand(MISUSE)=0
+  VALID: CLEAN
+
+==========================================================================================
+### TOPIC 448: Identify instances in which weather was a main or contributing factor in the loss of a ship at sea.
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1925/949
+  QUERY:
+    #scoreif(#band(#syn("ship" "vessel" "boat" "tanker" "freighter" "trawler" "barge") #syn("sink" "sank" "sunk" "capsize" "founder" "wreck") #syn("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("rough seas") #1("bad weather") #1("high winds"))) #combine(#combine("ship" "vessel" "boat" "tanker" "freighter" "trawler" "barge") #combine("sink" "sank" "sunk" "capsize" "founder" "wreck") #combine("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("rough seas") #1("bad weather") #1("high winds")) #uw12(#syn("sink" "sank" "sunk" "capsize" "founder" "wreck") #syn("storm" "hurricane" "typhoon" "gale" "cyclone" "weather" #1("rough seas") #1("bad weather") #1("high winds"))))
+  SHAPE: root=#scoreif combine=4 weight=0 uw=1 phrase#1=9 syn=5 band=1 scoreif=1
+  SYN:   in-window(ok)=2  ranking-operand(MISUSE)=3
+  VALID: PROBLEMS: unbalanced parens (21 vs 20); more than one top-level expression
+
+==========================================================================================
+### TOPIC 450: How significant a figure over the years was the late Jordanian King Hussein in furthering peace in the Middle East?
+finish=tool_calls tool_calls=1 tokens(prompt/complet)=1928/948
+  QUERY:
+    #scoreif(#band(#syn("hussein" "husain") "king" "jordan" "peace") #combine( #combine(#syn("hussein" "husain") "king" "jordan" "monarch") #combine("peace" "peaceprocess" "negotiation" "reconciliation" "settlement" "treaty" "accord") #combine("middle" "east" "arab" "israeli" "middleeast") #combine("significant" "important" "major" "key" "crucial" "influential" "impact" "legacy") #uw12(#syn("hussein" "husain") #syn("peace" "negotiation" "treaty") #syn("middle" "arab" "israeli")) ))
+  SHAPE: root=#scoreif combine=5 weight=0 uw=1 phrase#1=0 syn=5 band=1 scoreif=1
+  SYN:   in-window(ok)=3  ranking-operand(MISUSE)=2
+  VALID: CLEAN
+
+==========================================================================================
+CLEAN queries:            6/8
+#syn in-window (ok):      15
+#syn as ranking operand:  7   <-- the anti-pattern; want 0
+filter-first (root=#scoreif): 8/8

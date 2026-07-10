@@ -23,10 +23,15 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from importlib.resources import files
+from pathlib import Path
 
 import openai
 
 from isj_agent.protocol.queryable import CoverQuery, Queryable
+
+# isj_agent/agents/searcher.py -> agents -> isj_agent -> isj -> <repo root>.
+# A configured `prompt` path (relative) resolves against this.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _PROMPT: str = (
     files("isj_agent.agents").joinpath("searcher.md").read_text(encoding="utf-8")
@@ -69,11 +74,22 @@ class BaseSearcher:
         *,
         reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
+        prompt: str | Path | None = None,
     ) -> None:
         self.client = client
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
+        # Directable prompt: an optional file OVERRIDE for the bundled <role>.md.
+        # A relative path resolves against the repo root; a missing file FAILS LOUD
+        # (no silent fallback). None -> keep the class's bundled system_prompt.
+        if prompt is not None:
+            path = Path(prompt)
+            if not path.is_absolute():
+                path = _REPO_ROOT / path
+            if not path.is_file():
+                raise FileNotFoundError(f"searcher prompt file not found: {path}")
+            self.system_prompt = path.read_text(encoding="utf-8")
 
     def propose(self, messages: list[dict]) -> ProposeResult:
         """One LLM round-trip. May RAISE on an LLM/transport failure -- the controller

@@ -40,7 +40,7 @@ def build_client(llm_config: dict) -> openai.OpenAI:
     return openai.OpenAI(base_url=llm_config["base_url"], api_key=api_key)
 
 
-def build_search_engine(cfg: dict) -> HttpSearchEngine:
+def build_search_engine(cfg: dict, burrow_override: str | None = None) -> HttpSearchEngine:
     """Construct an HttpSearchEngine from a parsed [cottontail_http_json_server] entry.
 
     The bearer token comes ONLY from the environment variable named by api_key_env
@@ -58,7 +58,12 @@ def build_search_engine(cfg: dict) -> HttpSearchEngine:
     kwargs = {}
     if "timeout_s" in cfg:
         kwargs["timeout"] = float(cfg["timeout_s"])
-    return HttpSearchEngine(base_url=cfg["base_url"], token=token, **kwargs)
+    # Docno on the wire (Option B): the engine owns the cp<->docno map and translates
+    # at its boundary, so the agent sees only docnos. A docno-less burrow -> no map.
+    docno_map = build_docno_map(cfg, burrow_override=burrow_override)
+    return HttpSearchEngine(
+        base_url=cfg["base_url"], token=token, docno_map=docno_map, **kwargs
+    )
 
 
 def build_docno_map(cfg: dict, burrow_override: str | None = None) -> DocnoMap | None:
@@ -79,3 +84,40 @@ def build_docno_map(cfg: dict, burrow_override: str | None = None) -> DocnoMap |
     if not sqlite_path.exists():
         return None
     return DocnoMap(sqlite_path)
+
+
+def build_lucindri_engine(cfg: dict):
+    """Construct a LucindriSearchEngine from a config section (URL-only) and health-check it.
+
+    Q6: the Lucindri server is operator-launched; poll /healthz on startup and FAIL FAST
+    (an EngineError -> the CLI exits) if it is not reachable/ready.
+    """
+    from isj_agent.engine.lucindri import LucindriSearchEngine
+
+    kwargs = {}
+    if "timeout_s" in cfg:
+        kwargs["timeout"] = float(cfg["timeout_s"])
+    eng = LucindriSearchEngine(base_url=cfg["base_url"], **kwargs)
+    eng.healthz()  # fail fast if the operator-launched server is down
+    return eng
+
+
+def build_engine(config: dict, burrow_override: str | None = None):
+    """Construct THE configured SearchEngine (docno on the wire).
+
+    Config-selected: an [engine] section names the class + its base_url [+ burrow for the
+    Cottontail engine]. Backward-compatible: a config with only the legacy
+    [cottontail_http_json_server] section still builds the Cottontail HTTP engine.
+    """
+    from isj_agent.engine.lucindri import LucindriSearchEngine
+
+    if "engine" in config:
+        eng = config["engine"]
+        cls = load_class(eng["class"])
+        if cls is LucindriSearchEngine:
+            return build_lucindri_engine(eng)
+        return build_search_engine(eng, burrow_override=burrow_override)
+    # legacy: no [engine] -> the Cottontail HTTP engine from its section
+    return build_search_engine(
+        config["cottontail_http_json_server"], burrow_override=burrow_override
+    )
