@@ -6,6 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-10 03:10'
+updated_date: '2026-07-10 03:29'
 labels:
   - isj
   - search
@@ -67,4 +68,31 @@ IMPLEMENTATION SKETCH (Option B)
 - MIRROR: apps/ssr-server.cc (thread-per-collection + stable_sort by score) is the C++ precedent.
 - PREREQ for the live AC: a sharded-build script (N sub-burrows over disjoint corpus-shard
   groups, each via cottontail-index so each gets its docno-cp.sqlite).
+
+CONFIG (owner-decided 2026-07-10)
+The [engine] section selects the class and LISTS the shards; each shard entry IS a
+single-Cottontail-engine config -- base_url + burrow (the burrow gives that shard its
+docno-cp.sqlite map), plus the same optional timeout_s / api_key_env the single engine
+already understands. NO max_workers / extras: fan-out is ALWAYS to all N shards (the
+client threads block on I/O and the C++ servers do the work, so there is nothing to throttle).
+
+[engine]
+class = "isj_agent.engine.multishard.MultiShardSearchEngine"
+shards = [
+  { base_url = "http://127.0.0.1:7000", burrow = "/share/indexes/climbmix_test_shards/part00.burrow" },
+  { base_url = "http://127.0.0.1:7001", burrow = "/share/indexes/climbmix_test_shards/part01.burrow" },
+  { base_url = "http://127.0.0.1:7002", burrow = "/share/indexes/climbmix_test_shards/part02.burrow" },
+  { base_url = "http://127.0.0.1:7003", burrow = "/share/indexes/climbmix_test_shards/part03.burrow" },
+]
+
+WIRING: build_engine dispatches on class; for MultiShardSearchEngine it builds one
+HttpSearchEngine per shard via the EXISTING build_search_engine(shard_cfg) (each gets its
+own DocnoMap), then constructs MultiShardSearchEngine([...engines]). No new per-shard parsing.
+
+EXPLICIT PAIRING (deliberate): base_url<->burrow are paired PER ENTRY, not a compact
+base_host + ports[] + burrow_glob pattern. A pattern risks a sort mismatch pairing a shard's
+docno map with a server serving a DIFFERENT burrow -> silently wrong docnos; explicit pairing
+cannot mispair. For a large split, GENERATE the shards list (the sharded-build script knows the
+port<->burrow mapping). TOML note: `shards = [{...}, {...}]` (inline-table array) and the
+[[engine.shards]] array-of-tables form parse identically -- document the inline array as primary.
 <!-- SECTION:NOTES:END -->
