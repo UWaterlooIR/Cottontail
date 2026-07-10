@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-09 23:56'
+updated_date: '2026-07-10 00:07'
 labels: []
 dependencies: []
 priority: medium
@@ -110,10 +110,17 @@ PHASE 3 -- LucindriSearchEngine (the httpx adapter)
     read hit/404; negative scores preserved.
 
 PHASE 4 -- Engine selection + run-output + config
-  - Engine selection: cli.py currently hardcodes build_search_engine(config[
-    "cottontail_http_json_server"]) and build_docno_map(...). Make the engine SELECTABLE
-    (see OPEN Q1). For a Lucindri run: build LucindriSearchEngine from
-    [lucindri_http_json_server]; docno_map = None (ids already are docnos).
+  - Engine selection (RESOLVED): the controller already talks ONLY to the SearchEngine
+    interface (queryable.execute(engine) + one engine.read()), so it needs no change.
+    Make the engine CONFIG-SELECTED: an [engine] section names the class + its base_url
+    (host:port [+ optional timeout_s / api_key_env]); cli.py constructs that ONE engine at
+    startup (replacing the hardcoded build_search_engine(config["cottontail_http_json_server"])).
+    Each engine is an HTTP/JSON client taking just base_url. A mismatched engine<->searcher
+    pairing is the operator's responsibility (no guard). The docno-map asymmetry is NOT an
+    engine concern: for a Cottontail engine, build the docno_map from the burrow; for a
+    Lucindri engine, docno_map = None (ids already are docnos). LucindriSearchEngine
+    implements search()+read(); tiered_search/multitext_search are Cottontail-only and are
+    stubbed (never called for a LucindriQuery).
   - run_output.py: for an already-docno id, write it under the `docno` key WITHOUT a
     DocnoMap (see OPEN Q5 for the mechanism). Cottontail path (int cp + sqlite map)
     unchanged.
@@ -131,13 +138,12 @@ GATED (separate, needs the live Lucindri service + its index; outside-repo build
 authorized): end-to-end live run + the A/B vs cover/multitext by docs-judged.
 
 ======================= OPEN QUESTIONS / DECISIONS NEEDED =======================
-Q1 (engine selection): the CLI hardcodes the Cottontail engine + docno-map. How should the
-   engine be made selectable? Recommend an [engine] config (class + config-section pointer)
-   mirroring [agents.*].class, so build_search_engine becomes generic. Alt: a simple
-   cottontail|lucindri toggle. -- DECISION NEEDED.
-Q2 (searcher<->engine pairing): nothing enforces that the searcher's query type matches the
-   engine (a LucindriSearcher on a Cottontail engine would POST Lucindri queries to
-   cover_search). Add a startup guard/assert, or just document that config must pair them?
+Q1 (engine selection) -- RESOLVED (owner, 2026-07-10): config-selected engine. An [engine]
+   section names the class + its base_url; cli.py constructs that one engine at startup; the
+   controller is untouched (already talks only to the SearchEngine interface). Each engine
+   takes just a URL. No pairing guard (see Q2).
+Q2 (searcher<->engine pairing) -- RESOLVED (owner, 2026-07-10): NO guard. A mismatched
+   engine<->searcher config is the operator's responsibility, out of our hands.
 Q3 (missing counts): Lucindri /search returns no total_matches / unjudged_matches /
    atom_counts. Proposed: total_matches = hits returned before exclude, unjudged_matches =
    hits after client-side exclude, atom_counts = []. Confirm -- this drives the "N matches"
