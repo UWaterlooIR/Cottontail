@@ -134,8 +134,8 @@ project, `config.toml`, and serving the model with vLLM — is in
 
 Prerequisites: a **`--stem porter`** burrow (§1 — `cover_search`'s `word*` family
 marker needs the stemmed stream), the **server** running over it (§3), and a
-**vLLM** OpenAI-compatible endpoint. Point `isj/config.toml` at both (the
-`[cottontail_http_json_server]` base_url and the `[llm.*]` endpoint).
+**vLLM** OpenAI-compatible endpoint. Point `isj/config.toml` at both (the `[engine]`
+section — class + `base_url` [+ `burrow`] — and the `[llm.*]` endpoint).
 
 ```sh
 # from the repo root, with the server (§3) and vLLM both up:
@@ -147,6 +147,27 @@ uv run --directory isj python -m isj_agent.cli \
 Flags: `--question` (required), `--out <dir>` (required), `--overwrite` (reuse a
 non-empty dir), `--verbose` (live per-intent trace), `--burrow <path>` (override
 the served burrow whose `docno-cp.sqlite` maps `cp`→`docno`).
+
+**Alternative backend — Lucindri (a Dirichlet-LM engine; TASK-33).** The engine is
+config-selected, so the same agent runs over UWaterloo's Lucindri instead of
+Cottontail with no code change. Start a `LucindriServer` (`--index <lucindri index>
+--port 9000`) over the same corpus (docnos align), then point the config at it:
+
+```toml
+[engine]
+class = "isj_agent.engine.lucindri.LucindriSearchEngine"
+base_url = "http://127.0.0.1:9000"
+
+[agents.searcher]
+class = "isj_agent.agents.lucindri_searcher.LucindriSearcher"
+# prompt = "isj/scouting/lucindri-query/lucindri_prompt_v4.txt"  # optional prompt override
+```
+
+The LucindriSearcher authors one full Lucindri query per turn (tool `submit_query`);
+its bundled prompt teaches the query language self-contained. Lucindri is
+docno-native (no burrow, no `docno-cp.sqlite`); the CLI polls its `/healthz` on
+startup and fails fast if it is down. (The agent is docno-keyed for every engine —
+the Cottontail engine translates `cp`↔`docno` internally.)
 
 **Run output** (`<out>/`):
 
