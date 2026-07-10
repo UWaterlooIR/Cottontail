@@ -1,11 +1,11 @@
 ---
 id: TASK-33
 title: LucindriSearcher — an Indri-query Searcher agent over a Lucindri HTTP service
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-10 02:41'
+updated_date: '2026-07-10 02:55'
 labels: []
 dependencies: []
 priority: medium
@@ -42,7 +42,7 @@ Cottontail-side scope (follow-on build):
 - [x] #6 Directable prompt: BaseSearcher takes an optional prompt-file override (fail-loud if missing) via [agents.<role>].prompt; covered by a test.
 - [x] #7 LucindriQuery (Queryable, tool submit_query) + LucindriSearcher (BaseSearcher) shipping lucindri_searcher.md (= vDefault); unit-tested.
 - [x] #8 LucindriSearchEngine (search + read) to the finalized TASK-0019 wire contract: client-side exclude/paging (re-request), summaries=true, negative scores preserved, 400->EngineError, 200-empty->empty result, 404-doc->None, /healthz startup poll (fail-fast), optional counts omitted; unit-tested with mocked httpx.
-- [ ] #9 (gated) live end-to-end run + A/B vs cover/multitext by docs-judged, against a running Lucindri server + a Lucindri-built index of the same corpus.
+- [x] #9 (gated) live end-to-end run + A/B vs cover/multitext by docs-judged, against a running Lucindri server + a Lucindri-built index of the same corpus.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -342,4 +342,11 @@ isj suite green (157 passed, 1 skipped).
   (shard_NNNNN_MMM), negative Dirichlet scores, and UnifiedHighlighter summaries; NO cp key;
   total_matches/atom_counts correctly absent (Q3). The A/B comparison vs cover/multitext by
   docs-judged remains a follow-on research experiment (needs a full-corpus Lucindri index).
+
+FINALIZED (2026-07-10): merged to main via PR #12
+(https://github.com/UWaterlooIR/Cottontail/pull/12). All in-scope work complete;
+both engines validated live end-to-end through the full agent pipeline (Lucindri
+100-shard test index + Cottontail 1M dev server). AC#9's A/B-vs-cover/multitext
+comparison was DESCOPED by the owner ("we don't need the A/B comparison"); the
+live end-to-end half it also covered is proven, so AC#9 is checked.
 <!-- SECTION:NOTES:END -->
