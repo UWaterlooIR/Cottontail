@@ -109,23 +109,35 @@ binary = "bazel-bin/apps/cottontail-jsonl-index"
 binary = "bazel-bin/apps/cottontail-jsonl-query"
 
 # ---------------------------------------------------------------------------
-# [cottontail_http_json_server]
-# The running cottontail-jsonl-server the Searcher queries over HTTP
-# (cover_search / get_document). Start it (from the repo root) over a
-# --stem porter burrow, e.g.:
+# [engine]
+# Config-SELECTED SearchEngine (docno on the wire). Names the engine class + its
+# base_url; the CLI constructs exactly this ONE engine at startup. The controller is
+# engine-agnostic (it talks only to the SearchEngine interface), so swapping engines
+# is a config change, not a code change. A mismatched engine<->searcher pairing is the
+# operator's responsibility.
+#
+# Cottontail (default): the C++ cottontail-jsonl-server (cover_search / get_document).
+# Start it (from the repo root) over a --stem porter burrow, e.g.:
 #   bazel-bin/apps/cottontail-jsonl-server --burrow my.burrow --port 8080
-# A loopback (127.0.0.1) server runs without auth by default; off-loopback
-# needs a bearer token (set api_key_env to the env var holding it).
+# It owns the cp<->docno map, so give it the served burrow (for <burrow>/docno-cp.sqlite);
+# the engine translates cp<->docno at its boundary, so the agent sees only docnos.
 # ---------------------------------------------------------------------------
-[cottontail_http_json_server]
+[engine]
+class = "isj_agent.engine.http.HttpSearchEngine"
 base_url = "http://127.0.0.1:8080"
-# Query timeout in seconds (default 3600 = 1 hour). Deliberately LONG: an HTTP
-# client timeout is not a cancel — the server keeps computing the abandoned
-# request — so short timeouts waste server work and bounce misleading errors to
-# the model. Connection establishment fails fast (10s) regardless.
+burrow = "Scrapheap/climbmix-1M-porter.burrow"  # served burrow; --burrow overrides per run
+# Query timeout in seconds (default 3600 = 1 hour). Deliberately LONG: an HTTP client
+# timeout is not a cancel — the server keeps computing the abandoned request — so short
+# timeouts waste server work and bounce misleading errors to the model. Connect fails
+# fast (10s) regardless.
 # timeout_s = 3600
-# The burrow the server is serving. Its <burrow>/docno-cp.sqlite is the cp<->docno
-# map the CLI opens read-only to rewrite cp->docno when writing run output. Omit (or
-# point at a docno-less burrow) to persist raw cps; --burrow overrides per run.
-# burrow = "my-stemmed.burrow"
 # api_key_env = "COTTONTAIL_API_TOKEN"   # bearer-token env var; omit on a no-token loopback server
+#
+# --- Lucindri engine (TASK-33): a Dirichlet-LM search over a LucindriServer ------
+# Docno-native: URL only, NO burrow. The server is operator-launched (start the
+# LucindriServer jar with --index <lucindri index> --port 9000); the CLI polls /healthz
+# on startup and FAILS FAST if it is down. Pair it with the LucindriSearcher class +
+# prompt in [agents.searcher] (e.g. prompt = the vDefault / v4 scouting prompt).
+#   class = "isj_agent.engine.lucindri.LucindriSearchEngine"
+#   base_url = "http://127.0.0.1:9000"
+#   # timeout_s = 3600

@@ -17,7 +17,7 @@ from pathlib import Path
 
 from isj_agent.config import (
     build_client,
-    build_search_engine,
+    build_engine,
     load_class,
 )
 from isj_agent.controller import Controller
@@ -130,9 +130,7 @@ def main(argv: list[str] | None = None) -> None:
         "judger",
         **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature") if k in judger_cfg},
     )
-    engine = build_search_engine(
-        config["cottontail_http_json_server"], burrow_override=args.burrow
-    )
+    engine = build_engine(config, burrow_override=args.burrow)
     loop_cfg = config.get("loop", {})
     controller = Controller(
         searcher, judger, engine,

@@ -254,3 +254,54 @@ class MultiTextProgram(Queryable):
 
     def query_string(self) -> str:
         return self.program
+
+
+@dataclass(frozen=True)
+class LucindriQuery(Queryable):
+    """A single full query in the Lucindri query language (TASK-33).
+
+    Thin over the engine's search(): the LLM authors one whole query per turn and it
+    runs as-is against the Lucindri /search endpoint. The LLM-facing tool is named
+    `submit_query` -- NEVER "indri": the language is a VARIANT of Indri, and naming
+    Indri would invite the model to import wrong real-Indri behavior.
+    """
+
+    query: str
+    tool_name: ClassVar[str] = "submit_query"
+
+    @classmethod
+    def tool_schema(cls) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": cls.tool_name,
+                "description": (
+                    "Submit ONE full query in the structured query language. The engine "
+                    "ranks documents by your query and returns the NEW documents it "
+                    "surfaces, each already graded (0-3) with a reason and a short summary."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+
+    @classmethod
+    def from_tool_arguments(cls, args: dict) -> "LucindriQuery":
+        query = args["query"]  # KeyError -> BaseSearcher bounces
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("query must be a non-empty query string")
+        return cls(query=query)
+
+    def execute(
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[str], window: int
+    ) -> SearchResponse:
+        return engine.search(self.query, top_k=top_k, exclude=exclude, window=window)
+
+    def trace_arguments(self) -> dict:
+        return {"query": self.query}
+
+    def query_string(self) -> str:
+        return self.query

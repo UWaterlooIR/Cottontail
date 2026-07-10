@@ -1,7 +1,13 @@
 import pytest
 
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.queryable import CoverQuery, MultiTextProgram, Queryable, TieredQuery
+from isj_agent.protocol.queryable import (
+    CoverQuery,
+    LucindriQuery,
+    MultiTextProgram,
+    Queryable,
+    TieredQuery,
+)
 from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
 
 
@@ -163,3 +169,42 @@ def test_multitext_execute_forwards_program_to_engine_multitext_search():
     out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=["3"], window=60)
     assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": ["3"], "window": 60}
     assert out.results[0].id == "10"
+
+
+# --- LucindriQuery (TASK-33) -----------------------------------------------
+
+def test_lucindri_is_a_queryable_with_submit_query_tool():
+    assert issubclass(LucindriQuery, Queryable)
+    sch = LucindriQuery.tool_schema()
+    assert sch["function"]["name"] == "submit_query"  # NEVER "indri"
+    assert sch["function"]["parameters"]["required"] == ["query"]
+
+
+def test_lucindri_from_tool_arguments_validates():
+    assert LucindriQuery.from_tool_arguments({"query": '#combine("a")'}).query == '#combine("a")'
+    with pytest.raises(ValueError):
+        LucindriQuery.from_tool_arguments({"query": "   "})
+    with pytest.raises(KeyError):
+        LucindriQuery.from_tool_arguments({})
+
+
+def test_lucindri_execute_forwards_query_to_engine_search():
+    # A Lucindri response omits the optional counts (Q3) and carries negative scores.
+    resp = SearchResponse(results=[Hit(rank=1, score=-4.5, id="shard_0_1", summary="s")])
+    eng = FakeEngine([resp])
+    out = LucindriQuery('#combine("weather")').execute(eng, top_k=5, exclude=["x"], window=75)
+    assert eng.calls[0] == {"query": '#combine("weather")', "top_k": 5, "exclude": ["x"], "window": 75}
+    assert out.results[0].id == "shard_0_1" and out.results[0].score == -4.5
+    assert out.total_matches is None and out.atom_counts is None  # omitted, not faked
+
+
+def test_lucindri_trace_and_string_forms():
+    q = LucindriQuery('#combine("a" "b")')
+    assert q.trace_arguments() == {"query": '#combine("a" "b")'}
+    assert q.query_string() == '#combine("a" "b")'
+
+
+def test_lucindri_searcher_wires_the_query_type_and_bundled_prompt():
+    from isj_agent.agents.lucindri_searcher import LucindriSearcher
+    assert LucindriSearcher.query_types == [LucindriQuery]
+    assert LucindriSearcher.system_prompt  # bundled lucindri_searcher.md is non-empty
