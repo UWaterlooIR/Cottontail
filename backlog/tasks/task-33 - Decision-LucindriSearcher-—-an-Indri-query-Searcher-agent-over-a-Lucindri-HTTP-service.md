@@ -1,10 +1,11 @@
 ---
 id: TASK-33
 title: LucindriSearcher — an Indri-query Searcher agent over a Lucindri HTTP service
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-10 01:03'
+updated_date: '2026-07-10 02:41'
 labels: []
 dependencies: []
 priority: medium
@@ -36,15 +37,13 @@ Cottontail-side scope (follow-on build):
 - [x] #1 Go/no-go decision recorded for a LucindriSearcher, with the identity choice pinned (synthetic-int-per-docno vs docno->cp map)
 - [x] #2 A prompt-validity scout is planned (oracle = Lucindri parser/service) as the gating de-risk step before committing to the adapter/searcher/prompt build
 - [x] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract are captured: /search {query,count,summaries} -> [{docno,score,summary?}] (ISJ sets summaries=true), /document {docno} -> {fulltext}
-- [ ] #4 Docno-on-the-wire refactor: Hit.cp -> Hit.id (str); HttpSearchEngine owns a memoized bidirectional DocnoMap (base_url + burrow); run_output drops its docno_map; the existing Cottontail test suite stays green.
-- [ ] #5 Config-selected engine: an [engine] section (class + base_url [+ burrow for Cottontail]) constructs one engine at startup; the controller is unchanged.
-- [ ] #6 Directable prompt: BaseSearcher takes an optional prompt-file override (fail-loud if missing) via [agents.<role>].prompt; covered by a test.
-- [ ] #7 LucindriQuery (Queryable, tool submit_query) + LucindriSearcher (BaseSearcher) shipping lucindri_searcher.md (= vDefault); unit-tested.
-- [ ] #8 LucindriSearchEngine (search + read) to the finalized TASK-0019 wire contract: client-side exclude/paging (re-request), summaries=true, negative scores preserved, 400->EngineError, 200-empty->empty result, 404-doc->None, /healthz startup poll (fail-fast), optional counts omitted; unit-tested with mocked httpx.
+- [x] #4 Docno-on-the-wire refactor: Hit.cp -> Hit.id (str); HttpSearchEngine owns a memoized bidirectional DocnoMap (base_url + burrow); run_output drops its docno_map; the existing Cottontail test suite stays green.
+- [x] #5 Config-selected engine: an [engine] section (class + base_url [+ burrow for Cottontail]) constructs one engine at startup; the controller is unchanged.
+- [x] #6 Directable prompt: BaseSearcher takes an optional prompt-file override (fail-loud if missing) via [agents.<role>].prompt; covered by a test.
+- [x] #7 LucindriQuery (Queryable, tool submit_query) + LucindriSearcher (BaseSearcher) shipping lucindri_searcher.md (= vDefault); unit-tested.
+- [x] #8 LucindriSearchEngine (search + read) to the finalized TASK-0019 wire contract: client-side exclude/paging (re-request), summaries=true, negative scores preserved, 400->EngineError, 200-empty->empty result, 404-doc->None, /healthz startup poll (fail-fast), optional counts omitted; unit-tested with mocked httpx.
 - [ ] #9 (gated) live end-to-end run + A/B vs cover/multitext by docs-judged, against a running Lucindri server + a Lucindri-built index of the same corpus.
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -322,4 +321,25 @@ doc-5 / doc-8 already bless docno-on-the-wire.
 FOLLOW-ON (implementation, gated on the Lucindri TASK-0019 service): build LucindriQuery /
 LucindriSearcher / LucindriSearchEngine per the scope, wire the directable-prompt config,
 and A/B vs cover / multitext.
+
+IMPLEMENTED (2026-07-10, branch claude/lucindri-prompt-scout). Phases 0-5 landed; full
+isj suite green (157 passed, 1 skipped).
+- Phase 0 (AC#4): docno on the wire -- Hit.cp/RankedEntry.cp -> id (str); HttpSearchEngine
+  owns a memoized bidirectional DocnoMap (base_url+burrow), translating cp<->docno at its
+  boundary; run_output dropped its docno_map (renames id->docno on disk); counts made
+  optional (Q3).
+- Phase 1 (AC#6): BaseSearcher optional prompt-file override (fail-loud) + [agents.*].prompt.
+- Phase 2 (AC#7): LucindriQuery (tool submit_query) + LucindriSearcher (bundled vDefault prompt).
+- Phase 3 (AC#8): LucindriSearchEngine to the finalized wire contract (client-side exclude/
+  paging, summaries=true, negative scores, 400->EngineError, 200-empty->empty, 404-doc->None,
+  /healthz fail-fast, counts omitted).
+- Phase 4 (AC#5): config-selected engine ([engine].class; build_engine dispatch; legacy
+  [cottontail_http_json_server] still works).
+- Phase 5: run-guide Lucindri subsection.
+- AC#9 (live e2e) -- DONE at test scale: ran a full question through the ISJ agent against a
+  live LucindriServer (port 9000, first 100 climbmix shards) + gpt.oss.120b (reasoning medium).
+  4 interpretations, all succeeded, no errors. Ranked lists carry real Lucindri docnos
+  (shard_NNNNN_MMM), negative Dirichlet scores, and UnifiedHighlighter summaries; NO cp key;
+  total_matches/atom_counts correctly absent (Q3). The A/B comparison vs cover/multitext by
+  docs-judged remains a follow-on research experiment (needs a full-corpus Lucindri index).
 <!-- SECTION:NOTES:END -->
