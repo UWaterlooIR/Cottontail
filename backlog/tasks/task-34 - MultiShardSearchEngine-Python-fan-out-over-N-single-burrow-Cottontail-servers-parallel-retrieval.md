@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-10 03:10'
-updated_date: '2026-07-10 03:29'
+updated_date: '2026-07-10 03:34'
 labels:
   - isj
   - search
@@ -39,6 +39,79 @@ OPS: the operator runs N single-burrow servers, e.g. ports 7000, 7001, 7002, ...
 - [ ] #6 Unit tests (N mocked shard engines): concurrent fan-out, score-merge to the global top_k, exclude fanned to all shards, count summation, read routing.
 - [ ] #7 (gated) live: build a small sharded burrow set (~4 sub-burrows), run 4 servers (7000-7003), and confirm a full agent run's top results match a single-burrow run over the same corpus (same docnos/scores) and complete faster.
 <!-- AC:END -->
+
+## Implementation Plan
+
+<!-- SECTION:PLAN:BEGIN -->
+DETAILED IMPLEMENTATION PLAN (MultiShardSearchEngine). Status: FOR REVIEW. Buildable +
+unit-testable WITHOUT live servers (mocked shard engines); the live check is a gated final step
+against the 4-shard test setup (scripts/build-test-shards.sh + launch-test-shard-servers.sh).
+KEY PROPERTY: the corpus is PARTITIONED across shards (each doc/docno lives in exactly ONE
+sub-burrow), so the merge never sees a docno twice -- no cross-shard de-duplication is needed.
+See OPEN QUESTIONS at the end -- three need a decision before coding.
+
+PHASE 1 -- MultiShardSearchEngine core (isj_agent/engine/multishard.py)
+  - Holds an ordered list of shard engines (HttpSearchEngine). Implements the SearchEngine
+    Protocol (search / tiered_search / multitext_search / read).
+  - _fan(method, *args): submit shard.<method>(...) to a ThreadPoolExecutor (workers = number of
+    shards); gather. Any shard raising -> re-raise as EngineError (fail-fast; NEVER return
+    partial/missing-shard results -- OPEN Q1). A malformed query fails every shard identically, so
+    its parse message reaches the model via the normal bounce.
+  - _merge(responses, top_k): concatenate all shards' Hits; STABLE-sort by score DESC (Cottontail
+    cover-density is higher=better AND stats-free, so cross-shard scores are comparable -- the
+    enabling property); take top_k; re-rank 1..top_k. Sum the OPTIONAL counts across shards:
+    total_matches / unjudged_matches summed (skipping None), atom_counts summed BY TERM; each is
+    None if no shard reported it (Q3-consistent, from TASK-33). Record docno -> shard index for
+    each surfaced Hit (the read-routing memo).
+  - search / tiered_search / multitext_search: each = _merge(_fan("<method>", <payload>, top_k=,
+    exclude=, window=), top_k). The SAME (payload, top_k, exclude, window) fans to every shard;
+    each shard's HttpSearchEngine excludes only ITS OWN docnos (a foreign docno is not in its
+    DocnoMap -> skipped) and over-fetches its top_k, so the union contains the true global top_k
+    (standard distributed top-k merge; deterministic since each shard is deterministic).
+  - read(id): route to the memoized shard's read(id); on a cold miss, try shards in order until
+    one returns non-None (else None). The controller only reads docnos it just surfaced -> memo hit.
+  - Startup health check across shards -- OPEN Q2.
+
+PHASE 2 -- config selection (isj_agent/config.py + cli)
+  - build_engine dispatch: class is MultiShardSearchEngine -> build one HttpSearchEngine per entry
+    in cfg["shards"] via the EXISTING build_search_engine(shard_cfg) (each opens its own DocnoMap),
+    then MultiShardSearchEngine([...engines]). Validate: `shards` is a non-empty list, each entry
+    has base_url + burrow (fail loud). The --burrow CLI override is ignored for multishard (N burrows).
+  - config.example.toml: document the [engine] MultiShardSearchEngine block (the recorded shape:
+    explicit shards = [{base_url, burrow}, ...]; note the [[engine.shards]] array-of-tables equivalent).
+
+PHASE 3 -- unit tests (tests/test_multishard.py)
+  - N in-process fake shard engines. Assert: concurrent fan-out to all shards; score-merge yields
+    the true global top_k re-ranked 1..N; the same exclude fans to every shard and each drops only
+    its own docnos; total_matches/unjudged_matches summed; atom_counts summed by term; read routes
+    to the owning shard (+ cold-miss try-all); any shard error -> EngineError. Cover tiered/multitext
+    if in scope (OPEN Q3).
+  - build_engine test: an [engine] shards config builds a MultiShardSearchEngine over N
+    HttpSearchEngines; empty/malformed `shards` -> fail loud.
+
+PHASE 4 -- docs + scripts
+  - running-the-search-stack.md: a "sharded Cottontail (MultiShardSearchEngine)" subsection -- build
+    the sub-burrows (scripts/build-test-shards.sh), launch N servers (scripts/launch-test-shard-servers.sh),
+    point [engine] at the shard list. The build + launch scripts already exist (this branch).
+
+PHASE 5 (gated) -- live validation
+  - Against the 4-shard test setup (ports 7000-7003): run a full ISJ agent question through the
+    MultiShardSearchEngine and confirm (a) it succeeds with real docnos, (b) the TOP results match a
+    single-burrow run over the same 100 shards (same docnos/scores at the top -- proves the merge is
+    exact), and (c) it is faster (parallel fan-out). Needs a matching single-100-shard burrow to diff.
+
+======================= OPEN QUESTIONS / DECISIONS NEEDED =======================
+Q1 (shard-failure policy): any shard raising -> fail the WHOLE search (fail-fast); NEVER return
+   partial results missing a shard's docs (that would silently drop 1/N of the corpus and break the
+   exact-top_k guarantee). A malformed query fails all shards identically -> its parse message
+   bounces to the model as usual; a down/erroring shard fails the run loudly. RECOMMEND fail-fast.
+Q2 (startup health check): ping each shard's /healthz on engine build and FAIL FAST if any shard is
+   down (mirrors the Lucindri engine; the single Cottontail engine does NOT currently do this, but N
+   operator-launched servers have more failure surface). RECOMMEND adding it for multishard.
+Q3 (tiered/multitext scope): implement search + tiered_search + multitext_search all via the one
+   generic fan-merge (cheap; the partitioned corpus means no cross-shard de-dup), OR ship v1 with
+   search only (the plain cover Searcher) and defer tiered/multitext. RECOMMEND all three.
+<!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
 
