@@ -53,5 +53,9 @@ for burrow in "${BURROWS[@]}"; do
   echo >&2
   i=$((i + 1))
 done
-echo ">> shard base_urls: $(seq -s ', ' "$BASE_PORT" "$((BASE_PORT + ${#BURROWS[@]} - 1))" | sed 's/[0-9]*/http:\/\/127.0.0.1:&/g')" >&2
+urls=""
+for ((j = 0; j < ${#BURROWS[@]}; j++)); do
+  urls+="${urls:+, }http://127.0.0.1:$((BASE_PORT + j))"
+done
+echo ">> shard base_urls: $urls" >&2
 echo ">> stop with: scripts/launch-test-shard-servers.sh stop" >&2
