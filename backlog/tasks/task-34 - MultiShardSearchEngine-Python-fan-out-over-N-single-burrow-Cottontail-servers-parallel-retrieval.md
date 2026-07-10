@@ -3,10 +3,11 @@ id: TASK-34
 title: >-
   MultiShardSearchEngine: Python fan-out over N single-burrow Cottontail servers
   (parallel retrieval)
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-10 03:10'
-updated_date: '2026-07-10 03:34'
+updated_date: '2026-07-10 03:51'
 labels:
   - isj
   - search
@@ -31,12 +32,12 @@ OPS: the operator runs N single-burrow servers, e.g. ports 7000, 7001, 7002, ...
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 MultiShardSearchEngine implements the SearchEngine Protocol: search() fans out CONCURRENTLY to N single-burrow HttpSearchEngines (full exclude passed to each) and merges the per-shard results by score into the global top_k (re-ranked 1..N); the controller/judger/run-output are unchanged.
-- [ ] #2 Counts summed across shards: total_matches / unjudged_matches summed, atom_counts summed by term; omitted when no shard reports them (Q3-consistent).
-- [ ] #3 read(docno) routes to the owning shard (memoized from search; fallback tries shards until found). tiered/multitext are fan-and-merged the same way OR explicitly deferred for v1 (documented).
-- [ ] #4 Config-selected: an [engine] section selects MultiShardSearchEngine with N shard entries ({base_url, burrow} each, e.g. ports 7000+); build_engine constructs it.
-- [ ] #5 The stats-free precondition is documented and guarded: the merge is exact only for the cover-density/SSR ranker (no corpus-stat/IDF ranker); note/assert it.
-- [ ] #6 Unit tests (N mocked shard engines): concurrent fan-out, score-merge to the global top_k, exclude fanned to all shards, count summation, read routing.
+- [x] #1 MultiShardSearchEngine implements the SearchEngine Protocol: search() fans out CONCURRENTLY to N single-burrow HttpSearchEngines (full exclude passed to each) and merges the per-shard results by score into the global top_k (re-ranked 1..N); the controller/judger/run-output are unchanged.
+- [x] #2 Counts summed across shards: total_matches / unjudged_matches summed, atom_counts summed by term; omitted when no shard reports them (Q3-consistent).
+- [x] #3 read(docno) routes to the owning shard (memoized from search; fallback tries shards until found). tiered/multitext are fan-and-merged the same way OR explicitly deferred for v1 (documented).
+- [x] #4 Config-selected: an [engine] section selects MultiShardSearchEngine with N shard entries ({base_url, burrow} each, e.g. ports 7000+); build_engine constructs it.
+- [x] #5 The stats-free precondition is documented and guarded: the merge is exact only for the cover-density/SSR ranker (no corpus-stat/IDF ranker); note/assert it.
+- [x] #6 Unit tests (N mocked shard engines): concurrent fan-out, score-merge to the global top_k, exclude fanned to all shards, count summation, read routing.
 - [ ] #7 (gated) live: build a small sharded burrow set (~4 sub-burrows), run 4 servers (7000-7003), and confirm a full agent run's top results match a single-burrow run over the same corpus (same docnos/scores) and complete faster.
 <!-- AC:END -->
 
@@ -100,15 +101,15 @@ PHASE 5 (gated) -- live validation
     single-burrow run over the same 100 shards (same docnos/scores at the top -- proves the merge is
     exact), and (c) it is faster (parallel fan-out). Needs a matching single-100-shard burrow to diff.
 
-======================= OPEN QUESTIONS / DECISIONS NEEDED =======================
-Q1 (shard-failure policy): any shard raising -> fail the WHOLE search (fail-fast); NEVER return
+======================= DECISIONS (all resolved, owner 2026-07-10) =======================
+Q1 (shard-failure policy) -- RESOLVED (fail-fast; no silent partial results): any shard raising -> fail the WHOLE search (fail-fast); NEVER return
    partial results missing a shard's docs (that would silently drop 1/N of the corpus and break the
    exact-top_k guarantee). A malformed query fails all shards identically -> its parse message
    bounces to the model as usual; a down/erroring shard fails the run loudly. RECOMMEND fail-fast.
-Q2 (startup health check): ping each shard's /healthz on engine build and FAIL FAST if any shard is
+Q2 (startup health check) -- RESOLVED (yes, ping /healthz on build): ping each shard's /healthz on engine build and FAIL FAST if any shard is
    down (mirrors the Lucindri engine; the single Cottontail engine does NOT currently do this, but N
    operator-launched servers have more failure surface). RECOMMEND adding it for multishard.
-Q3 (tiered/multitext scope): implement search + tiered_search + multitext_search all via the one
+Q3 (tiered/multitext scope) -- RESOLVED (all three via the one fan-merge): implement search + tiered_search + multitext_search all via the one
    generic fan-merge (cheap; the partitioned corpus means no cross-shard de-dup), OR ship v1 with
    search only (the plain cover Searcher) and defer tiered/multitext. RECOMMEND all three.
 <!-- SECTION:PLAN:END -->
@@ -168,4 +169,22 @@ docno map with a server serving a DIFFERENT burrow -> silently wrong docnos; exp
 cannot mispair. For a large split, GENERATE the shards list (the sharded-build script knows the
 port<->burrow mapping). TOML note: `shards = [{...}, {...}]` (inline-table array) and the
 [[engine.shards]] array-of-tables form parse identically -- document the inline array as primary.
+
+IMPLEMENTED (2026-07-10, branch claude/task-34-multishard). Full isj suite green (170 passed).
+- engine/multishard.py (fan-out + score-merge + read routing, fail-fast); http.py healthz();
+  config build_multishard_engine + dispatch (validates shards, health-checks on build);
+  config.example.toml + run-guide docs; test_multishard.py + config dispatch tests.
+- BUG caught + fixed by the live test (unit tests use FakeEngine, no sqlite): each shard's
+  DocnoMap sqlite connection was created in the main thread but used in fan-out worker
+  threads -> cross-thread ProgrammingError. Fixed: check_same_thread=False + a lock (read-only
+  immutable connection, one thread at a time).
+- LIVE (4-shard test set, ports 7000-7003 over the first 100 climbmix shards):
+  (1) MERGE EXACT -- the multishard top-k EQUALS the manual merge of the 4 shards' own top-k;
+      total_matches + atom_counts summed; read() routes to the owning shard.
+  (2) FULL AGENT RUN succeeded (cover Searcher) -- 1 intent, 0 failures, 32 judged docs whose
+      docnos SPAN ALL 4 SHARDS (12/7/6/7), merged into one graded ranked list; counts summed.
+- AC#7 (gated live): the merge-exactness + full agent run above validate it. The literal
+  "sharded == single-100-shard-burrow" diff was NOT run (no single-burrow baseline built); it
+  is guaranteed by the stats-free property + the proven-exact merge. Left AC#7 unchecked pending
+  an owner call on whether to build that baseline burrow (~13 min) for the belt-and-suspenders check.
 <!-- SECTION:NOTES:END -->
