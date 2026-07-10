@@ -169,6 +169,31 @@ docno-native (no burrow, no `docno-cp.sqlite`); the CLI polls its `/healthz` on
 startup and fails fast if it is down. (The agent is docno-keyed for every engine —
 the Cottontail engine translates `cp`↔`docno` internally.)
 
+**Sharded Cottontail — `MultiShardSearchEngine` (TASK-34).** Split the corpus into N
+sub-burrows and query them in parallel, merging by score into the true global top-k
+(exact because the cover-density ranker is stats-free). Build the shards and launch one
+server per shard, then point `[engine]` at the list:
+
+```sh
+scripts/build-test-shards.sh          # 4 sub-burrows over the first 100 shards (example)
+scripts/launch-test-shard-servers.sh  # one server per part on ports 7000+
+```
+
+```toml
+[engine]
+class = "isj_agent.engine.multishard.MultiShardSearchEngine"
+shards = [
+  { base_url = "http://127.0.0.1:7000", burrow = "/share/indexes/climbmix_test_shards/part00.burrow" },
+  { base_url = "http://127.0.0.1:7001", burrow = "/share/indexes/climbmix_test_shards/part01.burrow" },
+  { base_url = "http://127.0.0.1:7002", burrow = "/share/indexes/climbmix_test_shards/part02.burrow" },
+  { base_url = "http://127.0.0.1:7003", burrow = "/share/indexes/climbmix_test_shards/part03.burrow" },
+]
+```
+
+Any shard error fails the whole search (no silent partial results); every shard's
+`/healthz` is checked on startup. Works with every Cottontail searcher (cover / tiered /
+multitext).
+
 **Run output** (`<out>/`):
 
 - `intents.json` — the question + the Analyst's ordered interpretations.
