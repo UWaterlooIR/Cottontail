@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-10 00:07'
+updated_date: '2026-07-10 00:38'
 labels: []
 dependencies: []
 priority: medium
@@ -30,7 +30,7 @@ Cottontail-side scope (follow-on build):
 1. LucindriQuery(Queryable): tool submit_query takes {query: a full query string}; execute -> engine.lucindri_search(...).
 2. LucindriSearcher(BaseSearcher): query_types=[LucindriQuery]; the prompt teaches the query language SELF-CONTAINED and NEVER names "Indri" to the model. Prompt content + configurability: see Implementation Notes.
 3. LucindriSearchEngine (implements SearchEngine): search() -> POST /search with summaries=true; read() -> POST /document (Lucindri serves full text, so NO Cottontail server, NO docno-cp.sqlite); paging/exclude CLIENT-SIDE (Lucindri has no exclude -- over-fetch + drop judged); atom_counts omitted. Share HttpSearchEngine plumbing (httpx, 1h timeout, error->EngineError).
-4. Identity: an OPAQUE id (int | str) -- the controller keys on a hashable id, not an int per se. Cottontail uses cp (int); Lucindri uses the docno string directly, so results/traces carry docnos with no resolver (see Notes).
+4. Identity: DOCNO ON THE WIRE -- the agent pipeline (controller, judger, run-output, traces) keys on the docno string (Hit.id, an opaque str) for BOTH engines. The Cottontail engine translates cp<->docno internally via a memoized DocnoMap (config = base_url + burrow), keeping cp private to the C++ server + burrow; the Lucindri engine is docno-native (URL-only). run_output needs no id mapper (see Notes).
 <!-- SECTION:DESCRIPTION:END -->
 
 ## Acceptance Criteria
@@ -48,17 +48,26 @@ GATED on a running Lucindri service + a Lucindri-built index of the same corpus;
 below is buildable + unit-testable WITHOUT a live server (mocked httpx). See OPEN QUESTIONS
 at the end -- several need a decision before coding.
 
-PHASE 0 -- Opaque id (int | str) [shared; touches the live Cottontail path -- keep it green]
-  - protocol/search.py: Hit.cp -> Id where `Id = int | str` (a shared alias). Use a STRICT
-    pydantic union so a numeric-looking docno is never coerced to int (StrictInt | StrictStr).
-  - engine/base.py (SearchEngine Protocol): widen exclude: Sequence[int] -> Sequence[Id] on
-    search/tiered_search/multitext_search, and read(cp: int) -> read(cp: Id).
-  - protocol/queryable.py: Queryable.execute(exclude: Sequence[Id]); update the 3 concrete
-    execute() signatures.
-  - controller.py: annotate judged: dict[Id, Verdict], seen: set[Id], again: list[tuple[Id,int]]
-    -- ANNOTATIONS ONLY; the logic is already id-agnostic (membership + pass-through).
-  - Cottontail path is unaffected at runtime (cp stays int). Regression gate: the full
-    existing test suite stays green.
+PHASE 0 -- DOCNO ON THE WIRE (rename cp->id + push the cp<->docno shim into the Cottontail
+engine) [REFACTORS the live Cottontail path -- existing tests are the regression gate]
+  - The agent pipeline keys on the DOCNO STRING for both engines. cp is confined to the
+    Cottontail engine and below (C++ server + burrow) and never reaches the controller.
+  - protocol/search.py: rename Hit.cp -> Hit.id, typed str (an opaque doc id); fix the comments
+    (docno IS the id now; no int on the agent wire).
+  - engine/base.py (Protocol): exclude: Sequence[str]; read(id: str). queryable.py: execute(
+    exclude: Sequence[str]) + the 3 concrete signatures.
+  - controller.py: mechanical rename cp -> id (h.cp -> h.id; judged/seen/again keyed on str;
+    emit(..., id=...)); logic unchanged (already id-agnostic).
+  - engine/http.py (HttpSearchEngine = the Cottontail adapter): construct from base_url + burrow;
+    open a bidirectional, MEMOIZED DocnoMap (<burrow>/docno-cp.sqlite). search(): map each C++
+    hit cp -> docno, return Hit(id=docno). read(id): docno -> cp -> get_document. exclude=
+    [docnos]: docno -> cp before cover_search. An in-process memo dict makes recurring docs +
+    the exclude translation ~free.
+  - run_output.py: DELETE the docno_map param + resolve()/_rewrite_cp machinery; the ids are
+    already docnos for every engine -> write them directly (on-disk field: docno). cli.py drops
+    build_docno_map + the write_run(docno_map=) wiring.
+  - This shifts the Cottontail run/trace on-disk id from cp -> docno uniformly (the portable
+    form we always wanted). Regression gate: update + keep green the tests that asserted int cps.
 
 PHASE 1 -- Directable prompt [generalizes to ALL searchers]
   - agents/searcher.py BaseSearcher.__init__: add prompt: str | Path | None = None. If set,
@@ -93,11 +102,11 @@ PHASE 3 -- LucindriSearchEngine (the httpx adapter)
         (len(exclude)+top_k) by rank contain the next top_k unseen), POST /search with
         summaries=true, drop the ids in exclude, keep top_k. "Dry" = fewer than top_k fresh
         returned (list exhausted -> controller breaks on empty results).
-      * synthesize SearchResponse: results -> Hit(rank, score, cp=docno, summary). Lucindri
+      * synthesize SearchResponse: results -> Hit(rank, score, id=docno, summary). Lucindri
         returns no counts, so total_matches / unjudged_matches are SYNTHESIZED (see OPEN Q3)
         and atom_counts = [] (Lucindri has none; the prompt must not promise them).
       * negative Dirichlet-LM scores pass through as-is; preserve server rank order.
-  - read(cp): POST /document {docno: cp}; 200 -> fulltext (incl "" for an empty body);
+  - read(id): POST /document {docno: id}; 200 -> fulltext (incl "" for an empty body);
     404 {error:"unknown docno"} -> None (per the read contract).
   - error mapping: malformed query -> 400 {error} -> EngineError(msg) (controller bounces to
     the LLM). A degenerate/null parse is 200 {results:[]} -> a VALID EMPTY result, NOT an
@@ -115,15 +124,13 @@ PHASE 4 -- Engine selection + run-output + config
     Make the engine CONFIG-SELECTED: an [engine] section names the class + its base_url
     (host:port [+ optional timeout_s / api_key_env]); cli.py constructs that ONE engine at
     startup (replacing the hardcoded build_search_engine(config["cottontail_http_json_server"])).
-    Each engine is an HTTP/JSON client taking just base_url. A mismatched engine<->searcher
-    pairing is the operator's responsibility (no guard). The docno-map asymmetry is NOT an
-    engine concern: for a Cottontail engine, build the docno_map from the burrow; for a
-    Lucindri engine, docno_map = None (ids already are docnos). LucindriSearchEngine
-    implements search()+read(); tiered_search/multitext_search are Cottontail-only and are
-    stubbed (never called for a LucindriQuery).
-  - run_output.py: for an already-docno id, write it under the `docno` key WITHOUT a
-    DocnoMap (see OPEN Q5 for the mechanism). Cottontail path (int cp + sqlite map)
-    unchanged.
+    A mismatched engine<->searcher pairing is the operator's responsibility (no guard).
+    Identity resolution lives INSIDE each engine (Phase 0): the Cottontail engine is built from
+    base_url + burrow and owns a memoized DocnoMap (cp<->docno); the Lucindri engine takes just
+    base_url and is docno-native. Nothing downstream (controller, run_output) maps ids.
+    LucindriSearchEngine implements search()+read(); tiered_search/multitext_search are
+    Cottontail-only and are stubbed (never called for a LucindriQuery).
+  - run_output.py: no id mapping (removed in Phase 0 -- ids are docnos for all engines).
   - config.example.toml: add [lucindri_http_json_server] base_url (+ optional timeout_s,
     api_key_env); document the searcher/engine pairing.
   - Test: run_output writes docnos for a Lucindri-style (already-docno) outcome; CLI wires
@@ -152,18 +159,18 @@ Q3 (missing counts): Lucindri /search returns no total_matches / unjudged_matche
 Q4 (paging/dry model): confirm the stateless re-request paging (count = |consumed| + top_k,
    drop consumed, dry when fewer than top_k fresh). Acceptable that each refill re-runs the
    query server-side (deterministic, so stable)?
-Q5 (run-output field naming): mechanism to write an already-docno id under `docno` with no
-   map -- an ids_are_docnos flag on write_run, or a trivial identity DocnoMap? Recommend the
-   flag.
+Q5 (run-output field naming) -- RESOLVED (owner, 2026-07-10): moot under Option B. run_output
+   has no mapper; the ids are docnos for every engine, written directly (on-disk field: docno).
 Q6 (startup + server lifecycle): assume the Lucindri server is operator-launched and give a
    base_url + a /healthz poll (like the Cottontail server), OR have the agent launch the
    server subprocess? Recommend operator-launched + health poll for v1.
 Q7 (task scoping): TASK-33 is scoped as a DECISION task ("implementation is follow-on"). Do
    we execute the implementation UNDER TASK-33, or spin a new implementation task carrying
    this plan (TASK-33 stays the decision of record)? Recommend a new task.
-Q8 (opaque-id blast radius): confirm we do the full int|str widening now (Phase 0), accepting
-   it touches shared code on the live Cottontail path (kept green by the existing tests),
-   rather than a narrower interim.
+Q8 (id design) -- RESOLVED (owner, 2026-07-10): DOCNO ON THE WIRE (Option B). The agent id is
+   a uniform str docno; rename Hit.cp->Hit.id; the cp<->docno shim moves INTO the Cottontail
+   engine (memoized DocnoMap, base_url+burrow); run_output loses its mapper. This REFACTORS the
+   live Cottontail path (run/trace id shifts cp->docno) -- existing tests are the regression gate.
 <!-- SECTION:PLAN:END -->
 
 ## Implementation Notes
@@ -279,25 +286,27 @@ just Lucindri):
   prompt file is missing (no silent fallback). Add a test. ~3 files touched:
   agents/searcher.py (base __init__), cli.py, config.example.toml (document the field).
 
-IDENTITY (pinned -- AC#1): OPAQUE id (int | str), NOT a synthetic int. The controller uses
-the document id purely as a hashable key -- dict/set membership, the exclude list,
-engine.read, and the trace/run-output -- and never does int arithmetic on it, so the id
-type widens from int to `int | str` with NO controller LOGIC change. Cottontail keeps cp
-(int); the Lucindri adapter sets Hit.cp = the docno STRING directly. Consequences:
-  - no synthetic-int interner and no in-memory reverse map in the adapter;
-  - the results/trace writers need NO resolver for Lucindri -- the id already IS the docno,
-    so write_run persists it as-is; Cottontail is unchanged (cp -> docno via the sqlite
-    DocnoMap at write time).
-This SUPERSEDES the earlier synthetic-int-per-docno pin (AC#1's parenthetical names the two
-options first weighed; opaque-id is strictly simpler and removes the write-time resolver
-coupling that synthetic ints would force onto write_run and the trace log). Small edits it
-implies:
-  (a) type the id as `int | str` (a shared Id alias) on Hit.cp, the SearchEngine Protocol
-      (search exclude=, read cp=), and the controller dict/set annotations -- annotations
-      only. Use a STRICT union so pydantic never coerces a numeric-looking docno to int.
-  (b) run_output currently renames cp->docno only when a DocnoMap is present; for an
-      already-docno id, write it under the `docno` key with no map (a small ids_are_docnos
-      flag or a trivial identity map).
+IDENTITY (pinned -- AC#1): DOCNO ON THE WIRE at the agent layer. The whole agent pipeline
+(controller, judger, run-output, traces) keys on the DOCNO STRING for BOTH engines; the id
+field is a plain str -- rename Hit.cp -> Hit.id (an opaque doc id; no int on the agent wire).
+Each engine owns its native id space and translates at its OWN boundary:
+  - Cottontail (HttpSearchEngine): holds a bidirectional, MEMOIZED DocnoMap opened from the
+    burrow's docno-cp.sqlite. It maps cp->docno on search results, and docno->cp on read() and
+    on the exclude list, before/after calling the C++ server (which still speaks cp). cp is a
+    PRIVATE detail of this engine and below (a cheap int in the hot path) and never reaches the
+    controller. Cottontail engine config = base_url + burrow.
+  - Lucindri (LucindriSearchEngine): docno-native already; URL-only (base_url); no map.
+Consequence: run_output needs NO id resolver/rewriter -- the ids are already docnos for every
+engine, so it writes them directly (on-disk field: docno). This is the docno-on-the-wire design
+retrofitted at the right layer: cp stays where it is cheap (C++ server + burrow), docno is used
+where it is meaningful (the agent).
+SUPERSEDES the earlier synthetic-int pin AND its int|str-union refinement: the agent id is
+uniformly a str docno, and the cp<->docno translation lives INSIDE the Cottontail engine, not in
+run_output. Implementation: (a) rename Hit.cp->Hit.id (str) across protocol / controller /
+queryable / tests; (b) HttpSearchEngine gains the memoized DocnoMap + burrow config and does the
+translation; (c) run_output drops its docno_map param + resolve()/_rewrite_cp machinery. This
+REFACTORS the live Cottontail path (its run/trace on-disk id shifts cp->docno uniformly) --
+existing tests are the regression gate.
 doc-5 / doc-8 already bless docno-on-the-wire.
 
 FOLLOW-ON (implementation, gated on the Lucindri TASK-0019 service): build LucindriQuery /
