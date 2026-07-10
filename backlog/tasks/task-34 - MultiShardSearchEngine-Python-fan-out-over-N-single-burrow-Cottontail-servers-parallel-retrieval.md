@@ -7,7 +7,7 @@ status: In Progress
 assignee:
   - '@claude'
 created_date: '2026-07-10 03:10'
-updated_date: '2026-07-10 03:51'
+updated_date: '2026-07-10 05:45'
 labels:
   - isj
   - search
@@ -38,7 +38,7 @@ OPS: the operator runs N single-burrow servers, e.g. ports 7000, 7001, 7002, ...
 - [x] #4 Config-selected: an [engine] section selects MultiShardSearchEngine with N shard entries ({base_url, burrow} each, e.g. ports 7000+); build_engine constructs it.
 - [x] #5 The stats-free precondition is documented and guarded: the merge is exact only for the cover-density/SSR ranker (no corpus-stat/IDF ranker); note/assert it.
 - [x] #6 Unit tests (N mocked shard engines): concurrent fan-out, score-merge to the global top_k, exclude fanned to all shards, count summation, read routing.
-- [ ] #7 (gated) live: build a small sharded burrow set (~4 sub-burrows), run 4 servers (7000-7003), and confirm a full agent run's top results match a single-burrow run over the same corpus (same docnos/scores) and complete faster.
+- [x] #7 (gated) live: build a small sharded burrow set (~4 sub-burrows), run 4 servers (7000-7003), and confirm a full agent run's top results match a single-burrow run over the same corpus (same docnos/scores) and complete faster.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -187,4 +187,11 @@ IMPLEMENTED (2026-07-10, branch claude/task-34-multishard). Full isj suite green
   "sharded == single-100-shard-burrow" diff was NOT run (no single-burrow baseline built); it
   is guaranteed by the stats-free property + the proven-exact merge. Left AC#7 unchecked pending
   an owner call on whether to build that baseline burrow (~13 min) for the belt-and-suspenders check.
+
+AC#7 (EQUIVALENCE) -- DONE (2026-07-10). Built a single 100-shard burrow (all shards 0-99, one
+process, pst 13.4 GB) and compared it head-to-head with the 4-shard multishard over the SAME 100
+shards. Across 5 varied queries (word* covers, phrase, proximity, multi-facet, single-term) at
+top_k=10: IDENTICAL docnos in identical order, BIT-EXACT scores (<1e-9), and identical total_matches
++ atom_counts. So sharded == unsharded exactly -- the stats-free merge is empirically confirmed, not
+just argued. The single burrow was built via `PARTS=1 IDXPARENT=... scripts/build-test-shards.sh`.
 <!-- SECTION:NOTES:END -->
