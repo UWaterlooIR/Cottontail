@@ -42,6 +42,10 @@ llm = "default"
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"
 llm = "default"
+# Optional PROMPT OVERRIDE (directable prompt): point the searcher at a prompt file
+# instead of the class's bundled <role>.md. A relative path resolves against the repo
+# root; a missing file fails loudly at startup. Omit to use the bundled default.
+#   prompt = "isj/scouting/lucindri-query/lucindri_prompt_v4.txt"
 # To author TIERED precise->broad GCL cascades instead of single covers, swap in:
 #   class = "isj_agent.agents.tiered_searcher.TieredSearcher"
 # Or to author the tiers as a MultiText DSL PROGRAM (macros + @rank; compiled

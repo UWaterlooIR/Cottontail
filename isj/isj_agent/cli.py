@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> None:
     judger_cfg = agent_configs["judger"]
     searcher = _build_agent(
         "searcher",
-        **{k: searcher_cfg[k] for k in ("reasoning_effort", "temperature") if k in searcher_cfg},
+        **{k: searcher_cfg[k] for k in ("reasoning_effort", "temperature", "prompt") if k in searcher_cfg},
     )
     judger = _build_agent(
         "judger",
