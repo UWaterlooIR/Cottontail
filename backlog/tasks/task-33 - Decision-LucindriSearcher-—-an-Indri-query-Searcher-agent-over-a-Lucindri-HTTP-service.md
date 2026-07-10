@@ -1,12 +1,10 @@
 ---
 id: TASK-33
-title: >-
-  Decision: LucindriSearcher — an Indri-query Searcher agent over a Lucindri
-  HTTP service
+title: LucindriSearcher — an Indri-query Searcher agent over a Lucindri HTTP service
 status: To Do
 assignee: []
 created_date: '2026-07-07 16:05'
-updated_date: '2026-07-10 00:38'
+updated_date: '2026-07-10 01:03'
 labels: []
 dependencies: []
 priority: medium
@@ -38,7 +36,15 @@ Cottontail-side scope (follow-on build):
 - [x] #1 Go/no-go decision recorded for a LucindriSearcher, with the identity choice pinned (synthetic-int-per-docno vs docno->cp map)
 - [x] #2 A prompt-validity scout is planned (oracle = Lucindri parser/service) as the gating de-risk step before committing to the adapter/searcher/prompt build
 - [x] #3 Dependency on the Lucindri HTTP service (Lucindri TASK-0019) and the agreed minimal wire contract are captured: /search {query,count,summaries} -> [{docno,score,summary?}] (ISJ sets summaries=true), /document {docno} -> {fulltext}
+- [ ] #4 Docno-on-the-wire refactor: Hit.cp -> Hit.id (str); HttpSearchEngine owns a memoized bidirectional DocnoMap (base_url + burrow); run_output drops its docno_map; the existing Cottontail test suite stays green.
+- [ ] #5 Config-selected engine: an [engine] section (class + base_url [+ burrow for Cottontail]) constructs one engine at startup; the controller is unchanged.
+- [ ] #6 Directable prompt: BaseSearcher takes an optional prompt-file override (fail-loud if missing) via [agents.<role>].prompt; covered by a test.
+- [ ] #7 LucindriQuery (Queryable, tool submit_query) + LucindriSearcher (BaseSearcher) shipping lucindri_searcher.md (= vDefault); unit-tested.
+- [ ] #8 LucindriSearchEngine (search + read) to the finalized TASK-0019 wire contract: client-side exclude/paging (re-request), summaries=true, negative scores preserved, 400->EngineError, 200-empty->empty result, 404-doc->None, /healthz startup poll (fail-fast), optional counts omitted; unit-tested with mocked httpx.
+- [ ] #9 (gated) live end-to-end run + A/B vs cover/multitext by docs-judged, against a running Lucindri server + a Lucindri-built index of the same corpus.
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
@@ -144,29 +150,33 @@ PHASE 5 -- Docs + finalize
 GATED (separate, needs the live Lucindri service + its index; outside-repo build/run not yet
 authorized): end-to-end live run + the A/B vs cover/multitext by docs-judged.
 
-======================= OPEN QUESTIONS / DECISIONS NEEDED =======================
+======================= DECISIONS (all resolved, owner 2026-07-10) =======================
 Q1 (engine selection) -- RESOLVED (owner, 2026-07-10): config-selected engine. An [engine]
    section names the class + its base_url; cli.py constructs that one engine at startup; the
    controller is untouched (already talks only to the SearchEngine interface). Each engine
    takes just a URL. No pairing guard (see Q2).
 Q2 (searcher<->engine pairing) -- RESOLVED (owner, 2026-07-10): NO guard. A mismatched
    engine<->searcher config is the operator's responsibility, out of our hands.
-Q3 (missing counts): Lucindri /search returns no total_matches / unjudged_matches /
-   atom_counts. Proposed: total_matches = hits returned before exclude, unjudged_matches =
-   hits after client-side exclude, atom_counts = []. Confirm -- this drives the "N matches"
-   the controller surfaces to the LLM and the trace; the Lucindri prompt must not reference
-   atom_counts.
-Q4 (paging/dry model): confirm the stateless re-request paging (count = |consumed| + top_k,
-   drop consumed, dry when fewer than top_k fresh). Acceptable that each refill re-runs the
-   query server-side (deterministic, so stable)?
+Q3 (missing counts) -- RESOLVED: make total_matches, unjudged_matches, AND atom_counts all
+   OPTIONAL (None). The Lucindri adapter OMITS all three; the controller guards on presence and,
+   when absent, neither fakes nor surfaces them (not in the trace, not in the Searcher feedback).
+   Safe: none drive control flow, and the Lucindri prompts never describe the return JSON.
+   Change: optional fields on SearchResponse + presence guards in controller/_summarize/emit.
+Q4 (paging/dry model) -- RESOLVED: stateless re-request. The paging LOOP is already the agent's
+   (fetch fetch_k=200 -> wave through in memory -> refill per batch); the adapter only replicates
+   the per-fetch part: request count = |consumed| + top_k, drop consumed, return the next top_k;
+   dry = fewer than top_k fresh. Requery cost is amortized by the 200-batch (re-rank per batch,
+   not per wave) -- parity with Cottontail, no regression.
 Q5 (run-output field naming) -- RESOLVED (owner, 2026-07-10): moot under Option B. run_output
    has no mapper; the ids are docnos for every engine, written directly (on-disk field: docno).
-Q6 (startup + server lifecycle): assume the Lucindri server is operator-launched and give a
-   base_url + a /healthz poll (like the Cottontail server), OR have the agent launch the
-   server subprocess? Recommend operator-launched + health poll for v1.
-Q7 (task scoping): TASK-33 is scoped as a DECISION task ("implementation is follow-on"). Do
-   we execute the implementation UNDER TASK-33, or spin a new implementation task carrying
-   this plan (TASK-33 stays the decision of record)? Recommend a new task.
+Q6 (server lifecycle) -- RESOLVED: operator-launched. The ISJ config points
+   [lucindri_http_json_server] base_url at an already-running server; the adapter polls /healthz on
+   startup and, if it is not reachable/ready, FAILS FAST with a clear message and quits (no
+   auto-spawn, no silent degradation).
+Q7 (task scoping) -- RESOLVED: implement UNDER TASK-33. It ceased to be a decision task -- it IS
+   the implementation task now (retitled; implementation ACs added; the original decision ACs stay
+   checked as completed preliminaries). One task, with the live end-to-end + A/B as a GATED final
+   AC (needs a running Lucindri server + a Lucindri-built index of the same corpus).
 Q8 (id design) -- RESOLVED (owner, 2026-07-10): DOCNO ON THE WIRE (Option B). The agent id is
    a uniform str docno; rename Hit.cp->Hit.id; the cp<->docno shim moves INTO the Cottontail
    engine (memoized DocnoMap, base_url+burrow); run_output loses its mapper. This REFACTORS the
