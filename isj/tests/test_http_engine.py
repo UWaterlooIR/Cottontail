@@ -38,7 +38,7 @@ def test_search_posts_body_and_auth_header():
         return httpx.Response(200, json=_COVER_JSON)
 
     eng = _engine(handler, token="secret")
-    resp = eng.search("(^ black bear*)", top_k=5, exclude=[100, 200], window=50)
+    resp = eng.search("(^ black bear*)", top_k=5, exclude=["100", "200"], window=50)
 
     assert seen["path"] == "/tools/cover_search"
     assert seen["auth"] == "Bearer secret"
@@ -46,7 +46,7 @@ def test_search_posts_body_and_auth_header():
         "query": "(^ black bear*)", "top_k": 5, "exclude": [100, 200], "window": 50,
     }
     assert isinstance(resp, SearchResponse)
-    assert resp.total_matches == 3 and resp.results[0].cp == 100
+    assert resp.total_matches == 3 and resp.results[0].id == "100"
 
 
 def test_no_auth_header_without_token():
@@ -89,7 +89,7 @@ def test_tiered_search_posts_tiers_body_and_auth_header():
 
     eng = _engine(handler, token="secret")
     resp = eng.tiered_search(["(>> (# 8) (^ black bear*))", "(^ black bear*)"],
-                             top_k=5, exclude=[100, 200], window=50)
+                             top_k=5, exclude=["100", "200"], window=50)
 
     assert seen["path"] == "/tools/tiered_query_search"
     assert seen["auth"] == "Bearer secret"
@@ -99,7 +99,7 @@ def test_tiered_search_posts_tiers_body_and_auth_header():
     }
     # the response is the SAME cover_search shape (reused CoverResponse/SearchResponse)
     assert isinstance(resp, SearchResponse)
-    assert resp.total_matches == 3 and resp.results[0].cp == 100
+    assert resp.total_matches == 3 and resp.results[0].id == "100"
 
 
 def test_tiered_search_non_2xx_raises_engine_error_with_server_message():
@@ -158,7 +158,7 @@ def test_live_cover_search_round_trip():
     assert isinstance(resp, SearchResponse)
     assert resp.total_matches >= 0
     if resp.results:
-        body = eng.read(resp.results[0].cp)
+        body = eng.read(resp.results[0].id)
         assert body is None or isinstance(body, str)
     # A malformed query is rejected by the engine -> EngineError.
     with pytest.raises(EngineError):

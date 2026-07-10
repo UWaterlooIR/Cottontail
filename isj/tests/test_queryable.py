@@ -38,13 +38,13 @@ def test_cover_execute_forwards_args_and_returns_engine_response():
     resp = SearchResponse(
         total_matches=3, unjudged_matches=3,
         atom_counts=[AtomCount(term="a", count=5)],
-        results=[Hit(rank=1, score=1.0, cp=10, summary="s")],
+        results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
     out = CoverQuery("(^ a b)").execute(eng, top_k=7, exclude=[], window=50)
     # execute() passes (gcl, top_k, exclude, window) straight through to engine.search
     assert eng.calls[0] == {"query": "(^ a b)", "top_k": 7, "exclude": [], "window": 50}
-    assert out.total_matches == 3 and out.results[0].cp == 10
+    assert out.total_matches == 3 and out.results[0].id == "10"
 
 
 # --- TieredQuery (TASK-19) -------------------------------------------------
@@ -95,14 +95,14 @@ def test_tiered_execute_forwards_tiers_to_engine_tiered_search():
     resp = SearchResponse(
         total_matches=4, unjudged_matches=4,
         atom_counts=[AtomCount(term="a", count=5)],
-        results=[Hit(rank=1, score=2.0, cp=11, summary="s")],
+        results=[Hit(rank=1, score=2.0, id="11", summary="s")],
     )
     eng = FakeEngine([resp])
-    out = TieredQuery(("(^ a b)", "(^ a)")).execute(eng, top_k=7, exclude=[1], window=50)
+    out = TieredQuery(("(^ a b)", "(^ a)")).execute(eng, top_k=7, exclude=["1"], window=50)
     # execute() forwards the tiers (as a list) + paging args to engine.tiered_search;
     # the recorded call carries a `tiers` key (not `query`), proving the tiered path.
-    assert eng.calls[0] == {"tiers": ["(^ a b)", "(^ a)"], "top_k": 7, "exclude": [1], "window": 50}
-    assert out.total_matches == 4 and out.results[0].cp == 11
+    assert eng.calls[0] == {"tiers": ["(^ a b)", "(^ a)"], "top_k": 7, "exclude": ["1"], "window": 50}
+    assert out.total_matches == 4 and out.results[0].id == "11"
 
 
 def test_tiered_single_tier_execute_still_uses_tiered_search():
@@ -157,9 +157,9 @@ def test_multitext_execute_forwards_program_to_engine_multitext_search():
     resp = SearchResponse(
         total_matches=2, unjudged_matches=2,
         atom_counts=[AtomCount(term="bear*", count=9)],
-        results=[Hit(rank=1, score=1.0, cp=10, summary="s")],
+        results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
-    out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=[3], window=60)
-    assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": [3], "window": 60}
-    assert out.results[0].cp == 10
+    out = MultiTextProgram(PROGRAM).execute(eng, top_k=5, exclude=["3"], window=60)
+    assert eng.calls[0] == {"program": PROGRAM, "top_k": 5, "exclude": ["3"], "window": 60}
+    assert out.results[0].id == "10"

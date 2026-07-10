@@ -92,7 +92,7 @@ class Controller:
             {"role": "system", "content": self.searcher.system_prompt},
             {"role": "user", "content": f"Question: {intent}"},
         ]
-        judged: dict[int, Verdict] = {}      # GLOBAL: cp -> verdict judged in ANY prior query
+        judged: dict[str, Verdict] = {}      # GLOBAL: docno -> verdict judged in ANY prior query
         recorded: list[RankedEntry] = []     # one entry per NEW judgment this intent
         events: list[TraceEvent] = []
         queries = 0
@@ -164,17 +164,17 @@ class Controller:
         """
         qs = queryable.query_string()  # display string for the trace events + surfacing_query
         streak = 0
-        seen: set[int] = set()   # cps consumed THIS query -> the engine exclude (NOT global judged)
+        seen: set[str] = set()   # docnos consumed THIS query -> the engine exclude (NOT global judged)
         depth = 0                # K: ranks descended this query
-        again: list[tuple[int, int]] = []   # (cp, grade) prior-judged re-encounters (count only)
+        again: list[tuple[str, int]] = []   # (docno, grade) prior-judged re-encounters (count only)
         fresh: list[tuple] = []  # (Hit, Verdict) NEW judgments this query -> returned to Searcher
         buffer: list = []
-        total_matches = 0
-        atom_counts: list = []   # per query-leaf corpus counts; identical across this query's fetches
+        total_matches = None
+        atom_counts: list | None = None   # per query-leaf corpus counts (None if the engine omits them)
         exhausted = False
 
         while not exhausted and len(recorded) < intent_budget:
-            if not buffer:  # REFILL: fetch the next batch (exclude = this query's consumed cps)
+            if not buffer:  # REFILL: fetch the next batch (exclude = this query's consumed docnos)
                 exclude = sorted(seen)
                 ts = time.time()
                 emit("search_request", ts, 0.0, query=qs, top_k=self.fetch_k,
@@ -186,46 +186,53 @@ class Controller:
                     emit("bounce", time.time(), 0.0, kind="engine_error", query=qs, message=str(e))
                     return {"error": str(e)}
                 eng_ms = (time.time() - ts) * 1000.0
-                total_matches = resp.total_matches
-                fetch_atoms = [a.model_dump() for a in resp.atom_counts]
-                if not atom_counts:  # representative = the query's first fetch (atoms are identical across fetches)
+                if resp.total_matches is not None:
+                    total_matches = resp.total_matches
+                fetch_atoms = ([a.model_dump() for a in resp.atom_counts]
+                               if resp.atom_counts is not None else None)
+                if atom_counts is None and fetch_atoms is not None:  # representative = the query's first fetch
                     atom_counts = fetch_atoms
-                emit("search", ts, eng_ms, query=qs, total_matches=resp.total_matches,
-                     unjudged_matches=resp.unjudged_matches,
-                     atom_counts=fetch_atoms,
-                     returned=len(resp.results),
-                     results=[h.model_dump() for h in resp.results])
+                # OPTIONAL diagnostics (Q3): only emit the counts an engine actually reports.
+                diag = {}
+                if resp.total_matches is not None:
+                    diag["total_matches"] = resp.total_matches
+                if resp.unjudged_matches is not None:
+                    diag["unjudged_matches"] = resp.unjudged_matches
+                if fetch_atoms is not None:
+                    diag["atom_counts"] = fetch_atoms
+                emit("search", ts, eng_ms, query=qs, returned=len(resp.results),
+                     results=[h.model_dump() for h in resp.results], **diag)
                 if not resp.results:  # dry / list exhausted
                     break
                 buffer = list(resp.results)
 
             wave = buffer[: self.wave_size]
             buffer = buffer[self.wave_size :]
-            new = [h for h in wave if h.cp not in judged]   # only NEW docs go to the Judger
-            docs = [(h.summary, (self.engine.read(h.cp) or "")[: self.max_doc_chars]) for h in new]
-            calls_by_cp = {h.cp: c for h, c in zip(new, self.judger.judge(intent, docs))}  # PARALLEL
+            new = [h for h in wave if h.id not in judged]   # only NEW docs go to the Judger
+            docs = [(h.summary, (self.engine.read(h.id) or "")[: self.max_doc_chars]) for h in new]
+            calls_by_id = {h.id: c for h, c in zip(new, self.judger.judge(intent, docs))}  # PARALLEL
             # Systemic guard (TASK-27): every call in the wave failed after retries
             # -> an outage, not a hiccup; abort with the partial result as before.
-            if new and all(c.error or c.verdict is None for c in calls_by_cp.values()):
-                for c in calls_by_cp.values():
+            if new and all(c.error or c.verdict is None for c in calls_by_id.values()):
+                for c in calls_by_id.values():
                     emit("llm_call", time.time(), c.duration_ms, purpose="judge",
                          request=c.request, content=c.content, reasoning=c.reasoning,
                          error=c.error, retries=c.retries, **c.usage)
                 raise _JudgeFailure(
                     f"entire judge wave failed ({len(new)} calls, after retries): "
-                    f"{next(iter(calls_by_cp.values())).error}")
+                    f"{next(iter(calls_by_id.values())).error}")
 
             # RETAIN ALL: ONE pass in rank order. Record EVERY new doc -- even past the streak
             # trip -- and, on a judge failure, only AFTER recording the good docs ranked before it.
             for h in wave:
-                seen.add(h.cp)
+                seen.add(h.id)
                 depth += 1
-                if h.cp in judged:           # prior judgment: count only (no re-read/re-judge/re-record)
-                    g = judged[h.cp].grade
-                    again.append((h.cp, g))
-                    emit("revisit", time.time(), 0.0, cp=h.cp, grade=g)
+                if h.id in judged:           # prior judgment: count only (no re-read/re-judge/re-record)
+                    g = judged[h.id].grade
+                    again.append((h.id, g))
+                    emit("revisit", time.time(), 0.0, id=h.id, grade=g)
                 else:                          # NEW: emit the judge llm_call, then record
-                    c = calls_by_cp[h.cp]
+                    c = calls_by_id[h.id]
                     emit("llm_call", time.time(), c.duration_ms, purpose="judge", request=c.request,
                          content=c.content, reasoning=c.reasoning, error=c.error,
                          retries=c.retries, **c.usage)
@@ -233,17 +240,17 @@ class Controller:
                         # TASK-27: retries exhausted -> record the -2 sentinel and
                         # keep going; the doc consumes budget, enters the judged/
                         # exclude set, and the Searcher sees the outcome.
-                        emit("judge_failed", time.time(), 0.0, cp=h.cp,
+                        emit("judge_failed", time.time(), 0.0, id=h.id,
                              retries=c.retries, error=c.error)
                         v = _failed_verdict()
                     else:
                         v = c.verdict
-                    judged[h.cp] = v
-                    recorded.append(RankedEntry(rank=0, cp=h.cp, grade=v.grade, score=h.score,
+                    judged[h.id] = v
+                    recorded.append(RankedEntry(rank=0, id=h.id, grade=v.grade, score=h.score,
                                                 summary=h.summary, reason=v.reason,
                                                 surfacing_query=qs))
                     fresh.append((h, v))
-                    emit("judge", time.time(), 0.0, cp=h.cp, grade=v.grade, reason=v.reason)
+                    emit("judge", time.time(), 0.0, id=h.id, grade=v.grade, reason=v.reason)
                     g = v.grade
                 if g < 0:      # TASK-27 sentinel: an ERROR is evidence of neither
                     pass       # relevance nor irrelevance -- the streak is untouched
@@ -267,10 +274,13 @@ class Controller:
         # content last; and per result rank/score then summary BEFORE reason BEFORE grade,
         # so the agent reads the passage before it sees the assessor's verdict.
         x = sum(1 for _, g in again if self._relevant(g))
+        out: dict = {**queryable.trace_arguments()}
+        if atom_counts is not None:      # OPTIONAL (Q3): omit for an engine that omits them
+            out["atom_counts"] = atom_counts
+        if total_matches is not None:
+            out["total_matches"] = total_matches
         return {
-            **queryable.trace_arguments(),
-            "atom_counts": atom_counts,
-            "total_matches": total_matches,
+            **out,
             "depth_judged": depth,
             "already_judged": {"count": len(again), "relevant": x, "non_relevant": len(again) - x},
             "new_results": [

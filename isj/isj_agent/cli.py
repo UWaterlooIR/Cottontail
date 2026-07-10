@@ -17,7 +17,6 @@ from pathlib import Path
 
 from isj_agent.config import (
     build_client,
-    build_docno_map,
     build_search_engine,
     load_class,
 )
@@ -131,7 +130,9 @@ def main(argv: list[str] | None = None) -> None:
         "judger",
         **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature") if k in judger_cfg},
     )
-    engine = build_search_engine(config["cottontail_http_json_server"])
+    engine = build_search_engine(
+        config["cottontail_http_json_server"], burrow_override=args.burrow
+    )
     loop_cfg = config.get("loop", {})
     controller = Controller(
         searcher, judger, engine,
@@ -144,10 +145,6 @@ def main(argv: list[str] | None = None) -> None:
         max_list_depth=loop_cfg.get("max_list_depth"),
     )
 
-    docno_map = build_docno_map(
-        config["cottontail_http_json_server"], burrow_override=args.burrow
-    )
-
     orchestrator = Orchestrator(
         analyst, controller, max_judgments=loop_cfg.get("max_judgments", 1000)
     )
@@ -156,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     write_run(
         args.out, intents, outcomes,
-        docno_map=docno_map, run_error=run_error, overwrite=args.overwrite,
+        run_error=run_error, overwrite=args.overwrite,
     )
 
     def _failed(o: Outcome) -> bool:

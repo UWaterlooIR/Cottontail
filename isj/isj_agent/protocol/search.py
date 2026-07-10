@@ -8,9 +8,10 @@ tasks: the HTTP boundary (C1's HttpSearchEngine does
 and the LLM boundary (the Judger derives its guided-output schema from
 `Verdict.model_json_schema()`). One model = single source of truth.
 
-cp-native (doc-6): the document's working identity `cp` is an INTEGER (the :item
-container start address) on the wire and here. docno never enters the agent; it
-appears only at C2 persistence.
+Docno on the wire (Option B): the document's agent-facing identity `id` is an opaque
+str -- the docno -- for EVERY engine. Each engine translates its native id space to
+the docno at its own boundary (the Cottontail engine maps its internal cp<->docno; a
+Lucindri engine is docno-native), so no int id ever reaches the agent.
 """
 
 from typing import Literal
@@ -29,9 +30,9 @@ class Hit(BaseModel):
     """One ranked document in a cover_search response (A1)."""
 
     rank: int  # 1-based within this response
-    score: float  # ssr cover-density score
-    cp: int  # the document's working identity (:item container start address)
-    summary: str  # cover-biased extractive summary
+    score: float  # engine relevance score (cover-density for Cottontail; may be negative for a LM engine)
+    id: str  # the document's agent-facing identity: the docno (opaque str)
+    summary: str  # query-biased extractive summary
 
 
 class SearchResponse(BaseModel):
@@ -45,9 +46,12 @@ class SearchResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    total_matches: int  # documents matching the query in :item (ignores exclude)
-    unjudged_matches: int  # matches not in the exclude set
-    atom_counts: list[AtomCount]
+    # These three are OPTIONAL diagnostics: an engine that does not report them
+    # (e.g. Lucindri) omits them (None), and the controller neither fakes nor
+    # surfaces them. Cottontail's cover_search always fills all three.
+    total_matches: int | None = None  # documents matching the query (ignores exclude)
+    unjudged_matches: int | None = None  # matches not in the exclude set
+    atom_counts: list[AtomCount] | None = None
     results: list[Hit]
 
 

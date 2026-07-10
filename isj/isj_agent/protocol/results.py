@@ -2,8 +2,9 @@
 
 A `run(intent)` produces a `SearcherResult` = a per-intent `RankedList` (the judged,
 graded passages) plus a structured event `trace`. These are consumed downstream by
-C2 (the run-output writer, which rewrites cp -> docno at persistence) and C3 (the
-CLI orchestrator). cp-native (doc-6): identifiers are integer cps; docno never
+C2 (the run-output writer) and C3 (the CLI orchestrator). Docno on the wire
+(Option B): the identifier `id` is an opaque str (the docno) for every engine --
+the engine translates its native id space to docno at its boundary, so no int id
 enters the agent.
 """
 
@@ -16,7 +17,7 @@ class RankedEntry(BaseModel):
     """One judged passage in the compiled per-intent ranked list."""
 
     rank: int  # the COMPILED per-intent rank (distinct from a Hit's per-search rank)
-    cp: int
+    id: str  # the document's agent-facing identity: the docno (opaque str)
     # canonical UMBRELA / TREC 0-3 scale (matches Verdict.grade), plus the -2
     # error sentinel (TASK-27): "Judger agent failed to assess the relevance."
     # -2 is controller-constructed only -- the model-facing Verdict schema stays 0-3.

@@ -17,13 +17,13 @@ class FakeEngine:
     """A SearchEngine driven by an ordered script of responses/errors.
 
     Each entry is either a `SearchResponse` to return or an `EngineError` to raise.
-    `docs` maps cp -> body text for `read()`.
+    `docs` maps id (docno) -> body text for `read()`.
     """
 
     def __init__(
         self,
         script: list[SearchResponse | EngineError],
-        docs: dict[int, str] | None = None,
+        docs: dict[str, str] | None = None,
     ):
         self._script = list(script)
         self._docs = docs or {}
@@ -37,7 +37,7 @@ class FakeEngine:
         query: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         self.calls.append(
@@ -50,7 +50,7 @@ class FakeEngine:
         tiers: Sequence[str],
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         # The real cascade (per-tier ranking, cross-tier de-dup, per-tier summaries)
@@ -67,7 +67,7 @@ class FakeEngine:
         program: str,
         *,
         top_k: int = 10,
-        exclude: Sequence[int] = (),
+        exclude: Sequence[str] = (),
         window: int = 75,
     ) -> SearchResponse:
         # Server-side compilation is faked the same way as the cascade: the next
@@ -79,7 +79,7 @@ class FakeEngine:
         )
         return self._next(set(exclude))
 
-    def _next(self, exclude: set[int]) -> SearchResponse:
+    def _next(self, exclude: set[str]) -> SearchResponse:
         if self._i >= len(self._script):
             # Script exhausted: a dry response so the agent loop terminates.
             return SearchResponse(
@@ -91,22 +91,23 @@ class FakeEngine:
             raise entry
         return _apply_exclude(entry, exclude)
 
-    def read(self, cp: int) -> str | None:
-        return self._docs.get(cp)
+    def read(self, id: str) -> str | None:
+        return self._docs.get(id)
 
 
-def _apply_exclude(resp: SearchResponse, exclude: set[int]) -> SearchResponse:
-    """Mirror the engine's cp post-filter on a scripted batch: drop Hits whose cp
+def _apply_exclude(resp: SearchResponse, exclude: set[str]) -> SearchResponse:
+    """Mirror the engine's post-filter on a scripted batch: drop Hits whose id
     is excluded, decrement unjudged_matches by the number removed (total_matches is
     corpus-wide breadth and is unchanged), and re-rank the survivors 1..N."""
     if not exclude:
         return resp
-    survivors = [h for h in resp.results if h.cp not in exclude]
+    survivors = [h for h in resp.results if h.id not in exclude]
     removed = len(resp.results) - len(survivors)
     reranked = [h.model_copy(update={"rank": i}) for i, h in enumerate(survivors, 1)]
     return resp.model_copy(
         update={
             "results": reranked,
-            "unjudged_matches": resp.unjudged_matches - removed,
+            "unjudged_matches": (resp.unjudged_matches - removed)
+            if resp.unjudged_matches is not None else None,
         }
     )

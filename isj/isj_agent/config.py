@@ -40,7 +40,7 @@ def build_client(llm_config: dict) -> openai.OpenAI:
     return openai.OpenAI(base_url=llm_config["base_url"], api_key=api_key)
 
 
-def build_search_engine(cfg: dict) -> HttpSearchEngine:
+def build_search_engine(cfg: dict, burrow_override: str | None = None) -> HttpSearchEngine:
     """Construct an HttpSearchEngine from a parsed [cottontail_http_json_server] entry.
 
     The bearer token comes ONLY from the environment variable named by api_key_env
@@ -58,7 +58,12 @@ def build_search_engine(cfg: dict) -> HttpSearchEngine:
     kwargs = {}
     if "timeout_s" in cfg:
         kwargs["timeout"] = float(cfg["timeout_s"])
-    return HttpSearchEngine(base_url=cfg["base_url"], token=token, **kwargs)
+    # Docno on the wire (Option B): the engine owns the cp<->docno map and translates
+    # at its boundary, so the agent sees only docnos. A docno-less burrow -> no map.
+    docno_map = build_docno_map(cfg, burrow_override=burrow_override)
+    return HttpSearchEngine(
+        base_url=cfg["base_url"], token=token, docno_map=docno_map, **kwargs
+    )
 
 
 def build_docno_map(cfg: dict, burrow_override: str | None = None) -> DocnoMap | None:

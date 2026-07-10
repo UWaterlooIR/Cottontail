@@ -53,7 +53,7 @@ class Queryable(ABC):
 
     @abstractmethod
     def execute(
-        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[int], window: int
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[str], window: int
     ) -> SearchResponse:
         """Run this query against `engine` and return the enriched response.
 
@@ -104,7 +104,7 @@ class CoverQuery(Queryable):
         return cls(gcl=args["query"])
 
     def execute(
-        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[int], window: int
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[str], window: int
     ) -> SearchResponse:
         return engine.search(self.gcl, top_k=top_k, exclude=exclude, window=window)
 
@@ -174,7 +174,7 @@ class TieredQuery(Queryable):
         return cls(tiers=tuple(tiers))
 
     def execute(
-        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[int], window: int
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[str], window: int
     ) -> SearchResponse:
         return engine.tiered_search(
             list(self.tiers), top_k=top_k, exclude=exclude, window=window
@@ -243,7 +243,7 @@ class MultiTextProgram(Queryable):
         return cls(program=program)
 
     def execute(
-        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[int], window: int
+        self, engine: SearchEngine, *, top_k: int, exclude: Sequence[str], window: int
     ) -> SearchResponse:
         return engine.multitext_search(
             self.program, top_k=top_k, exclude=exclude, window=window
