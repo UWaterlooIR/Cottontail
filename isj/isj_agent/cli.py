@@ -3,9 +3,14 @@
     python -m isj_agent.cli --question "<q>" --out <dir> [--overwrite] [--verbose] [--burrow <path>]
 
 Wires the whole pipeline from config.toml: Analyst -> per-intent Searcher (over the
-live HttpSearchEngine) -> write_run. A single flag-based entry, no subcommands, one
-question per run. The absence of <out>/errors.log means the whole run succeeded;
-the CLI exits non-zero if it was written.
+live engine) -> a StreamingRunWriter. A single flag-based entry, no subcommands, one
+question per run.
+
+Output is written to <out>/ INCREMENTALLY as the run proceeds (TASK-35): tail
+<out>/activity.log to watch activity live (queries, searches, per-doc judgements, and
+'awaiting LLM'/'awaiting judge' markers so a hung or looping call is visible instead
+of silence). The absence of <out>/errors.log means the whole run succeeded; the CLI
+exits non-zero if it was written. --verbose additionally mirrors activity.log to stdout.
 """
 
 from __future__ import annotations
@@ -22,62 +27,7 @@ from isj_agent.config import (
 )
 from isj_agent.controller import Controller
 from isj_agent.orchestrator import Orchestrator
-from isj_agent.run_output import Outcome, RunError, write_run
-
-
-def _render_event(ev) -> None:
-    d = ev.model_dump()
-    t = d.get("type")
-    if t == "llm_call":
-        pt, ct = d.get("prompt_tokens"), d.get("completion_tokens")
-        toks = f" tokens={pt}+{ct}" if pt is not None else ""
-        purpose = d.get("purpose")
-        head = f"turn {d['turn']}" if purpose == "searcher_turn" else purpose
-        print(f"    llm[{head}]{toks} ({d['duration_ms']:.0f} ms)")
-        if purpose == "searcher_turn" and d.get("content") and d["content"].strip():
-            print(f"      reasoning: {d['content'].strip()}")
-        for c in d.get("calls", []):
-            print(f"      -> {c['name']}({c['arguments']})")
-    elif t == "error":
-        pt = d.get("prompt_tokens")
-        size = f" (prompt_tokens={pt})" if pt is not None else ""
-        print(f"    ERROR turn {d.get('turn')}: {d.get('error_type')}: {d.get('message')}{size}")
-    elif t == "propose":
-        print(f"    -> query: {d['query']!r}")
-    elif t == "search_request":
-        print(f"    -> request: {d['query']!r} (exclude={len(d.get('exclude', []))})")
-    elif t == "search":
-        print(
-            f"    search {d['query']!r}: total={d['total_matches']} "
-            f"returned={len(d.get('results', []))} ({d['duration_ms']:.0f} ms)"
-        )
-    elif t == "judge":
-        print(f"    judge {d.get('docno', d.get('cp'))}: grade={d['grade']}")
-    elif t == "revisit":
-        print(f"    revisit {d.get('docno', d.get('cp'))}: grade={d['grade']} (already judged)")
-    elif t == "list_exhausted":
-        print(f"    list exhausted at depth {d['depth']} (streak {d['streak']})")
-    elif t == "bounce":
-        print(f"    bounce[{d['kind']}]: {d.get('message')}")
-    elif t == "stop":
-        print(f"    stop: {d['reason']}")
-
-
-def _make_on_intent(verbose: bool):
-    if not verbose:
-        return None
-
-    def on_intent(i: int, interp: str, outcome: Outcome) -> None:
-        print(f"\n[intent {i:02d}] {interp}")
-        if isinstance(outcome, RunError):
-            print(f"    FAILED: {outcome.message}")
-        else:
-            for ev in outcome.events:
-                _render_event(ev)
-            note = f" (PARTIAL: {outcome.error})" if outcome.error else ""
-            print(f"    -> {len(outcome.ranked_list.entries)} judged passages{note}")
-
-    return on_intent
+from isj_agent.run_output import Outcome, RunError, StreamingRunWriter
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -146,13 +96,16 @@ def main(argv: list[str] | None = None) -> None:
     orchestrator = Orchestrator(
         analyst, controller, max_judgments=loop_cfg.get("max_judgments", 1000)
     )
+    # Open the run directory up front (created if missing; fail fast if non-empty and
+    # not --overwrite) so activity streams to <out>/activity.log as the run proceeds.
+    writer = StreamingRunWriter(args.out, overwrite=args.overwrite, echo=args.verbose)
     intents, outcomes, run_error = orchestrator.run_question(
-        args.question, on_intent=_make_on_intent(args.verbose)
+        args.question,
+        on_analyzed=writer.start,
+        observer=writer.observe,
+        on_intent=writer.finish_intent,
     )
-    write_run(
-        args.out, intents, outcomes,
-        run_error=run_error, overwrite=args.overwrite,
-    )
+    writer.finish(run_error=run_error)
 
     def _failed(o: Outcome) -> bool:
         # a per-intent RunError, or a SearcherResult that ended on a caught failure

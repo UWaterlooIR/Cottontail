@@ -126,3 +126,76 @@ def test_intents_none_writes_only_errors_log(tmp_path):
     write_run(out, None, [], run_error="analysis failed: boom")
     assert not (out / "intents.json").exists()
     assert "run-level error: analysis failed: boom" in (out / "errors.log").read_text()
+
+
+# --- StreamingRunWriter (TASK-35) ------------------------------------------
+
+from isj_agent.protocol.results import LiveMarker  # noqa: E402
+from isj_agent.run_output import StreamingRunWriter  # noqa: E402
+
+
+def test_streaming_writer_matches_write_run_byte_for_byte(tmp_path):
+    # The incremental writer must produce, for a completed run, the SAME
+    # intents.json / intent-NN.json / intent-NN.trace.jsonl as the one-shot write_run.
+    intents = Intents(question="Q?", interpretations=["interp zero", "interp one"])
+    outcomes = [_result("interp zero"), _result("interp one")]
+
+    a = tmp_path / "oneshot"
+    write_run(a, intents, outcomes)
+
+    b = tmp_path / "streamed"
+    w = StreamingRunWriter(b)
+    w.start(intents)
+    for i, (interp, oc) in enumerate(zip(intents.interpretations, outcomes)):
+        for ev in oc.events:
+            w.observe(i, ev)
+        w.finish_intent(i, interp, oc)
+    w.finish()
+
+    for name in ("intents.json", "intent-00.json", "intent-01.json",
+                 "intent-00.trace.jsonl", "intent-01.trace.jsonl"):
+        assert (a / name).read_bytes() == (b / name).read_bytes(), name
+    assert not (a / "errors.log").exists() and not (b / "errors.log").exists()
+    # the new observable artifact
+    assert (b / "activity.log").read_text().strip()
+
+
+def test_streaming_out_dir_created_if_missing(tmp_path):
+    run = tmp_path / "deep" / "nested" / "run"   # does not exist
+    w = StreamingRunWriter(run)
+    w.start(Intents(question="Q?", interpretations=["a"]))
+    w.finish()
+    assert (run / "activity.log").exists() and (run / "intents.json").exists()
+
+
+def test_streaming_markers_go_to_activity_log_not_trace(tmp_path):
+    run = tmp_path / "run"
+    w = StreamingRunWriter(run)
+    w.start(Intents(question="Q?", interpretations=["only"]))
+    w.observe(0, LiveMarker(kind="await_searcher_turn", ts=1.0, turn=1))
+    w.observe(0, TraceEvent(type="llm_call", ts=1.1, duration_ms=5.0, purpose="searcher_turn", turn=1))
+    w.observe(0, LiveMarker(kind="await_judge", ts=1.2, count=3))
+    w.finish_intent(0, "only", _result("only"))
+    w.finish()
+
+    trace = (run / "intent-00.trace.jsonl").read_text()
+    assert trace.count("\n") == 1              # only the one real TraceEvent persisted
+    assert "await" not in trace                # no marker leaked into the trace
+    act = (run / "activity.log").read_text()
+    assert "awaiting LLM" in act and "judge call" in act   # markers ARE in the activity log
+
+
+def test_streaming_partial_run_leaves_inspectable_output(tmp_path):
+    # Simulate a kill: start + stream a couple events, but never finish_intent/finish.
+    run = tmp_path / "run"
+    w = StreamingRunWriter(run)
+    w.start(Intents(question="Q?", interpretations=["a", "b"]))
+    w.observe(0, TraceEvent(type="propose", ts=1.0, duration_ms=0.0, query="(^ a)"))
+    w.observe(0, TraceEvent(type="search", ts=1.1, duration_ms=5.0, query="(^ a)", returned=0, results=[]))
+    # no finish_intent / finish -> mimic a crash mid-intent
+
+    assert (run / "intents.json").exists()               # written up front
+    assert (run / "activity.log").read_text().strip()    # partial activity survives
+    trace = (run / "intent-00.trace.jsonl").read_text().splitlines()
+    assert len(trace) == 2                               # flushed per line -> survives a kill
+    assert not (run / "errors.log").exists()             # never reached finish()

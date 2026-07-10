@@ -340,3 +340,41 @@ def test_llm_call_trace_names_the_cover_search_tool():
     assert turn["tool"] == "cover_search"
     assert turn["calls"][0]["name"] == "cover_search"
     assert json.loads(turn["calls"][0]["arguments"]) == {"query": "(^ a b)"}
+
+
+def test_observer_streams_events_and_pre_call_markers_live():
+    # TASK-35: with an observer, every trace event is delivered the moment it is
+    # emitted, plus live-only 'awaiting' markers BEFORE each blocking LLM call. The
+    # markers never leak into the persisted events.
+    from isj_agent.protocol.results import LiveMarker, TraceEvent
+
+    resp, docs = build([(10, 3), (20, 0)])
+    ctl = _ctl(["(^ q1)"], [resp], docs, judger=StubJudger(concurrency=8), max_queries=1)
+    seen = []
+    result = ctl.run("intent", intent_budget=100, observer=seen.append)
+
+    # every persisted TraceEvent was observed live, in order
+    observed_events = [e for e in seen if isinstance(e, TraceEvent)]
+    assert observed_events == result.events
+
+    # a searcher-turn marker precedes the searcher_turn llm_call
+    turn_marker = next(i for i, e in enumerate(seen)
+                       if isinstance(e, LiveMarker) and e.kind == "await_searcher_turn")
+    turn_call = next(i for i, e in enumerate(seen)
+                     if isinstance(e, TraceEvent) and e.type == "llm_call"
+                     and e.model_dump().get("purpose") == "searcher_turn")
+    assert turn_marker < turn_call
+
+    # a judge-wave marker was emitted (before the wave's judgements)
+    assert any(isinstance(e, LiveMarker) and e.kind == "await_judge" for e in seen)
+
+    # markers are LIVE-ONLY: none are in the persisted trace
+    assert all(isinstance(e, TraceEvent) for e in result.events)
+
+
+def test_no_observer_is_byte_for_byte_unchanged():
+    # Without an observer the run behaves exactly as before (no markers, same events).
+    resp, docs = build([(10, 3), (20, 0)])
+    ctl = _ctl(["(^ q1)"], [resp], docs, max_queries=1)
+    result = ctl.run("intent", intent_budget=100)
+    assert [e.type for e in result.events][:2] == ["llm_call", "propose"]

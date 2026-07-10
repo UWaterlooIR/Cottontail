@@ -36,10 +36,12 @@ class StubController:
         self.behavior = behavior  # interp -> SearcherResult | Exception
         self.calls = []
         self.budgets = []
+        self.observers = []
 
-    def run(self, interp, intent_budget):
+    def run(self, interp, intent_budget, observer=None):
         self.calls.append(interp)
         self.budgets.append(intent_budget)
+        self.observers.append(observer)
         b = self.behavior[interp]
         if isinstance(b, Exception):
             raise b
