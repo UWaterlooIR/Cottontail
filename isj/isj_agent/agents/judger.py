@@ -75,12 +75,21 @@ class Judger:
         concurrency: int = 15,
         reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
+        max_tokens: int | None = 8000,
+        timeout_s: float | None = 120.0,
     ) -> None:
         self.client = client
         self.model = model
         self.concurrency = concurrency
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
+        # BOUND the generation (TASK-37): a judge that falls into gpt-oss's reasoning
+        # loop spews tokens unbounded (guided decoding constrains only the FINAL channel,
+        # not the reasoning channel) and, because judge() waves on a barrier, hangs the
+        # whole run. A cap/timeout -> parse failure -> the retry -> grade -2 path. Normal
+        # medium-effort judge completions are ~400-900 tokens, so 8000 is ample headroom.
+        self.max_tokens = max_tokens
+        self.timeout_s = timeout_s
 
     def judge(self, intent: str, docs: list[tuple[str, str]]) -> list[JudgeCall]:
         """Grade each (summary, document) for `intent`; one LLM call per doc, in parallel.
@@ -120,6 +129,11 @@ class Judger:
         extra = (
             {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
         )
+        bound = {}  # token cap + per-call timeout (TASK-37); omit when unset
+        if self.max_tokens is not None:
+            bound["max_tokens"] = self.max_tokens
+        if self.timeout_s is not None:
+            bound["timeout"] = self.timeout_s
         t0 = time.time()
         try:
             resp = self.client.chat.completions.create(
@@ -134,6 +148,7 @@ class Judger:
                 },
                 temperature=self.temperature,
                 extra_body=extra,
+                **bound,
             )
         except Exception as exc:  # LLM/transport failure -> surfaced as a failed call
             return JudgeCall(

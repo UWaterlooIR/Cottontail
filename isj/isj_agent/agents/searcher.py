@@ -75,11 +75,19 @@ class BaseSearcher:
         reasoning_effort: str | None = "medium",
         temperature: float = 0.0,
         prompt: str | Path | None = None,
+        max_tokens: int | None = 16000,
+        timeout_s: float | None = 180.0,
     ) -> None:
         self.client = client
         self.model = model
         self.reasoning_effort = reasoning_effort
         self.temperature = temperature
+        # BOUND the generation (TASK-37): the same runaway-reasoning pathology as the
+        # Judger. A cap/timeout -> an incomplete tool call -> the controller's existing
+        # no_query bounce (graceful). Normal searcher completions ran ~1300-2200 tokens,
+        # so 16000 is ample headroom while cutting off a 50k+ runaway.
+        self.max_tokens = max_tokens
+        self.timeout_s = timeout_s
         # Directable prompt: an optional file OVERRIDE for the bundled <role>.md.
         # A relative path resolves against the repo root; a missing file FAILS LOUD
         # (no silent fallback). None -> keep the class's bundled system_prompt.
@@ -98,6 +106,11 @@ class BaseSearcher:
         extra = (
             {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
         )
+        bound = {}  # token cap + per-call timeout (TASK-37); omit when unset
+        if self.max_tokens is not None:
+            bound["max_tokens"] = self.max_tokens
+        if self.timeout_s is not None:
+            bound["timeout"] = self.timeout_s
         response = self.client.chat.completions.create(
             model=self.model,
             messages=messages,
@@ -105,6 +118,7 @@ class BaseSearcher:
             tool_choice="required",
             temperature=self.temperature,
             extra_body=extra,
+            **bound,
         )
         choice = response.choices[0]
         message = choice.message

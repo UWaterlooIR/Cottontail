@@ -34,10 +34,20 @@ model = "gpt.oss.120b"
 #        a different class with the same interface.
 # llm:   name of the [llm.*] profile to use for this agent.
 # ---------------------------------------------------------------------------
+# Every agent BOUNDS its LLM generation (TASK-37) so a gpt-oss reasoning-loop runaway
+# cannot spew tokens unbounded and hang the run (a judge wave blocks on a barrier, so one
+# looping call freezes everything). Both are ON by default; override per agent:
+#   max_tokens   cap on generated tokens (reasoning + output). A judge that hits it fails
+#                its parse -> retry -> grade -2; a searcher that hits it -> no_query bounce.
+#   timeout_s    per-call wall-clock timeout (a stuck connection can't hang the wave).
+# Defaults: analyst/judger max_tokens=8000 timeout_s=120; searcher max_tokens=16000 timeout_s=180.
+
 [agents.analyst]
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
 # reasoning_effort = "medium"   # default; forwarded via extra_body
+# max_tokens = 8000             # generation cap (default)
+# timeout_s = 120               # per-call timeout in seconds (default)
 
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"
@@ -62,6 +72,8 @@ llm = "default"
 # fetch_k = 200               # the LARGE per-request ranking batch the controller pulls
 # window = 75                 # cover_search summary window (tokens)
 # max_queries = 100           # per-intent backstop on the number of queries
+# max_tokens = 16000          # generation cap (default; larger than analyst/judger for programs)
+# timeout_s = 180             # per-call timeout in seconds (default)
 
 [agents.judger]
 class = "isj_agent.agents.judger.Judger"
@@ -71,6 +83,8 @@ llm = "default"
 # concurrency = 15            # in-flight judge calls AND the controller's wave width
 # reasoning_effort = "medium" # default; raising to "high" is a throughput/cost lever
 #                             # (the scout_judger.py serving scout ran high) -- forwarded via extra_body
+# max_tokens = 8000           # generation cap (default; a runaway judge -> parse fail -> retry -> grade -2)
+# timeout_s = 120             # per-call timeout in seconds (default)
 
 # ---------------------------------------------------------------------------
 # [loop]
@@ -82,6 +96,15 @@ llm = "default"
 # max_judgments = 1000          # RUN-TOTAL judgment budget, split evenly across intents
 # max_doc_chars = 50000         # truncate each judged document to this many chars
 # max_list_depth =              # optional per-query descent safety cap (unset = off)
+#
+# Searcher feedback shaping -- keeps the Searcher's accumulating context BOUNDED (a run
+# that feeds back every judged doc overflows gpt-oss-120b's 128k context after only a few
+# hundred docs). Per query the Searcher is shown: the TOP `top_results_to_show` docs of the
+# ranking regardless of grade (so it always sees what its query does at the top, including
+# docs already judged on prior queries), PLUS any deeper doc with grade >= `min_show_grade`
+# (the gold nuggets, for vocabulary). Shown docs keep their TRUE ranks (not renumbered).
+# top_results_to_show = 10
+# min_show_grade = 3            # below the top band, show only docs graded >= this
 
 # ---------------------------------------------------------------------------
 # [index]

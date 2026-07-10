@@ -75,6 +75,8 @@ class Controller:
         max_doc_chars: int = 50000,
         max_queries: int = 100,
         max_list_depth: int | None = None,
+        top_results_to_show: int = 10,
+        min_show_grade: int = 3,
     ) -> None:
         self.searcher = searcher
         self.judger = judger
@@ -86,6 +88,11 @@ class Controller:
         self.max_doc_chars = max_doc_chars
         self.max_queries = max_queries
         self.max_list_depth = max_list_depth
+        # Searcher feedback shaping (keeps the Searcher's accumulating context bounded):
+        # always show the top `top_results_to_show` of a query's ranking, plus any deeper
+        # doc with grade >= `min_show_grade`.
+        self.top_results_to_show = top_results_to_show
+        self.min_show_grade = min_show_grade
 
     # wave width = the Judger's concurrency (ONE knob; do not add a second)
     @property
@@ -197,8 +204,9 @@ class Controller:
         streak = 0
         seen: set[str] = set()   # docnos consumed THIS query -> the engine exclude (NOT global judged)
         depth = 0                # K: ranks descended this query
-        again: list[tuple[str, int]] = []   # (docno, grade) prior-judged re-encounters (count only)
-        fresh: list[tuple] = []  # (Hit, Verdict) NEW judgments this query -> returned to Searcher
+        descended: list[dict] = []  # every doc processed THIS query, IN RANK ORDER (new AND
+                                    # already-judged): {rank(=global depth), id, score, grade,
+                                    # summary, reason, is_new} -> the Searcher feedback selection
         buffer: list = []
         total_matches = None
         atom_counts: list | None = None   # per query-leaf corpus counts (None if the engine omits them)
@@ -260,10 +268,11 @@ class Controller:
             for h in wave:
                 seen.add(h.id)
                 depth += 1
-                if h.id in judged:           # prior judgment: count only (no re-read/re-judge/re-record)
-                    g = judged[h.id].grade
-                    again.append((h.id, g))
+                if h.id in judged:           # prior judgment: no re-read/re-judge/re-record
+                    v = judged[h.id]         # the stored Verdict (carries grade + reason)
+                    g = v.grade
                     emit("revisit", time.time(), 0.0, id=h.id, grade=g)
+                    is_new = False
                 else:                          # NEW: emit the judge llm_call, then record
                     c = calls_by_id[h.id]
                     emit("llm_call", time.time(), c.duration_ms, purpose="judge", request=c.request,
@@ -282,9 +291,14 @@ class Controller:
                     recorded.append(RankedEntry(rank=0, id=h.id, grade=v.grade, score=h.score,
                                                 summary=h.summary, reason=v.reason,
                                                 surfacing_query=qs))
-                    fresh.append((h, v))
                     emit("judge", time.time(), 0.0, id=h.id, grade=v.grade, reason=v.reason)
                     g = v.grade
+                    is_new = True
+                # Capture the doc IN RANK ORDER (depth = its true cross-refill rank) for the
+                # Searcher feedback: the top band is shown regardless of grade, deeper docs
+                # only if grade >= min_show_grade (see _select_feedback).
+                descended.append({"rank": depth, "id": h.id, "score": h.score, "grade": g,
+                                  "summary": h.summary, "reason": v.reason, "is_new": is_new})
                 if g < 0:      # TASK-27 sentinel: an ERROR is evidence of neither
                     pass       # relevance nor irrelevance -- the streak is untouched
                 elif self._relevant(g):
@@ -298,15 +312,29 @@ class Controller:
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        return self._summarize(queryable, atom_counts, total_matches, depth, again, fresh)
+        return self._summarize(queryable, atom_counts, total_matches, descended)
 
-    def _summarize(self, queryable, atom_counts, total_matches, depth, again, fresh) -> dict:
+    def _select_feedback(self, descended: list[dict]) -> list[dict]:
+        """Pick which descended docs the Searcher sees. The TOP band -- the first
+        min(top_results_to_show, K) docs in rank order -- is shown regardless of grade
+        (so the agent always sees what its query does at the top, including docs already
+        judged in prior queries). BELOW that band, a doc is shown only if its grade is
+        >= min_show_grade (the gold nuggets, for vocabulary). Rank order is preserved and
+        each doc keeps its TRUE rank -- skipped docs are not renumbered."""
+        return [
+            d for pos, d in enumerate(descended)
+            if pos < self.top_results_to_show or d["grade"] >= self.min_show_grade
+        ]
+
+    def _summarize(self, queryable, atom_counts, total_matches, descended: list[dict]) -> dict:
         # Field order is deliberate -- it is what the Searcher reads top-to-bottom:
         # the queryable's own field(s) first (cover -> "query"; tiered -> "tiers"), then
-        # diagnostics (atom_counts up top so a count-0 dead atom is caught early), the
-        # content last; and per result rank/score then summary BEFORE reason BEFORE grade,
-        # so the agent reads the passage before it sees the assessor's verdict.
-        x = sum(1 for _, g in again if self._relevant(g))
+        # diagnostics (atom_counts up top so a count-0 dead atom is caught early), then the
+        # descent aggregate, then the shown results; per result rank/score then summary
+        # BEFORE reason BEFORE grade, so the agent reads the passage before the verdict.
+        k = len(descended)
+        relevant = sum(1 for d in descended if self._relevant(d["grade"]))
+        shown = self._select_feedback(descended)
         out: dict = {**queryable.trace_arguments()}
         if atom_counts is not None:      # OPTIONAL (Q3): omit for an engine that omits them
             out["atom_counts"] = atom_counts
@@ -314,12 +342,14 @@ class Controller:
             out["total_matches"] = total_matches
         return {
             **out,
-            "depth_judged": depth,
-            "already_judged": {"count": len(again), "relevant": x, "non_relevant": len(again) - x},
-            "new_results": [
-                {"rank": h.rank, "score": h.score, "summary": h.summary,
-                 "reason": v.reason, "grade": v.grade}
-                for h, v in fresh
+            # Coverage aggregate: the Searcher went K docs deep, `relevant` were relevant,
+            # and `shown` of the K appear below (the rest were non-nugget docs past the top band).
+            "descended": {"count": k, "relevant": relevant,
+                          "shown": len(shown), "hidden": k - len(shown)},
+            "results": [
+                {"rank": d["rank"], "score": d["score"], "summary": d["summary"],
+                 "reason": d["reason"], "grade": d["grade"]}
+                for d in shown
             ],
         }
 

@@ -60,3 +60,15 @@ def test_analyze_with_mocked_client():
     kwargs = client.chat.completions.create.call_args.kwargs
     assert kwargs["model"] == "gpt.oss.120b"
     assert kwargs["response_format"]["json_schema"]["name"] == "Intents"
+
+
+def test_analyst_bounds_generation_by_default():
+    client = MagicMock()
+    client.chat.completions.create.return_value.choices[0].message.content = (
+        '{"question": "Q", "interpretations": ["one"]}'
+    )
+    a = Analyst(client=client, model="gpt.oss.120b")
+    assert a.max_tokens == 8000 and a.timeout_s == 120.0
+    a.analyze("Q")
+    kwargs = client.chat.completions.create.call_args.kwargs
+    assert kwargs["max_tokens"] == 8000 and kwargs["timeout"] == 120.0

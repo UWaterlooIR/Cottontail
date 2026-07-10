@@ -157,3 +157,27 @@ def test_permanent_transport_failure_aggregates_attempts():
     assert call.verdict is None
     assert call.retries == 2
     assert call.error.count("RuntimeError") == 3  # all three attempts recorded
+
+
+# --- TASK-37: bounded generation (max_tokens + per-call timeout) ---------------
+
+def test_judger_bounds_generation_by_default():
+    j = _judger()
+    assert j.max_tokens == 8000 and j.timeout_s == 120.0
+    j.judge("intent", _docs([2]))
+    call = j.client.calls[0]
+    assert call["max_tokens"] == 8000 and call["timeout"] == 120.0
+
+
+def test_judger_generation_bounds_are_configurable():
+    j = _judger(max_tokens=1234, timeout_s=7.5)
+    j.judge("intent", _docs([1]))
+    call = j.client.calls[0]
+    assert call["max_tokens"] == 1234 and call["timeout"] == 7.5
+
+
+def test_judger_omits_bounds_when_set_to_none():
+    j = _judger(max_tokens=None, timeout_s=None)
+    j.judge("intent", _docs([1]))
+    call = j.client.calls[0]
+    assert "max_tokens" not in call and "timeout" not in call

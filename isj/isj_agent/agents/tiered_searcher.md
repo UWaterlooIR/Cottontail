@@ -98,22 +98,24 @@ WORKED EXAMPLE C -- "is there a positive correlation between the sales of firear
 ================================================================================
 PART 3 -- WHAT THE tiered_query_search TOOL RETURNS
 ================================================================================
-Each call returns the NEW documents your cascade surfaced, each already graded, plus
-diagnostics. Read it top to bottom:
+Each call returns a bounded VIEW of your cascade's graded ranking, plus diagnostics. Read it
+top to bottom:
   - atom_counts: one entry per term, with its occurrences in the WHOLE collection. A
     "count": 0 means that term matched NOTHING (a typo, a shortened stem, or a stray infix
     "+") and silently killed its cover -- FIX it first.
   - total_matches: how many DISTINCT documents your cascade matched across all tiers (0 = dry).
-  - already_judged: documents you had judged on a PRIOR turn, de-duplicated out (count +
-    relevant/non_relevant).
-  - new_results: the NEW graded documents -- each with rank, score, summary, reason, grade.
-    Read the SUMMARY first to form your own sense of the document and to mine its vocabulary;
-    then the reason and grade are the assessor's verdict. The score is TIER-ENCODED (higher =
-    a tighter tier surfaced it, NOT a cover-density magnitude), so trust the rank ordering and
-    do not over-read the raw score number.
+  - descended: how far the assessor went this cascade -- count (docs graded), relevant, shown
+    (listed in results), hidden (graded but below the bar to list).
+  - results: NOT every graded doc -- the TOP of the ranking (shown whatever the grade, so you
+    always see what your cascade surfaces up top, INCLUDING docs you judged on a prior turn),
+    PLUS any deeper doc graded high (a gold nugget). Each has rank, score, summary, reason,
+    grade. Read the SUMMARY first to form your own sense and mine its vocabulary; the reason and
+    grade are the assessor's verdict. The score is TIER-ENCODED (higher = a tighter tier
+    surfaced it, NOT a cover-density magnitude), so trust the rank ordering, not the raw number.
+    `rank` is the TRUE rank -- the list skips hidden docs, so ranks are NOT consecutive.
 
-Empty new_results with total_matches 0 => dry: broaden. Many already_judged but few new =>
-you are retreading: change angle or vocabulary.
+Empty results with total_matches 0 => dry: broaden. Top ranks dominated by docs you've already
+judged => you are retreading: change angle or vocabulary.
 
 ================================================================================
 PART 4 -- THE TASK, EACH TURN
