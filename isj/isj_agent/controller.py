@@ -28,7 +28,15 @@ import time
 from isj_agent.agents.judger import Judger
 from isj_agent.agents.searcher import Searcher
 from isj_agent.engine.base import EngineError, SearchEngine
-from isj_agent.protocol.results import RankedEntry, RankedList, SearcherResult, TraceEvent
+from collections.abc import Callable
+
+from isj_agent.protocol.results import (
+    LiveMarker,
+    RankedEntry,
+    RankedList,
+    SearcherResult,
+    TraceEvent,
+)
 from isj_agent.protocol.search import Verdict
 
 
@@ -87,7 +95,19 @@ class Controller:
     def _relevant(self, grade: int) -> bool:
         return grade >= self.relevant_grade_threshold
 
-    def run(self, intent: str, intent_budget: int) -> SearcherResult:
+    def run(
+        self,
+        intent: str,
+        intent_budget: int,
+        observer: Callable[[TraceEvent | LiveMarker], None] | None = None,
+    ) -> SearcherResult:
+        """Drive the search/judge loop for one intent.
+
+        `observer`, if given, is called the MOMENT each trace event is emitted (and for
+        each live-only pre-call marker) so a caller can stream activity in real time
+        (TASK-35). The full `events` list is still returned in the SearcherResult for
+        run-output writing; with no observer, behavior is byte-identical to before.
+        """
         msgs: list[dict] = [
             {"role": "system", "content": self.searcher.system_prompt},
             {"role": "user", "content": f"Question: {intent}"},
@@ -100,7 +120,17 @@ class Controller:
         run_error: str | None = None
 
         def emit(type_: str, ts: float, duration_ms: float, **fields) -> None:
-            events.append(TraceEvent(type=type_, ts=ts, duration_ms=duration_ms, **fields))
+            ev = TraceEvent(type=type_, ts=ts, duration_ms=duration_ms, **fields)
+            events.append(ev)
+            if observer is not None:
+                observer(ev)
+
+        def mark(kind: str, **fields) -> None:
+            # A LIVE-ONLY marker: delivered to the observer, NOT appended to `events`
+            # and never persisted -- so a hung call is visible as a started-but-unfinished
+            # signal without changing the persisted trace.
+            if observer is not None:
+                observer(LiveMarker(kind=kind, ts=time.time(), **fields))
 
         while True:
             if len(recorded) >= intent_budget:
@@ -111,6 +141,7 @@ class Controller:
                 break
 
             request = list(msgs)  # the verbatim messages we send this turn
+            mark("await_searcher_turn", turn=queries + 1)  # live: a turn's LLM call is starting
             t0 = time.time()
             try:
                 pr = self.searcher.propose(msgs)
@@ -143,7 +174,7 @@ class Controller:
 
             emit("propose", time.time(), 0.0, query=pr.queryable.query_string())
             try:
-                outcome = self._descend(intent, pr.queryable, judged, recorded, events, emit, intent_budget)
+                outcome = self._descend(intent, pr.queryable, judged, recorded, events, emit, mark, intent_budget)
             except _JudgeFailure as jf:
                 emit("error", time.time(), 0.0, error_type="JudgeFailure",
                      message=str(jf), turn=queries, request=None, **last_usage)
@@ -155,7 +186,7 @@ class Controller:
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
         )
 
-    def _descend(self, intent, queryable, judged, recorded, events, emit, intent_budget) -> dict:
+    def _descend(self, intent, queryable, judged, recorded, events, emit, mark, intent_budget) -> dict:
         """Descend ONE query's true ranked list in waves; return the Searcher's history payload.
 
         Returns {"error": msg} on a malformed query (-> Searcher reformulates), otherwise the
@@ -209,6 +240,8 @@ class Controller:
             wave = buffer[: self.wave_size]
             buffer = buffer[self.wave_size :]
             new = [h for h in wave if h.id not in judged]   # only NEW docs go to the Judger
+            if new:
+                mark("await_judge", count=len(new))  # live: a judge wave (reads + LLM) is starting
             docs = [(h.summary, (self.engine.read(h.id) or "")[: self.max_doc_chars]) for h in new]
             calls_by_id = {h.id: c for h, c in zip(new, self.judger.judge(intent, docs))}  # PARALLEL
             # Systemic guard (TASK-27): every call in the wave failed after retries

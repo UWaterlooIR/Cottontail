@@ -51,6 +51,24 @@ class TraceEvent(BaseModel):
     duration_ms: float  # wall-clock duration of the event (LLM / engine latency)
 
 
+class LiveMarker(BaseModel):
+    """An ephemeral, LIVE-ONLY signal delivered to a run observer (TASK-35).
+
+    Emitted just BEFORE a long, blocking LLM call (a searcher turn or a judge wave)
+    so an operator watching a run in flight sees that a call has STARTED but not yet
+    completed: a hung / stalled / looping LLM then shows as a marker with no following
+    completion event, rather than as silence. Markers are delivered to the observer
+    only -- they are NOT appended to `SearcherResult.events` and are NEVER written to
+    `intent-NN.trace.jsonl`, so the persisted trace of a successful run stays
+    byte-identical to a non-streaming run.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    kind: str  # await_searcher_turn | await_judge
+    ts: float  # epoch seconds when the wait started
+
+
 class SearcherResult(BaseModel):
     """One intent's outcome: the ranked list plus the structured event trace.
 
