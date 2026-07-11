@@ -32,9 +32,9 @@ reach for this when you need the full structured detail of a specific event.
 from __future__ import annotations  # keep type hints lazy so it runs on older python3
 
 import argparse
+import collections
 import json
 import signal
-import sys
 import textwrap
 
 # Behave like a normal Unix filter when piped into head/less and the reader closes
@@ -47,6 +47,45 @@ except (AttributeError, ValueError):  # SIGPIPE is POSIX-only; ignore elsewhere
 # A string is treated as a "text block" (rendered multi-line + wrapped) when it is
 # long or contains newlines; shorter scalars print inline.
 _BLOCK_MIN = 72
+
+# The event types the controller emits, for --help and --list-types. Keep in sync with
+# isj_agent/controller.py (emit(...) calls). llm_call carries a `purpose`.
+_TYPE_DOC = {
+    "llm_call": "an LLM round-trip (purpose=searcher_turn: query authoring; purpose=judge: one document's grading)",
+    "propose": "the query the searcher proposed this turn",
+    "search_request": "a fetch about to be sent to the engine (query, top_k, exclude)",
+    "search": "the engine's response (results, total_matches, atom_counts, latency)",
+    "judge": "a NEW document's grade + reason",
+    "revisit": "a previously-judged doc re-encountered (grade only, not re-judged)",
+    "judge_failed": "a judge call that failed after retries (recorded as grade -2)",
+    "list_exhausted": "the non-relevant streak tripped; descent of this query stopped",
+    "bounce": "a self-correction bounce (kind=engine_error: bad GCL; kind=no_query: no usable query)",
+    "stop": "the intent ended (reason=intent_budget | max_queries)",
+    "error": "a caught failure (searcher LLM error / JudgeFailure)",
+}
+
+
+def _list_types(path: str) -> None:
+    """Print the event types present in the file, with counts (and purpose breakdown
+    for llm_call), so a reader knows what to pass to --type."""
+    counts: collections.Counter = collections.Counter()
+    purposes: collections.Counter = collections.Counter()
+    for line in open(path, encoding="utf-8"):
+        line = line.strip()
+        if not line:
+            continue
+        d = json.loads(line)
+        t = d.get("type", "?")
+        counts[t] += 1
+        if t == "llm_call":
+            purposes[d.get("purpose", "?")] += 1
+    print(f"event types in {path}:\n")
+    for t, n in counts.most_common():
+        print(f"  {t:<15} {n:>6}   {_TYPE_DOC.get(t, '')}")
+        if t == "llm_call":
+            for p, pn in purposes.most_common():
+                print(f"    {'purpose='+p:<13} {pn:>6}")
+    print('\nfilter with:  --type ' + ",".join(sorted(counts)))
 
 
 def _wrap(s: str, width: int, pad: str) -> list[str]:
@@ -81,10 +120,16 @@ def _show(v, width: int, ind: int, maxstr: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> None:
+    epilog = "event types (pass to --type; run --list-types to see which are in YOUR file):\n"
+    epilog += "\n".join(f"  {t:<15} {doc}" for t, doc in _TYPE_DOC.items())
     ap = argparse.ArgumentParser(
         description="Pretty-print an isj *.trace.jsonl for human reading (newlines + word wrap).",
+        epilog=epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("file", help="path to an intent-NN.trace.jsonl")
+    ap.add_argument("--list-types", action="store_true",
+                    help="print the event types (with counts) present in FILE, then exit")
     ap.add_argument("--width", type=int, default=100, help="wrap width (default 100)")
     ap.add_argument("--type", default=None,
                     help="only show these event types, comma-separated (e.g. search,judge)")
@@ -94,7 +139,17 @@ def main(argv: list[str] | None = None) -> None:
                     help="drop the bulky `request` field (the re-embedded prompt/history)")
     a = ap.parse_args(argv)
 
+    if a.list_types:
+        _list_types(a.file)
+        return
+
     types = set(a.type.split(",")) if a.type else None
+    if types:  # warn on a typo'd type so a silent empty result isn't mistaken for "no such events"
+        present = {json.loads(l).get("type") for l in open(a.file, encoding="utf-8") if l.strip()}
+        unknown = types - present
+        if unknown:
+            print(f"# note: no events of type {sorted(unknown)} in this file; "
+                  f"present: {sorted(present)}")
     with open(a.file, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
