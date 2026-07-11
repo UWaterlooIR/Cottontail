@@ -84,11 +84,10 @@ queries.
 - **Trackability.** Coaching from need + results is a small, legible task with a testable
   output — far easier to evaluate than a query-diagnosing coach.
 
-**Deferred — a query-aware "true coach"** that could attribute failures to query operators
-("your proximity window is too tight"). It needs per-language knowledge and is out of
-scope; it can be added behind the same protocol later. The atom-count path (below) still
-surfaces the most valuable query-failure hint — a dead or ultra-rare term — and the
-Searcher owns query mechanics anyway.
+**Out of scope — a query-aware "true coach"** that would attribute failures to query
+operators ("your proximity window is too tight"): it needs per-language knowledge, and the
+atom-count path (below) already surfaces the most valuable query-failure hint (a dead or
+ultra-rare term) while the Searcher owns query mechanics.
 
 ## The coach output — a free-text coaching report (v6)
 
@@ -154,27 +153,16 @@ Because the Controller builds the `content` of that tool message, it is the sing
 both size controls below — it decides exactly what the Searcher sees, so caps and
 compaction are just "what we hand to `_tool`," never after-the-fact edits.
 
-## Bounding one report — the reproduction cap
-
-A report's size is `fixed coaching prose (~650 tok) + Σ reproduced excerpts`. The excerpts
-are ~2/3 of the tokens and are the only variable that blows up: on dense-relevant or
-many-marginal result sets the coach over-cites (scouting: multitext q10 reproduced 19
-passages → ~5.4k tokens for one turn). Bound it with two layers:
-
-- **Prompt cap on reproductions** (soft): reproduce the excerpts for at most ~N most
-  valuable cited passages (cite handles freely in prose — a handle is cheap — but cap the
-  reproduced excerpts). Adherence must be *measured*: caps are not guaranteed (the model
-  has ignored per-section caps before).
-- **Controller post-trim** (hard backstop): the `## Cited passages` section is structured
-  (one block per passage), so the Controller can keep the top-N blocks by grade and drop
-  the rest before sending. Extraction of handles/blocks must be **tolerant** (see below).
-
-`max_reproduced` (a.k.a. `max_selected`) is a config knob. Typical target ~6–8; measure
-first.
-
 ## Bounding the conversation — context compaction (shrink-in-place)
 
-The reproduction cap bounds a *single* report; compaction bounds the *cumulative* `msgs`.
+A single report's size is `fixed coaching prose (~650 tok) + Σ reproduced excerpts`, and
+the excerpts can balloon: on dense-relevant or many-marginal result sets the coach
+over-cites (scouting: multitext q10 reproduced 19 passages → ~5.4k tokens for one turn).
+**Capping an individual free-text report is not feasible** — a prompt cap on reproductions
+is unreliable (the model has ignored per-section caps) and a Controller post-trim would
+have to surgically edit free prose. So we do **not** cap a single report; we bound the
+**cumulative** conversation instead.
+
 Because the Controller owns `msgs`, it compacts **in place** before a `propose` when the
 conversation grows large. We shrink **only tool messages** (the assistant messages are just
 queries — tiny; and the tool-calling protocol forbids orphaning a tool message from its
@@ -182,9 +170,10 @@ queries — tiny; and the tool-calling protocol forbids orphaning a tool message
 delete a message).
 
 **Trigger.** Use the **server-reported `prompt_tokens`** from the last `propose`
-(`pr.usage.prompt_tokens`) as the size signal — exact and free, no local tokenizer. When
-it reaches **80% of the model limit** (0.8 × 131072 ≈ 105k), run a shrink pass before the
-next turn.
+(`pr.usage.prompt_tokens`) as the size signal — exact and free, no local tokenizer. When it
+reaches **80% of the model's context limit**, run a shrink pass before the next turn. The
+context limit is **config** — a `context_limit` on the `[llm.*]` profile — optionally
+auto-discovered from vLLM's `/v1/models` (`max_model_len`) at startup; it is never hardcoded.
 
 **Shrink pass.** Shrink the **oldest 50% of the currently-un-shrunk tool messages**. Each
 subsequent trigger halves the oldest half of what is *still* full (K → K/2 → K/4 …).
@@ -200,25 +189,22 @@ length).
 
 **Effect.** A full v6 report ≈ ~2,000 tok; shrunk ≈ ~650 tok (a ~70% cut). Keeping the last
 few full and shrinking the rest raises the per-intent ceiling from ~60 queries to ~170+
-(`~10k + (N−5)·650 < ~120k`). Combined with the reproduction cap, the Searcher effectively
-never hits the context wall in a realistic run.
+(`~10k + (N−5)·650 < ~120k`), so compaction alone keeps the Searcher off the context wall
+in a realistic run even when individual reports run large.
 
-**Degenerate floor.** If everything is shrunk to just the untouchable last message and we
-are *still* ≥ 80%, either second-pass hard-truncate the already-shrunk messages or proceed
-(we are still 20% under the hard limit). This cannot happen inside a normal `max_queries`
-run (you would need ~160 shrunk reports + one full to approach the trigger); it is a
-defensive line, not a hot path.
-
-Compaction is a deliberate behavior change (it alters exactly what the LLM sees), so it is
-a knob to test in the scout/harness like temperature or the caps. It churns the prompt
-cache for the compacted prefix — accepted (we compact in occasional larger steps, not a
-trim every turn).
+In practice compaction is a **safety net expected to trigger rarely** (a run would need to
+approach 105k of accumulated feedback first); it is not something we plan to tune. If it
+does trigger, it degrades gracefully. One defensive line: if everything is shrunk to just
+the untouchable last message and we are *still* ≥ 80%, second-pass hard-truncate the
+already-shrunk messages or proceed (still 20% under the hard limit) — this cannot happen
+inside a normal `max_queries` run (you would need ~160 shrunk reports + one full to reach
+the trigger). Note compaction churns the prompt cache for the compacted prefix — accepted.
 
 ## Selection & logging (tolerant citation extraction)
 
 With v6 self-contained, extracting the coach's cited handles is **not** needed to build the
 feedback (the passages are already in the report). It is used only to **log which docs the
-coach referenced** (run-output / analysis) and to drive the Controller post-trim. The model
+coach referenced** (run-output / analysis). The model
 is inconsistent about bracketing (it drifts from `[R7]` to bare/bold `**R7**`), so
 extraction must match `R\d+` **bracketed OR bare**, validated against the input handle set
 (so stray tokens drop out). A report with *no* parseable citations is **not** a failure —
@@ -242,7 +228,7 @@ class SearchCoach(Protocol):
   `select(top_results_to_show, min_show_grade)`).
 - `CoachOutput`: `report: str` (the text the Controller puts in the tool message —
   coaching report or mechanical listing) and `referenced: list[docno]` (the cited docs,
-  tolerant-extracted; for logging + post-trim; may be empty).
+  tolerant-extracted; for logging; may be empty).
 
 Controller flow, per query, after the descent:
 
@@ -250,10 +236,9 @@ Controller flow, per query, after the descent:
 ctx = build_context(descended, stats)
 try:    out = self.coach.coach(ctx)
 except Exception:   out = self.mechanical.coach(ctx)   # emit a coach_fallback event
-out = self.cap_reproductions(out)                      # Controller post-trim to max_reproduced
 content = compose(query_echo, stats, atom_counts_if_present, out.report)
 self._tool(msgs, tool_call_id, content)
-maybe_compact(msgs)                                    # shrink-in-place at 80%
+maybe_compact(msgs)                                    # shrink-in-place at 80% of context_limit
 ```
 
 ## Implementations
@@ -283,7 +268,6 @@ class = "isj_agent.agents.search_coach.LlmSearchCoach"   # or MechanicalSearchCo
 llm   = "default"
 # input_top_k = 25           # coach INPUT: top-N by rank ...
 # input_min_grade = 3        # ... plus any deeper result graded >= this
-# max_reproduced = 8         # cap on excerpts reproduced in the report (Controller post-trim + prompt)
 # reasoning_effort = "medium"
 # temperature = 0.0          # TASK-37 caps + temp 0, as with the other agents
 # max_tokens = 8000
@@ -294,8 +278,9 @@ top_results_to_show = 10
 min_show_grade = 3
 
 [loop]
-# context compaction (shrink-in-place)
-# compact_trigger = 0.80     # fraction of the model context limit that triggers a shrink pass
+# context compaction (shrink-in-place); the context limit comes from the [llm.*] profile's
+# context_limit (or vLLM /v1/models max_model_len), NOT hardcoded here.
+# compact_trigger = 0.80     # fraction of the model's context limit that triggers a shrink pass
 # shrink_truncate_tokens = 800   # hard-truncate size when a report has no ## Cited passages section
 ```
 
@@ -323,8 +308,9 @@ Per-turn Searcher-context growth ≈ the coach report (~2,000 tok mean/median ac
 multitext) + a small assistant query message (~150 tok). Initial context (Searcher system
 prompt + intent) ≈ ~3,600 tok. So **~60 queries per intent before the 131k limit** without
 compaction — comparable to today's mechanical feedback (~2–5k tok/turn), i.e. the coach
-does not blow the budget. The reproduction cap keeps the mean near ~2,000 (bounding the
-over-citation tail); compaction lifts the ceiling to ~170+.
+does not blow the budget. Individual reports can spike on dense result sets (no per-report
+cap — capping free text is not feasible), but compaction bounds the cumulative conversation
+and lifts the ceiling to ~170+.
 
 ## Scouting evidence
 
@@ -332,8 +318,8 @@ over-citation tail); compaction lifts the ceiling to ~170+.
 full transcripts (input + reasoning + raw output). Headlines (`captured/FINDINGS.md`):
 guided-JSON (v2) fails; free-text (v3–v6) is 7/7 clean; **v6** adds verbatim self-contained
 excerpts (39/40 cover, 73/78 multitext), reliable and faithful across cover (topics 14, 31)
-and multitext. Open concern measured: no reproduction cap → reports balloon on
-dense/many-marginal sets (→ the cap above).
+and multitext. Concern measured: reports balloon on dense/many-marginal sets — handled by
+compaction (bounding the conversation), since capping a free-text report is not feasible.
 
 ## Rollout (task tree)
 
@@ -343,7 +329,7 @@ dense/many-marginal sets (→ the cap above).
    (Behavior changes from a JSON dict to a text listing, so verify the Searcher still reads
    it; not a pure no-op.)
 2. **Add `LlmSearchCoach`** — v6 prompt, query-blind/atom-blind context, free-text report,
-   tolerant citation extraction, reproduction cap, Controller fallback, `purpose="coach"` /
+   tolerant citation extraction, Controller fallback, `purpose="coach"` /
    `coach_fallback` traces, config wiring.
 3. **Add context compaction** — the shrink-in-place pass (80% trigger via `prompt_tokens`,
    halve oldest un-shrunk, keep last intact, drop `## Cited passages` / hard-truncate
@@ -352,10 +338,3 @@ dense/many-marginal sets (→ the cap above).
    against the ClimbMix qrels, turns-per-intent, no_query rate, and whether the coach's
    recommended vocabulary appears in gold-relevant documents.
 
-## Open items
-
-- **Reproduction cap value** — measure ~6 vs ~8 vs prompt-only vs prompt+post-trim.
-- **Compaction A/B** — does shrinking old reports measurably hurt reformulation? Tune the
-  recency window and trigger.
-- **Query-aware "true coach"** (deferred) — attribute failures to query operators; needs
-  per-language knowledge.
