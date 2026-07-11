@@ -10,18 +10,21 @@ word-wraps long strings so a trace is actually readable.
 Stdlib only -- runs under any ``python3`` (no venv needed).
 
 Usage:
-    python isj/scripts/traceview.py FILE [--width N] [--type T[,T...]]
-                                    [--max-str N] [--no-request]
+    python isj/scripts/traceview.py FILE [--list-types] [--width N] [--type T[,T...]]
+                                    [--purpose P[,P...]] [--max-str N] [--no-request]
 
 Examples:
+    # what event types are in this file?
+    python isj/scripts/traceview.py intent-00.trace.jsonl --list-types
+
     # everything, wrapped, in a pager
     python isj/scripts/traceview.py intent-00.trace.jsonl | less -R
 
     # just the judge verdicts, without the bulky request field
     python isj/scripts/traceview.py intent-00.trace.jsonl --type judge --no-request
 
-    # searcher turns, truncating any string over 800 chars
-    python isj/scripts/traceview.py intent-00.trace.jsonl --type llm_call --max-str 800
+    # ALL the searcher's calls (llm_call with purpose=searcher_turn)
+    python isj/scripts/traceview.py intent-00.trace.jsonl --purpose searcher_turn --no-request
 
 The bulkiest field is ``request`` (it re-embeds the whole system prompt plus the
 accumulated conversation on every turn); ``--no-request`` drops it. Tip: the live
@@ -86,6 +89,9 @@ def _list_types(path: str) -> None:
             for p, pn in purposes.most_common():
                 print(f"    {'purpose='+p:<13} {pn:>6}")
     print('\nfilter with:  --type ' + ",".join(sorted(counts)))
+    if purposes:
+        print('the llm_call events split by --purpose ' + ",".join(sorted(purposes))
+              + '   (e.g. searcher calls: --purpose searcher_turn)')
 
 
 def _wrap(s: str, width: int, pad: str) -> list[str]:
@@ -133,6 +139,9 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--width", type=int, default=100, help="wrap width (default 100)")
     ap.add_argument("--type", default=None,
                     help="only show these event types, comma-separated (e.g. search,judge)")
+    ap.add_argument("--purpose", default=None,
+                    help="only show llm_call events with these purposes, comma-separated "
+                         "(searcher_turn = the searcher's calls; judge = the judger's)")
     ap.add_argument("--max-str", type=int, default=100_000,
                     help="truncate any string longer than this many chars")
     ap.add_argument("--no-request", action="store_true",
@@ -144,12 +153,23 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     types = set(a.type.split(",")) if a.type else None
-    if types:  # warn on a typo'd type so a silent empty result isn't mistaken for "no such events"
-        present = {json.loads(l).get("type") for l in open(a.file, encoding="utf-8") if l.strip()}
-        unknown = types - present
-        if unknown:
-            print(f"# note: no events of type {sorted(unknown)} in this file; "
-                  f"present: {sorted(present)}")
+    purposes = set(a.purpose.split(",")) if a.purpose else None
+    if types or purposes:  # warn on a typo so a silent empty result isn't mistaken for "none"
+        seen_t: set = set()
+        seen_p: set = set()
+        for line in open(a.file, encoding="utf-8"):
+            if not line.strip():
+                continue
+            o = json.loads(line)
+            seen_t.add(o.get("type"))
+            if o.get("purpose"):
+                seen_p.add(o.get("purpose"))
+        if types and types - seen_t:
+            print(f"# note: no events of type {sorted(types - seen_t)} in this file; "
+                  f"present: {sorted(seen_t)}")
+        if purposes and purposes - seen_p:
+            print(f"# note: no llm_call with purpose {sorted(purposes - seen_p)} in this file; "
+                  f"present: {sorted(seen_p)}")
     with open(a.file, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
@@ -157,6 +177,8 @@ def main(argv: list[str] | None = None) -> None:
                 continue
             d = json.loads(line)
             if types and d.get("type") not in types:
+                continue
+            if purposes and d.get("purpose") not in purposes:
                 continue
             if a.no_request:
                 d.pop("request", None)

@@ -5,7 +5,7 @@ status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-11 15:20'
-updated_date: '2026-07-11 15:29'
+updated_date: '2026-07-11 15:50'
 labels: []
 dependencies: []
 ordinal: 53000
@@ -30,6 +30,8 @@ The isj run traces (intent-NN.trace.jsonl) are JSONL with huge embedded strings 
 Added isj/scripts/traceview.py (stdlib-only; from __future__ import annotations so it runs on the system python 3.9). Renders embedded newlines + word-wraps long strings; flags --width/--type/--max-str/--no-request; compact one-line header per event (type + purpose/turn/query/grade/docno). SIGPIPE set to SIG_DFL so piping to head/less exits 141 with no traceback. Verified on Python 3.9.13 over a real trace.
 
 Discoverability follow-up (owner: hard to know what to filter on): added --list-types (scans the file, prints each event type with counts, a purpose breakdown for llm_call, and a ready-to-copy '--type a,b,c' line), a --help epilog documenting all 11 event types + their meaning, and a warning when --type names a type absent from the file (lists what IS present). Verified on a real trace.
+
+Added --purpose P[,P...] to filter llm_call by purpose (searcher_turn vs judge), so 'all the searcher's calls' is: traceview FILE --purpose searcher_turn --no-request. Filtering is AND with --type; a typo'd purpose warns with the present purposes; --list-types now prints a --purpose hint. Verified: --purpose searcher_turn isolates the 1 searcher call from the 50 judge calls.
 <!-- SECTION:NOTES:END -->
 
 ## Final Summary
