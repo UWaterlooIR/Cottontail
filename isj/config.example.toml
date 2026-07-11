@@ -46,6 +46,9 @@ model = "gpt.oss.120b"
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
 # reasoning_effort = "medium"   # default; forwarded via extra_body
+# temperature = 0.0             # GREEDY default (TASK-38): holds the question->interpretations
+#                               # decomposition stable across runs so cross-run comparisons are
+#                               # fair. Raise it only to deliberately diversify decompositions.
 # max_tokens = 8000             # generation cap (default)
 # timeout_s = 120               # per-call timeout in seconds (default)
 

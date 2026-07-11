@@ -68,7 +68,7 @@ def main(argv: list[str] | None = None) -> None:
     analyst_cfg = agent_configs["analyst"]
     analyst = _build_agent(
         "analyst",
-        **{k: analyst_cfg[k] for k in ("reasoning_effort", "max_tokens", "timeout_s") if k in analyst_cfg},
+        **{k: analyst_cfg[k] for k in ("reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in analyst_cfg},
     )
     searcher_cfg = agent_configs["searcher"]
     judger_cfg = agent_configs["judger"]

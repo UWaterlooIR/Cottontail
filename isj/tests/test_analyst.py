@@ -72,3 +72,24 @@ def test_analyst_bounds_generation_by_default():
     a.analyze("Q")
     kwargs = client.chat.completions.create.call_args.kwargs
     assert kwargs["max_tokens"] == 8000 and kwargs["timeout"] == 120.0
+
+
+def test_analyst_temperature_defaults_to_zero_and_is_forwarded():
+    client = MagicMock()
+    client.chat.completions.create.return_value.choices[0].message.content = (
+        '{"question": "Q", "interpretations": ["one"]}'
+    )
+    a = Analyst(client=client, model="gpt.oss.120b")
+    assert a.temperature == 0.0                       # greedy default (TASK-38)
+    a.analyze("Q")
+    assert client.chat.completions.create.call_args.kwargs["temperature"] == 0.0
+
+
+def test_analyst_temperature_is_configurable():
+    client = MagicMock()
+    client.chat.completions.create.return_value.choices[0].message.content = (
+        '{"question": "Q", "interpretations": ["one"]}'
+    )
+    a = Analyst(client=client, model="gpt.oss.120b", temperature=0.7)
+    a.analyze("Q")
+    assert client.chat.completions.create.call_args.kwargs["temperature"] == 0.7
