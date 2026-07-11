@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "selected": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "handles (e.g. R3) of the passages most INFORMATIVE for this need; forwarded to the searcher"
+    },
+    "observations": {
+      "type": "string",
+      "description": "1-3 sentences: what distinguishes the relevant from the non-relevant material here"
+    },
+    "recommended_terms": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "concrete words/phrases from the relevant passages to pursue next; no query syntax"
+    }
+  },
+  "required": ["selected", "observations", "recommended_terms"],
+  "additionalProperties": false
+}

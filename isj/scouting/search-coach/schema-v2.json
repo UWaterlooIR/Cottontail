@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "properties": {
+    "selected": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "handles (e.g. R3) of the passages you CITE as illustration in the report; forwarded to the searcher"
+    },
+    "observations": {
+      "type": "string",
+      "description": "your coaching report: what is working, what is causing problems, and how to improve -- citing passages by handle like [R3]"
+    },
+    "recommended_terms": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "concrete words/phrases from the relevant passages to pursue next; no query syntax"
+    }
+  },
+  "required": ["selected", "observations", "recommended_terms"],
+  "additionalProperties": false
+}
