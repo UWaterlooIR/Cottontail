@@ -30,7 +30,7 @@ feedback into the tool message it sends back to the Searcher.
 
 Two implementations behind one protocol:
 
-- **`LlmSearchCoach`** — an LLM that studies the information need and the judged results
+- **`SearchCoachAgent`** — an LLM that studies the information need and the judged results
   and writes a **free-text coaching report** (the v6 shape below). Query-blind and
   engine-agnostic.
 - **`MechanicalSearchCoach`** — a deterministic, no-LLM listing of the top-N + high-grade
@@ -243,7 +243,7 @@ maybe_compact(msgs)                                    # shrink-in-place at 80% 
 
 ## Implementations
 
-### `LlmSearchCoach`
+### `SearchCoachAgent`
 
 An LLM agent like Analyst / Searcher / Judger: `client` + `model` + prompt file +
 `temperature = 0` + the TASK-37 generation caps (`max_tokens`, `timeout_s`). Prompt = the
@@ -264,7 +264,7 @@ feedback in text form).
 
 ```toml
 [coach]
-class = "isj_agent.agents.search_coach.LlmSearchCoach"   # or MechanicalSearchCoach
+class = "isj_agent.agents.search_coach.SearchCoachAgent"   # or MechanicalSearchCoach
 llm   = "default"
 # input_top_k = 25           # coach INPUT: top-N by rank ...
 # input_min_grade = 3        # ... plus any deeper result graded >= this
@@ -285,7 +285,7 @@ min_show_grade = 3
 ```
 
 - `class = MechanicalSearchCoach` → mechanical only; no LLM; it *is* the fallback.
-- `class = LlmSearchCoach` → LLM primary + mechanical fallback (always built from
+- `class = SearchCoachAgent` → LLM primary + mechanical fallback (always built from
   `[coach.mechanical]`).
 
 ## Observability
@@ -328,7 +328,7 @@ compaction (bounding the conversation), since capping a free-text report is not 
    deterministic text-listing fallback; migrate `[loop]` knobs → `[coach.mechanical]`.
    (Behavior changes from a JSON dict to a text listing, so verify the Searcher still reads
    it; not a pure no-op.)
-2. **Add `LlmSearchCoach`** — v6 prompt, query-blind/atom-blind context, free-text report,
+2. **Add `SearchCoachAgent`** — v6 prompt, query-blind/atom-blind context, free-text report,
    tolerant citation extraction, Controller fallback, `purpose="coach"` /
    `coach_fallback` traces, config wiring.
 3. **Add context compaction** — the shrink-in-place pass (80% trigger via `prompt_tokens`,
