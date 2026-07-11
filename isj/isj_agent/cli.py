@@ -68,17 +68,17 @@ def main(argv: list[str] | None = None) -> None:
     analyst_cfg = agent_configs["analyst"]
     analyst = _build_agent(
         "analyst",
-        **{k: analyst_cfg[k] for k in ("reasoning_effort",) if k in analyst_cfg},
+        **{k: analyst_cfg[k] for k in ("reasoning_effort", "max_tokens", "timeout_s") if k in analyst_cfg},
     )
     searcher_cfg = agent_configs["searcher"]
     judger_cfg = agent_configs["judger"]
     searcher = _build_agent(
         "searcher",
-        **{k: searcher_cfg[k] for k in ("reasoning_effort", "temperature", "prompt") if k in searcher_cfg},
+        **{k: searcher_cfg[k] for k in ("reasoning_effort", "temperature", "prompt", "max_tokens", "timeout_s") if k in searcher_cfg},
     )
     judger = _build_agent(
         "judger",
-        **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature") if k in judger_cfg},
+        **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in judger_cfg},
     )
     engine = build_engine(config, burrow_override=args.burrow)
     loop_cfg = config.get("loop", {})
@@ -91,6 +91,8 @@ def main(argv: list[str] | None = None) -> None:
         relevant_grade_threshold=loop_cfg.get("relevant_grade_threshold", 1),
         max_doc_chars=loop_cfg.get("max_doc_chars", 50000),
         max_list_depth=loop_cfg.get("max_list_depth"),
+        top_results_to_show=loop_cfg.get("top_results_to_show", 10),
+        min_show_grade=loop_cfg.get("min_show_grade", 3),
     )
 
     orchestrator = Orchestrator(

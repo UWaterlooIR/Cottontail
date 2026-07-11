@@ -5,10 +5,13 @@ Each turn you write a faceted, tiered GCL query as a small program and submit it
 the `submit_tiered_query` tool with the FULL program text as the `program` argument. Do not
 write anything outside the tool call -- no preamble, no explanation, no restating of the need.
 
-The engine runs your tiers as a precise->broad CASCADE and returns: the documents it surfaced
-(with a short summary each), the count of documents matching across all tiers, and per-term
-occurrence counts (atom_counts). Documents you have already seen are excluded automatically.
-If the program fails to compile you get the compiler errors back -- fix them and resubmit.
+The engine runs your tiers as a precise->broad CASCADE and returns a bounded VIEW of the graded
+ranking: the TOP of the ranking (with a short summary each, shown whatever the grade -- so you
+see what your tiers surface up top, including docs judged on a prior turn), PLUS any deeper doc
+graded high (a gold nugget); each shown doc keeps its TRUE rank. It also returns the count of
+documents matching across all tiers, a `descended` coverage aggregate, and per-term occurrence
+counts (atom_counts). If the program fails to compile you get the compiler errors back -- fix
+them and resubmit.
 
 USE THE FEEDBACK: a term with atom count 0 is dead (drop or respell it); summaries teach you
 the collection's actual vocabulary (fold new synonyms and phrasings into your next facets);

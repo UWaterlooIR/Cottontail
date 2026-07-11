@@ -129,35 +129,37 @@ assessor graded it. The fields appear in this exact order; read it top-to-bottom
   "total_matches": 673,                    // documents in the WHOLE collection matching this
                                            //   query (ignores what's been judged) — your
                                            //   breadth gauge: huge = very broad, 0 = dry
-  "depth_judged": 14,                      // how many ranked results were processed this query
-  "already_judged": {                      // of those, the ones you had ALREADY judged on a
-    "count": 9,                            //   PREVIOUS query — NOT relisted (de-duplicated)
-    "relevant": 4,                         //   how many of those were relevant (grade >= 1)
-    "non_relevant": 5                      //   how many were not
+  "descended": {                           // how far down THIS query's ranking the assessor went
+    "count": 42,                           //   documents graded this descent (K)
+    "relevant": 9,                         //   how many of the K were relevant (grade >= 1)
+    "shown": 12,                           //   how many of the K are listed in "results" below
+    "hidden": 30                           //   the rest: below the top band AND not high-grade
   },
-  "new_results": [                         // the NEW documents this query surfaced. For each,
-    {                                      //   read them in this order — summary BEFORE grade:
-      "rank": 1,                           //   position in this query's ranked list
-      "score": 0.048,                      //   cover-density / proximity score; higher = tighter,
-                                           //     denser cover — the strongest matches rank first
-      "summary": "…bear spray, back away…",//   a short extract from the document — read THIS first:
-                                           //     your window into what it says and the words to mine
+  "results": [                             // NOT every graded doc — a bounded VIEW of the ranking:
+    {                                      //   the TOP of the ranking (shown whatever the grade,
+      "rank": 1,                           //     so you always see what your query does up top,
+      "score": 0.048,                      //     INCLUDING docs you judged on a prior query),
+                                           //     PLUS any deeper doc graded high (a gold nugget).
+      "summary": "…bear spray, back away…",//   read THIS first: your window into the doc + words to mine
       "reason": "directly answers …",      //   the assessor's justification for the grade
       "grade": 3                           //   the assessor's relevance grade, 0–3
-    }
-  ]
+    }                                      //   `rank` is the TRUE rank in the ranking — the list
+  ]                                        //   skips hidden docs, so ranks are NOT consecutive.
 }
 
 How to read it:
 - Check atom_counts first: any term with count 0 is dead — rewrite it before anything else.
-- new_results is your signal. For each, read the SUMMARY first to form your own sense of the
-  document, then the reason and grade — and mine the summaries' language for sharper terms.
-- already_judged large while new_results is small ⇒ you are RETREADING ground you've already
-  covered; switch to a different facet, sense, or register.
-- new_results empty AND total_matches 0 ⇒ the query is DRY (matched nothing) — broaden.
-- new_results empty but total_matches > 0 ⇒ everything it matched was already judged — again a
-  retread; change direction.
-- high total_matches but few relevant new_results ⇒ too broad / noisy — narrow.
+- results is your signal. The first entries are the TOP of your ranking (any grade) — that is
+  what your query actually surfaces up top; if they are weak, your query is off. Deeper entries
+  are gold nuggets the assessor found further down — mine their summaries for sharper vocabulary.
+- A gap in the ranks (e.g. rank 5 then rank 17) means the docs in between were graded but below
+  the bar to list — non-nugget results past the top band. Use descended.count/relevant/hidden to
+  gauge how much was skipped.
+- results all low-grade at the top ⇒ your query surfaces the wrong thing up front — refocus.
+- descended.count small (or 0) with total_matches 0 ⇒ the query is DRY — broaden.
+- descended small but total_matches > 0, and the top ranks are docs you've seen before ⇒ you are
+  RETREADING covered ground — switch facet, sense, or register.
+- high total_matches but few relevant descended ⇒ too broad / noisy — narrow.
 
 If your query is malformed or rejected, you instead receive:
 
@@ -253,8 +255,9 @@ PART 4 — THE TASK, EACH TURN
 ================================================================================
 
 • Issue exactly ONE GCL query with the `cover_search` tool.
-• Read the returned JSON (Part 2): the NEW graded documents, their reasons and summaries,
-  and the already-judged counts. (Full document text is read by the assessor, not by you.)
+• Read the returned JSON (Part 2): the shown `results` — the top of your ranking plus deeper
+  gold nuggets — with their summaries, reasons, grades, and TRUE ranks, and the `descended`
+  coverage counts. (Full document text is read by the assessor, not by you.)
 • Use that feedback to author the next query: mine its vocabulary, narrow a productive
   vein, broaden a dry one, and reach for facets and registers you have not yet tried.
 • If a query is malformed or returns nothing, you are told immediately — fix it and

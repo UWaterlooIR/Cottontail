@@ -128,3 +128,21 @@ def test_unknown_tool_name_yields_none_query():
 def test_searcher_has_prompt_without_judging():
     assert "GCL" in Searcher.prompt
     assert "do not judge" in Searcher.prompt.lower() or "you do not judge" in Searcher.prompt.lower()
+
+
+# --- TASK-37: bounded generation (max_tokens + per-call timeout) ---------------
+
+def test_propose_bounds_generation_by_default():
+    s = _searcher(SimpleNamespace(content="", tool_calls=[_tool_call("(^ a)")]))
+    assert s.max_tokens == 16000 and s.timeout_s == 180.0
+    s.propose([{"role": "user", "content": "q"}])
+    call = s.client.calls[0]
+    assert call["max_tokens"] == 16000 and call["timeout"] == 180.0
+
+
+def test_propose_generation_bounds_are_configurable():
+    s = Searcher(StubClient(SimpleNamespace(content="", tool_calls=[_tool_call("(^ a)")])),
+                 "stub-model", max_tokens=2222, timeout_s=9.0)
+    s.propose([{"role": "user", "content": "q"}])
+    call = s.client.calls[0]
+    assert call["max_tokens"] == 2222 and call["timeout"] == 9.0
