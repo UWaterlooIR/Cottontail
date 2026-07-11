@@ -136,9 +136,17 @@ The Controller composes the tool message it sends back from four parts:
 
 Swapping coaches is a config change. The **mechanical fallback** replaces item 4 with a
 plain deterministic listing of the top-N + high-grade passages (handle, grade, reason,
-verbatim excerpt) — no coaching prose. The Searcher prompt is written once and tolerant of
-both: "you receive a coaching report; if coaching is unavailable you receive a plain list
-of the top graded passages."
+verbatim excerpt) — no coaching prose.
+
+For this to work with either coach, **`searcher.md` is made format-agnostic** — like the
+other search prompts (`tiered_searcher.md`, `mt_tiered_searcher.md`, `lucindri_searcher.md`),
+which describe the returned feedback loosely rather than specifying it field-by-field.
+Today `searcher.md` documents the exact JSON result shape; that rigid spec is dropped in
+favor of prose ("after each query you receive a summary of what it found — the top results
+with their grades and the assessor's reasons, coverage stats, and, for Cottontail, atom
+counts — read it and adapt"). Decoupling the Searcher from the feedback *shape* is what lets
+the coach emit a markdown report, the mechanical coach emit a listing, and both work under
+one prompt — no per-coach prompt fork.
 
 ## Delivery, and why the Controller owns the seam
 
@@ -325,9 +333,11 @@ compaction (bounding the conversation), since capping a free-text report is not 
 
 1. **Extract `SearchCoach` protocol + `MechanicalSearchCoach`** — pull the Controller's
    feedback assembly (`_summarize` / `_select_feedback`) behind the protocol as the
-   deterministic text-listing fallback; migrate `[loop]` knobs → `[coach.mechanical]`.
-   (Behavior changes from a JSON dict to a text listing, so verify the Searcher still reads
-   it; not a pure no-op.)
+   deterministic text-listing fallback; migrate `[loop]` knobs → `[coach.mechanical]`. The
+   enabling change is making **`searcher.md` format-agnostic** (drop the rigid JSON spec, as
+   the other search prompts already are), so the Searcher is decoupled from the feedback
+   shape and any coach output works. Behavior changes from a JSON dict to a text listing, so
+   update `searcher.md` and the payload-shape tests; not a pure no-op.
 2. **Add `SearchCoachAgent`** — v6 prompt, query-blind/atom-blind context, free-text report,
    tolerant citation extraction, Controller fallback, `purpose="coach"` /
    `coach_fallback` traces, config wiring.
