@@ -4,30 +4,36 @@ Reconstructs each query's FAITHFUL top-25-by-rank slice from the run's TRACE (no
 compiled intent-NN.json), so it includes the already-judged docs a query re-surfaces
 ("revisits") with their cached grades -- exactly what the real coach would see
 ("always judged this query or cached as previously judged"). It then feeds that slice to
-gpt.oss.120b with a versioned prompt + guided-output schema and SAVES the full transcript
--- input passages, the model's reasoning, and its raw output -- to captured/<prompt>/, so
-the raw LLM behavior can be read, not just summaries.
+gpt.oss.120b with a versioned prompt (+ optional guided-output schema) and SAVES the full
+transcript -- input passages, the model's reasoning, and its raw output -- to
+captured/<prompt>/, so the raw LLM behavior can be read, not just summaries.
 
-VERSIONING: a version = a (prompt-vN.md, schema-vN.json) PAIR. BOTH affect the model --
-the JSON schema's field names + `description` text are sent to vLLM for guided decoding
-and steer behavior just like the prompt does. Never edit a version in place; add vN+1.
-Results go to captured/<prompt-stem>/ so versions never mix.
+VERSIONING: a version = a (prompt-vN.md, schema-vN.json) PAIR when guided decoding is
+used -- BOTH affect the model: the JSON schema's field names + `description` text are
+sent to vLLM for guided decoding and steer behavior just like the prompt does. From v3 a
+version may be prompt-ONLY (free-text report, no guided decoding): if no schema file
+exists for the prompt (and none is given), the coach runs unguided and the transcript's
+"parsed" section is computed from the [Rn] handles the report CITES. Never edit a
+version in place; add vN+1. Results go to captured/<prompt-stem>/ so versions never mix.
 
 Usage (from isj/, so the venv is picked up):
     uv run python scouting/search-coach/run.py <intent-NN.json> [--prompt prompt-vN.md]
                                                [--schema schema-vN.json] [--queries N] [--max-str N]
-By default --schema is derived from --prompt (prompt-vN.md -> schema-vN.json).
+By default --schema is derived from --prompt (prompt-vN.md -> schema-vN.json); if that
+file does not exist, the run is free-text (no response_format).
 """
 import argparse
 import collections
 import json
 import pathlib
+import re
 
 import openai
 
 HERE = pathlib.Path(__file__).parent
 CAPTURED = HERE / "captured"
 INPUT_TOP_K, INPUT_MIN_GRADE = 25, 3
+HANDLE_RE = re.compile(r"\[(R\d+)\]")
 
 
 def slices_from_trace(trace_path):
@@ -80,11 +86,15 @@ def run_one(client, prompt, schema, intent, sel, max_str):
     passages = "\n".join(
         f"[{h}] grade={e['grade']}\n  reason: {e['reason'][:max_str]}\n  summary: {e['summary'][:max_str]}"
         for h, e in handles.items())
+    kwargs = {}
+    if schema is not None:            # guided decoding (v1/v2); v3+ free-text runs without it
+        kwargs["response_format"] = {"type": "json_schema",
+                                     "json_schema": {"name": "coach", "schema": schema}}
     resp = client.chat.completions.create(
         model="gpt.oss.120b",
         messages=[{"role": "user", "content": prompt.format(intent=intent, passages=passages)}],
-        response_format={"type": "json_schema", "json_schema": {"name": "coach", "schema": schema}},
         temperature=0.0, max_tokens=8000, extra_body={"reasoning_effort": "medium"},
+        **kwargs,
     )
     msg = resp.choices[0].message
     return handles, passages, msg.content, getattr(msg, "reasoning_content", None), resp.usage
@@ -97,12 +107,38 @@ def _parse(content):
         return None, f"{type(exc).__name__}: {exc}"
 
 
-def transcript(intent, query, handles, passages, content, reasoning, usage):
+def _cited(content, handles):
+    """Handles cited in a free-text report, in first-mention order, deduped; plus any
+    bracketed handle-like tokens that do not exist in the input (hallucinated)."""
+    seen, cited, bad = set(), [], []
+    for h in HANDLE_RE.findall(content or ""):
+        if h in seen:
+            continue
+        seen.add(h)
+        (cited if h in handles else bad).append(h)
+    return cited, bad
+
+
+def _pick_stats(lines, handles, sel, bad):
+    """Shared 'parsed' diagnostics over a list of selected/cited handles."""
+    picks = [f"{h}(r{handles[h]['rank']},g{handles[h]['grade']}{',rev' if handles[h]['revisit'] else ''})"
+             for h in sel]
+    gp = [handles[h]["grade"] for h in sel]
+    gmax = max((e["grade"] for e in handles.values()), default=None)
+    lines += [f"selected {len(sel)}/{len(handles)}: " + ", ".join(picks),
+              f"invalid handles: {bad if bad else 'none'}",
+              f"grades of picks: {sorted(gp, reverse=True)}",
+              f"max grade available: {gmax}; kept a top-grade doc? {'YES' if gp and max(gp) == gmax else 'NO'}",
+              f"kept R1 or R2 (top-2 by rank)? {'YES' if ('R1' in sel or 'R2' in sel) else 'NO'}"]
+    return gp, gmax
+
+
+def transcript(intent, query, handles, passages, content, reasoning, usage, guided):
     gd = dict(sorted(collections.Counter(e["grade"] for e in handles.values()).items()))
     nrev = sum(1 for e in handles.values() if e["revisit"])
     lines = ["# search-coach scout transcript (trace-reconstructed)", "",
              f"passages fed: {len(handles)}   grade dist: {gd}   revisits: {nrev}",
-             f"coach tokens: {usage.prompt_tokens}+{usage.completion_tokens}", "",
+             f"coach tokens: {usage.prompt_tokens}+{usage.completion_tokens}   mode: {'guided-json' if guided else 'free-text'}", "",
              "## information need", intent, "",
              "## query that produced these results (NOT shown to the coach)", query, "",
              "## input passages fed to the coach  (rev = already-judged revisit)",
@@ -110,7 +146,13 @@ def transcript(intent, query, handles, passages, content, reasoning, usage):
                        for h, e in handles.items()), "",
              "## input passages (verbatim, as sent)", passages, "",
              "## coach REASONING (raw reasoning_content)", (reasoning or "(none exposed)"), "",
-             "## coach OUTPUT (raw JSON content)", (content or "(empty)"), ""]
+             "## coach OUTPUT (raw)", (content or "(empty)"), ""]
+    if not guided:                    # free-text report: selection = the handles the report cites
+        cited, bad = _cited(content, handles)
+        lines += ["## parsed (from citations in the report)"]
+        _pick_stats(lines, handles, cited, bad)
+        lines += [f"report words: {len((content or '').split())}"]
+        return "\n".join(lines) + "\n"
     out, err = _parse(content)
     if err is not None:
         lines += ["## parsed", f"PARSE FAILED: {err}"]
@@ -118,18 +160,9 @@ def transcript(intent, query, handles, passages, content, reasoning, usage):
     sel = out.get("selected", []) if isinstance(out, dict) else []
     terms = out.get("recommended_terms", []) if isinstance(out, dict) else []
     obs = out.get("observations", "") if isinstance(out, dict) else ""
-    picks = [f"{h}(r{handles[h]['rank']},g{handles[h]['grade']}{',rev' if handles[h]['revisit'] else ''})"
-             for h in sel if h in handles]
-    bad = [h for h in sel if h not in handles]
-    gp = [handles[h]["grade"] for h in sel if h in handles]
-    gmax = max((e["grade"] for e in handles.values()), default=None)
-    lines += ["## parsed",
-              f"selected {len(sel)}/{len(handles)}: " + ", ".join(picks),
-              f"invalid handles: {bad if bad else 'none'}",
-              f"grades of picks: {sorted(gp, reverse=True)}",
-              f"max grade available: {gmax}; kept a top-grade doc? {'YES' if gp and max(gp) == gmax else 'NO'}",
-              f"kept R1 or R2 (top-2 by rank)? {'YES' if ('R1' in sel or 'R2' in sel) else 'NO'}",
-              "", "observations:", obs, "",
+    lines += ["## parsed"]
+    _pick_stats(lines, handles, [h for h in sel if h in handles], [h for h in sel if h not in handles])
+    lines += ["", "observations:", obs, "",
               f"recommended_terms ({len(terms)}):", ", ".join(terms)]
     return "\n".join(lines) + "\n"
 
@@ -140,7 +173,8 @@ def main():
     ap.add_argument("--prompt", default="prompt-v1.md",
                     help="prompt file (relative to this dir). Results go to captured/<prompt-stem>/.")
     ap.add_argument("--schema", default=None,
-                    help="guided-output JSON schema file; default derives from --prompt (prompt-vN.md -> schema-vN.json)")
+                    help="guided-output JSON schema file; default derives from --prompt (prompt-vN.md -> "
+                         "schema-vN.json). If the derived file does not exist, runs free-text (no guided decoding).")
     ap.add_argument("--queries", type=int, default=99)
     ap.add_argument("--max-str", type=int, default=600)
     a = ap.parse_args()
@@ -151,8 +185,13 @@ def main():
 
     prompt_path = _resolve(a.prompt)
     prompt = prompt_path.read_text(encoding="utf-8")
-    schema_path = _resolve(a.schema) if a.schema else _resolve(a.prompt.replace("prompt-", "schema-").replace(".md", ".json"))
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    if a.schema:                      # explicit schema: must exist
+        schema_path = _resolve(a.schema)
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    else:                             # derived schema: guided iff the file exists
+        schema_path = _resolve(a.prompt.replace("prompt-", "schema-").replace(".md", ".json"))
+        schema = json.loads(schema_path.read_text(encoding="utf-8")) if schema_path.exists() else None
+    guided = schema is not None
     outdir = CAPTURED / prompt_path.stem            # one results dir PER PROMPT (never mixed)
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -162,7 +201,8 @@ def main():
     stem = run.parent.name + "-" + run.stem
     client = openai.OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="EMPTY")
 
-    print(f"prompt: {prompt_path.name}   schema: {schema_path.name}   ->  captured/{outdir.name}/")
+    print(f"prompt: {prompt_path.name}   schema: {schema_path.name if guided else '(none -- free-text report)'}"
+          f"   ->  captured/{outdir.name}/")
     print(f"intent: {intent}\ntrace: {trace}\n")
     for i, (q, sel) in enumerate(slices_from_trace(trace)):
         if i >= a.queries:
@@ -171,9 +211,19 @@ def main():
             print(f"q{i:02d}: (no judged results)   {q[:60]}"); continue
         handles, passages, content, reasoning, usage = run_one(client, prompt, schema, intent, sel, a.max_str)
         out_md = outdir / f"{stem}-q{i:02d}.md"
-        out_md.write_text(transcript(intent, q, handles, passages, content, reasoning, usage), encoding="utf-8")
+        out_md.write_text(transcript(intent, q, handles, passages, content, reasoning, usage, guided),
+                          encoding="utf-8")
         nrev = sum(1 for e in sel if e["revisit"])
         gmax = max(e["grade"] for e in sel)
+        if not guided:
+            cited, bad = _cited(content, handles)
+            gp = [handles[h]["grade"] for h in cited]
+            kept_top = bool(gp) and max(gp) == gmax
+            whiff = "  <-- WHIFF: report never cites a top-grade doc" if not kept_top else ""
+            print(f"q{i:02d}: fed {len(handles):2d} (rev {nrev:2d}, gmax {gmax}) -> cited {len(cited):2d} "
+                  f"grades={sorted(gp, reverse=True)} kept_top={kept_top} words={len((content or '').split())}"
+                  f"{' bad_handles=' + str(bad) if bad else ''}{whiff}   [{out_md.name}]")
+            continue
         parsed, err = _parse(content)
         if err is not None or not isinstance(parsed, dict):
             print(f"q{i:02d}: PARSE FAILED   [{out_md.name}]"); continue
