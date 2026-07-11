@@ -4,7 +4,7 @@ title: 'SearchCoach phase 4: coach-on vs coach-off A/B on the dev topics'
 status: To Do
 assignee: []
 created_date: '2026-07-11 21:30'
-updated_date: '2026-07-11 22:10'
+updated_date: '2026-07-11 23:43'
 labels: []
 dependencies:
   - TASK-40.2
@@ -26,17 +26,23 @@ Evaluate the coach: run coach-on (SearchCoachAgent) vs coach-off (MechanicalSear
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Coach-on vs coach-off A/B on the 22 RAG25 dev topics.
+GOAL: measure the coach -- coach-on (SearchCoachAgent) vs coach-off (MechanicalSearchCoach) over the 22 RAG25 dev topics. Design: docs/design/search-coach.md (rollout step 4). DEPENDS ON 40.2.
 
-1. Two configs, identical except [coach].class: coach-on = SearchCoachAgent, coach-off = MechanicalSearchCoach (== the phase-1 baseline).
+READ FIRST:
+- The trec-rag-2026 repo (sibling): data/trec-rag-2026/development-data/topics/rag25-topics-dev.tsv (22 topics: id \t narrative) and rag25-dev-umbrela-qrels/*.qrels (ClimbMix dev qrels, 4-col TREC, grades 0-4; prefer the qwen3.5-9b-v2 or codex variant). See that repo's memory reference_dev_data.
+- isj cli: uv run --directory isj python -m isj_agent.cli --question "<narrative>" --out <dir> --config <cfg> (one topic per run; writes intent-NN.json ranked lists + intent-NN.trace.jsonl).
+- The docno-on-the-wire runs already emit ClimbMix shard_NNNNN_RRRR docnos that resolve against the qrels.
 
-2. Eval pipeline (DOES NOT EXIST YET -- the main effort/risk; likely belongs in the trec-rag-2026 repo and may warrant its own task there):
-   a. batch runner: run isj_agent.cli over each dev-topic narrative (rag25-topics-dev.tsv) with each config -> per-topic run-output dirs;
-   b. fusion: combine each run's per-intent judged ranked lists into ONE TREC run per topic -- fusion policy is a real design choice (RRF vs grade-then-score); decide before implementing;
-   c. scoring: score the fused runs vs the ClimbMix dev qrels (prefer qwen3.5-9b-v2 / codex) with ir_measures/trec_eval -- recall@k, nDCG@10/20;
-   d. behavioral metrics from the traces: turns-per-intent, no_query bounce rate; plus whether the coach's recommended vocabulary appears in gold-relevant docs.
+STEPS:
+1. Two configs, identical except [coach].class: coach-on ([coach].class = SearchCoachAgent) vs coach-off ([coach].class = MechanicalSearchCoach; == the 40.1 baseline). Otherwise identical (same engine, same [agents.*], same [loop]).
+2. Eval pipeline -- DOES NOT EXIST YET; this is the bulk of the work. It likely belongs in trec-rag-2026 and MAY WARRANT ITS OWN TASK there. Components:
+   a. batch runner (script): for each (id, narrative) in rag25-topics-dev.tsv, run isj_agent.cli --question <narrative> --out runs/<arm>/<id> --config <arm-config>, both arms. Serial (the judger already fans concurrent LLM calls; parallel topics would thrash the single vLLM).
+   b. FUSION (script): each run dir has intent-NN.json = per-intent judged ranked lists ({docno,grade,score,rank}); fuse the per-intent lists into ONE TREC run per topic (topic Q0 docno rank score run_id; ranks from 1 ascending; scores non-increasing within a topic; docnos = ClimbMix ids). *** FUSION POLICY IS AN UNDECIDED DESIGN CHOICE *** -- RRF (robust, parameter-light; recommended) vs grade-then-score. DECIDE WITH THE OWNER before implementing.
+   c. scoring (script): score the fused runs vs the dev qrels with ir_measures (uv add ir_measures; pure-python, no trec_eval build) -- recall@100/1000, nDCG@10/20.
+   d. behavioral metrics from the intent-NN.trace.jsonl: turns-per-intent, no_query bounce count (bounce kind=no_query); and, for the coach arm, whether the coach reports' "Vocabulary worth pursuing" terms appear in gold-relevant docs.
+3. Run both arms over the 22 topics; record results in a findings doc + the task notes; compare coach-on vs coach-off on recall/nDCG + turns + no_query.
 
-3. Run both arms, record results (findings doc + task notes), compare. Caveats: pooled qrels (unjudged treated non-relevant -> RELATIVE A/B, not absolute); analyst temp already 0 (TASK-38) so decompositions are stable across arms.
+CAVEATS: pooled qrels -> unjudged docs count as non-relevant -> this is a RELATIVE A/B (coach vs no-coach), not an absolute score. Analyst temperature is already 0 (TASK-38) so intent decompositions are stable across arms -- keep everything except [coach].class identical.
 
-FLAG for the owner: this phase is an experiment that needs the eval pipeline (2b/2c/2d) built first. Recommend splitting the pipeline into its own task (in trec-rag-2026) before running the A/B, and deciding the intent-fusion policy. Confirm before starting.
+FLAG FOR OWNER (must resolve before starting): (1) the eval pipeline (2b/2c/2d) does not exist -- recommend a dedicated task in trec-rag-2026 to build it; (2) decide the intent-fusion policy (RRF recommended). Confirm both before executing this phase.
 <!-- SECTION:PLAN:END -->

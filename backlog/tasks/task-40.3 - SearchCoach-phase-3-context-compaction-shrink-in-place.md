@@ -4,7 +4,7 @@ title: 'SearchCoach phase 3: context compaction (shrink-in-place)'
 status: To Do
 assignee: []
 created_date: '2026-07-11 21:30'
-updated_date: '2026-07-11 22:10'
+updated_date: '2026-07-11 23:43'
 labels: []
 dependencies:
   - TASK-40.2
@@ -28,19 +28,33 @@ Bound the Searcher's cumulative context by compacting old feedback in place (the
 ## Implementation Plan
 
 <!-- SECTION:PLAN:BEGIN -->
-Shrink-in-place context compaction (design: 'Bounding the conversation').
+GOAL: bound the Searcher's cumulative context by compacting old feedback IN PLACE. Design: docs/design/search-coach.md ("Bounding the conversation -- context compaction"). DEPENDS ON 40.2.
 
-1. Model context limit: add context_limit to the [llm.*] profile config; optionally auto-discover from vLLM GET /v1/models (max_model_len) in config.build_client, with the config value as override/fallback. Pass the searcher's context_limit into the Controller from cli (from [agents.searcher].llm's profile).
+READ FIRST:
+- isj/isj_agent/controller.py run(): `msgs` is the local chat list ([{role:system},{role:user},{role:assistant,tool_calls},{role:tool,tool_call_id,content},...]); each turn appends the searcher's assistant message and the tool reply via self._tool(...); `pr.usage` is the ProposeResult usage dict and pr.usage["prompt_tokens"] is the EXACT size the server saw for the last request.
+- isj/isj_agent/config.py build_client + the [llm.*] profile; cli.py (where the searcher's llm profile is chosen).
+- isj/isj_agent/protocol/results.py TraceEvent (add a "compact" event) and how emit() persists events.
 
-2. Controller compaction (operates on self.msgs, which the Controller owns): after appending each turn's tool message, read the last propose's pr.usage['prompt_tokens']; if >= compact_trigger (default 0.80) * context_limit, run a shrink pass BEFORE the next propose. Track shrunk state (a set of already-shrunk tool-message indices). A pass shrinks the oldest 50% of currently-un-shrunk role=='tool' messages, NEVER the most recent tool message; assistant messages untouched; message count + tool_call_id pairing preserved (rewrite content only).
-   shrink one message: if its content contains a '## Cited passages' line, drop from that line to end (keep coaching prose + Vocabulary line); else hard-truncate content to shrink_truncate_tokens (default ~800; size via chars~=tokens*4, or the tokenizer if handy).
-   degenerate floor: if only the untouchable last tool message is full and still >= trigger, second-pass hard-truncate the already-shrunk ones (or proceed; still under the hard limit). Defensive, not a hot path.
+FACTS / CONSTRAINTS:
+- Tool messages are role=="tool". NEVER delete one: an assistant message with tool_calls MUST be followed by a tool message with the matching tool_call_id, or vLLM/OpenAI 400s. Rewrite content ONLY.
+- Use pr.usage["prompt_tokens"] (server truth) as the TRIGGER signal. Use chars (~4 chars/token) only to size the hard-truncate.
 
-3. Emit a `compact` trace event (tool messages shrunk; prompt_tokens before / estimate after).
+STEPS:
+1. context_limit:
+   - config: add context_limit to the [llm.*] profile (config.example: [llm.default] context_limit = 131072). Optionally auto-discover in config.build_client: GET {base_url}/v1/models, read data[0].max_model_len; config value overrides/falls back. Keep config primary; discovery optional.
+   - Pass the SEARCHER's context_limit into the Controller from cli (the [agents.searcher].llm profile's context_limit). Controller.__init__ gains: context_limit:int|None=None, compact_trigger:float=0.80, shrink_truncate_tokens:int=800. Add self._shrunk:set[int]=set() (indices of tool messages already shrunk).
+2. Controller.run(): after self._tool(...) each turn, capture last_pt=pr.usage.get("prompt_tokens"); call self._maybe_compact(msgs, last_pt).
+3. Controller._maybe_compact(msgs, last_pt):
+   - if self.context_limit is None or last_pt is None or last_pt < self.compact_trigger*self.context_limit: return.
+   - tool_idx = [i for i,m in enumerate(msgs) if m.get("role")=="tool"]; if len(tool_idx)<=1: return. protected=tool_idx[-1] (the most recent tool msg -- NEVER shrink). candidates=[i for i in tool_idx[:-1] if i not in self._shrunk] (oldest-first).
+   - shrink the oldest ceil(len(candidates)/2) of `candidates`: for each i: self._shrink_message(msgs[i]); self._shrunk.add(i).
+   - emit("compact", time.time(), 0.0, prompt_tokens=last_pt, shrunk=<n>, tool_messages=len(tool_idx)).
+   - degenerate floor (defensive, rarely hit): if candidates was empty (all but the last already shrunk) and still over trigger, optionally second-pass hard-truncate the already-shrunk; else return (still <100% of the hard limit).
+4. Controller._shrink_message(m): c=m["content"]; if isinstance(c,str) and "## Cited passages" in c: m["content"]=c[:c.index("## Cited passages")].rstrip()  # keep the coaching prose + Vocabulary line; else: keep=self.shrink_truncate_tokens*4; if len(c)>keep: m["content"]=c[:keep].rstrip()+"\n...[older feedback truncated]".
+5. Config: [loop] compact_trigger=0.80, shrink_truncate_tokens=800; [llm.*] context_limit (or vLLM discovery). config.example.toml with comments (context_limit is the model limit; trigger is a fraction of it).
+6. Tests: tests/test_compaction.py (or extend test_controller.py). Build a Controller with a small context_limit and a hand-made msgs list with several tool messages of known content; call _maybe_compact with a prompt_tokens over/under the trigger. Assert: under trigger -> no change; over -> shrinks the oldest 50% of un-shrunk tool messages, NEVER the last tool message, NEVER an assistant/system/user message; message COUNT and every tool_call_id unchanged. A tool message containing "## Cited passages" -> content becomes the prose before that header; one without -> hard-truncated to ~shrink_truncate_tokens. Repeated triggers halve the remaining un-shrunk (K->K/2->...). A compact trace event is emitted with the counts. Full isj suite green.
 
-4. Config: [loop] compact_trigger=0.80, shrink_truncate_tokens=800; [llm.*] context_limit (or vLLM discovery); config.example.
+GOTCHAS/DECISIONS: rewrite content only, never delete a tool message (tool_call_id pairing); shrink ONLY tool messages; keep the last tool message intact; TRIGGER on server prompt_tokens (not a local estimate); chars/4 only sizes the truncate. This is a rarely-triggering SAFETY NET -- not tuned; if it never fires in a run, that is expected.
 
-5. Tests: shrink picks the oldest 50% of un-shrunk tool messages and never the last; drop-'## Cited passages' keeps the prose; hard-truncate fallback when the section is absent; message count + tool_call_ids unchanged; a simulated over-limit conversation converges under the trigger; full isj suite green.
-
-FORWARD-COMPAT: last structural phase; phase 4's long A/B runs rely on this to stay under the limit.
+FORWARD-COMPAT: last structural phase (phase 4 only relies on long runs staying under the limit).
 <!-- SECTION:PLAN:END -->
