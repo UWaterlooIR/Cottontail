@@ -24,12 +24,19 @@ class Analyst:
         model: str,
         *,
         reasoning_effort: str | None = "medium",
+        temperature: float = 0.0,
         max_tokens: int | None = 8000,
         timeout_s: float | None = 120.0,
     ) -> None:
         self.client = client
         self.model = model
         self.reasoning_effort = reasoning_effort
+        # Greedy by default (TASK-38), matching the Searcher and Judger. The Analyst sits
+        # at the TOP of the pipeline, so an unpinned (server-default) temperature made its
+        # question->interpretations decomposition vary run-to-run and silently confounded
+        # cross-run comparisons; 0.0 holds it stable. (Not bit-reproducible on vLLM, but it
+        # removes the deliberate sampling variance.)
+        self.temperature = temperature
         # BOUND the generation (TASK-37): one call per run, but the same runaway-reasoning
         # pathology -> bound it so analysis can't hang the run start.
         self.max_tokens = max_tokens
@@ -57,6 +64,7 @@ class Analyst:
                     "schema": Intents.model_json_schema(),
                 },
             },
+            temperature=self.temperature,
             extra_body=extra,
             **bound,
         )
