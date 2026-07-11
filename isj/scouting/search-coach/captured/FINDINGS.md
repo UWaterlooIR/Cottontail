@@ -6,8 +6,90 @@ behavior; this is the tally + interpretation.
 
 ## Prompt versions
 
-- **v1** (`prompt-v1.md`) — terse relevance-feedback: select + 1-3 sentence observation + terms.
-- **v2** (`prompt-v2.md`) — expert-searcher coaching report with `[R#]` citations.
+- **v1** (`prompt-v1.md` + `schema-v1.json`, guided) — terse relevance-feedback: select + 1-3 sentence observation + terms.
+- **v2** (`prompt-v2.md` + `schema-v2.json`, guided) — expert coaching report; FAILED (see below).
+- **v3** (`prompt-v3.md`, FREE-TEXT) — coaching report: what's working / hurting / pursue next + "Vocabulary worth pursuing:".
+- **v4** (`prompt-v4.md`, FREE-TEXT) — strategist: facet coverage / relevance boundary / next moves (vocab tagged PROVEN vs UNTESTED).
+
+## Run 3 — v3 & v4 free-text (topic 14, intent-00, trace-reconstructed, gpt.oss.120b, temp 0)
+
+Free-text (no guided decoding; selection = handles the report CITES). Fable-5 iteration; see `coach-v3-notes.md`.
+
+| | v3 | v4 |
+|---|---|---|
+| clean reports | **7/7** | **7/7** |
+| parse failures | 0 | 0 |
+| harmony leakage | none (q00 raw = clean markdown) | none |
+| word count | 302-377 | 395-465 |
+| coaching quality | high (names relevant core + shared vocab, diagnoses the sports-medicine drift, flags uncovered facets) | high + more structured (explicit facet-coverage, grade-2/3-vs-1 boundary, PROVEN/UNTESTED vocab) |
+
+**Verdict: free-text works — reliable AND better coaching.** It fixes every v2 failure mode
+(no forced field order, no siphoned advice field, no long-prose-in-JSON degradation).
+
+**One real issue — citation consistency.** The model is inconsistent about bracketing
+handles: most reports use `[R#]`, but some go entirely bare/bold (`**R26**`): v3 q06 (0
+bracketed / 10 bare), v4 q01 (0/19), v4 q02 (0/18). The harness extracts selection via
+`\[(R\d+)\]` (brackets only), so those show as "cited 0 / WHIFF" — a diagnostic artifact,
+not a coach failure (the reports are good). But it matters in production: selection =
+cited handles, so a bare-only report would forward 0 passages.
+
+Fix options: (a) loosen extraction to match `R\d+` bracketed OR bare (validated against the
+input handle set, so junk is dropped) -- robust, recommended; and/or (b) reinforce
+bracketing in the prompt. The guaranteed floor (top 1-2 by rank) remains the production
+backstop for a genuinely under-citing report.
+
+## Run 4 — v5 (self-contained report), topic 14 intent-00
+
+**v5** (`prompt-v5.md`, FREE-TEXT) = v3 + a `## Cited passages` section where the coach
+REPRODUCES the cited passages inline (grade + assessor reason), so the report is
+self-contained -- no Controller-side handle->summary expansion needed. Also reinforces
+SQUARE BRACKETS and caps citations.
+
+- 7/7 clean; ~426-655 words (bigger due to inline passages; still ~700-900 tok/report --
+  context-efficient and higher-value than the mechanical top-N dump).
+- The `## Cited passages` section WORKS: q00 reproduces `**[R20]** grade 3 - "<reason>"`
+  faithfully per cited doc. Achieves the "don't make us mine the passages" goal.
+- Bracket drift PERSISTS despite the reinforcement (q04, q05 went bare) -- prompt nudging
+  isn't sufficient. But with inline passages this matters less: extraction is now only for
+  "which docs were used" logging, not for forwarding text.
+- Nuance: the section reproduces the assessor's REASON (judge's words); confirm it also
+  carries enough of the passage EXCERPT (the doc's own words) for vocabulary mining.
+
+## Run 5 — v6 (verbatim excerpts), topic 14 intent-00
+
+**v6** (`prompt-v6.md`, FREE-TEXT) = v5 with the `## Cited passages` section rewritten to
+demand the EXCERPT copied VERBATIM from the input `summary:` (word for word; no paraphrase,
+summarize, shorten, or complete). Fixes v5's failure to show the actual passage text.
+
+- 7/7 clean; `kept_top` on all 7; citations tight (5-7).
+- **Faithfulness: 39/40 cited passages reproduce the input summary WORD-FOR-WORD.** The one
+  exception is a 2-word title input ("Social Justice") cited inline but not reproduced --
+  effectively 100%. The verbatim wording works.
+- Cost: reports grew to ~720-1300 words (~1-1.8k tok) because full excerpts are now inline.
+  That is the passage text the searcher needs anyway (the mechanical scheme forwards the
+  same summaries), so it is comparable context cost + the coaching, and still bounded over
+  ~20 turns. v6 is the current best free-text candidate: reliable, faithful, self-contained.
+
+## Run 6 — v6 WIDENED (topic 31 cover + multitext/14)
+
+Confirming v6 holds beyond topic-14 cover. (Filenames now `method-topic-intent`, e.g.
+`gcl-cover-14-...`, `multitext-14-...`, after a run.py fix so cover/multitext runs of the
+same topic no longer collide.)
+
+- **gcl-cover/31 intent-00** (dense-relevant pool, 1 query): clean, kept_top; but with 12
+  grade-3s to reproduce it cited 16 and ran **1461 words**.
+- **multitext/14 intent-00** (12 queries, tiered cascade): **12/12 clean, kept_top on all**;
+  faithfulness **73/78 (94%) verbatim** (misses are short/title summaries + probe
+  sensitivity, not real divergence).
+
+**Verdict:** v6 is reliable and faithful across cover AND multitext, topics 14 and 31.
+
+**Confirmed concern -- report size / over-citation (design's `max_selected` gap).** Citation
+count swings 4-23; on dense-relevant or many-marginal sets the coach over-cites and reports
+balloon: cover/31 q00 = 1461 words; multitext q07 cited 23; **multitext q10 cited 19 ->
+3135 words (~4.5k tokens for ONE turn's feedback)**. Fix in production: enforce a
+`max_selected` cap (Controller forwards the top-N cited by grade) and/or firm up the
+citation cap in the prompt. Measure before choosing.
 
 ## v1 vs v2 head-to-head (topic 14, intent-00, trace-reconstructed, gpt.oss.120b, temp 0)
 

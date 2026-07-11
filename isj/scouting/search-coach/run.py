@@ -198,7 +198,8 @@ def main():
     run = pathlib.Path(a.run)
     intent = json.load(open(run))["intent"]
     trace = run.parent / (run.stem + ".trace.jsonl")
-    stem = run.parent.name + "-" + run.stem
+    # method-topic-intent, so e.g. gcl-cover/14 and multitext/14 never collide
+    stem = f"{run.parent.parent.name}-{run.parent.name}-{run.stem}"
     client = openai.OpenAI(base_url="http://127.0.0.1:8000/v1", api_key="EMPTY")
 
     print(f"prompt: {prompt_path.name}   schema: {schema_path.name if guided else '(none -- free-text report)'}"
