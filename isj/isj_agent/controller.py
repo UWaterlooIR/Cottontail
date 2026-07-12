@@ -77,6 +77,7 @@ class Controller:
         max_queries: int = 100,
         max_list_depth: int | None = None,
         coach: SearchCoach | None = None,
+        mechanical: SearchCoach | None = None,
         top_results_to_show: int = 10,
         min_show_grade: int = 3,
     ) -> None:
@@ -93,9 +94,18 @@ class Controller:
         # The SearchCoach turns a query's judged descent into the Searcher's feedback
         # (TASK-40). Default: a MechanicalSearchCoach built from top_results_to_show /
         # min_show_grade (kept here as convenience defaults for the auto-built coach); the
-        # CLI injects a configured coach.
+        # CLI injects a configured coach. `mechanical` is the always-works fallback the
+        # Controller drops to if an LLM coach RAISES mid-run -- so the search never stalls on
+        # a coach failure. It defaults to the mechanical coach itself when none is injected.
         self.coach: SearchCoach = coach or MechanicalSearchCoach(
             top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
+        )
+        self.mechanical: SearchCoach = mechanical or (
+            self.coach
+            if not getattr(self.coach, "is_llm", False)
+            else MechanicalSearchCoach(
+                top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
+            )
         )
 
     # wave width = the Judger's concurrency (ONE knob; do not add a second)
@@ -198,7 +208,21 @@ class Controller:
                 stats = {"count": len(descended),
                          "relevant": sum(1 for d in descended if self._relevant(d["grade"])),
                          "total_matches": outcome["total_matches"]}
-                out = self.coach.coach(CoachContext(intent=intent, stats=stats, results=descended))
+                ctx = CoachContext(intent=intent, stats=stats, results=descended)
+                coach_is_llm = getattr(self.coach, "is_llm", False)
+                if coach_is_llm:
+                    mark("await_coach")  # live: the coach's LLM call is starting
+                c0 = time.time()
+                try:
+                    out = self.coach.coach(ctx)
+                except Exception as exc:  # an LLM coach failed -> never stall; use the fallback
+                    emit("coach_fallback", time.time(), (time.time() - c0) * 1000.0,
+                         error_type=type(exc).__name__, message=str(exc))
+                    out = self.mechanical.coach(ctx)
+                else:
+                    if coach_is_llm:  # a real LLM call happened; the mechanical coach is silent
+                        emit("llm_call", c0, (time.time() - c0) * 1000.0, purpose="coach",
+                             referenced=out.referenced, content=out.reasoning, **(out.usage or {}))
                 content = self._compose_feedback(pr.queryable, outcome["atom_counts"], stats, out)
                 self._tool(msgs, pr.tool_call_id, content)
 

@@ -394,3 +394,61 @@ def test_feedback_ranks_are_true_across_a_fetch_refill():
     feedback = ctl.searcher.tool_results[-1]   # the Searcher feedback STRING
     # the grade-3 nugget is shown at its TRUE global rank 5 (not per-fetch rank 2)
     assert "[rank 5] grade=3" in feedback
+
+
+# --- LLM coach: trace event + fallback (TASK-40.2) ----------------------------
+
+from isj_agent.agents.search_coach import CoachOutput, MechanicalSearchCoach  # noqa: E402
+
+
+class _StubLlmCoach:
+    """A stand-in LLM coach: is_llm=True so the Controller traces/marks it. Either returns a
+    canned CoachOutput or raises (to exercise the fallback)."""
+
+    is_llm = True
+
+    def __init__(self, output=None, raises=None):
+        self._output = output
+        self._raises = raises
+        self.calls = 0
+
+    def coach(self, ctx):
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._output
+
+
+# A 2nd scripted query that bounces (EngineError) so it does NOT re-invoke the coach, while
+# still triggering the 2nd propose that captures q1's feedback into StubSearcher.tool_results.
+
+def test_llm_coach_report_and_trace_event():
+    f1, d1 = build([(10, 3), (20, 0)])
+    coach = _StubLlmCoach(CoachOutput(report="## COACHING\npursue beavers", referenced=["10"],
+                                      usage={"total_tokens": 42}, reasoning="mulling"))
+    ctl = Controller(StubSearcher(["(^ q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([f1, dry(), EngineError("stop")], d1), coach=coach, max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    assert coach.calls == 1  # the bounced 2nd query does not reach the coach
+    # the coach report is wrapped into the Searcher feedback (captured on the 2nd propose)
+    assert "## COACHING" in ctl.searcher.tool_results[-1]
+    # a purpose="coach" llm_call trace event carries usage + referenced
+    coach_ev = [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"]
+    assert len(coach_ev) == 1
+    assert coach_ev[0]["referenced"] == ["10"] and coach_ev[0]["total_tokens"] == 42
+
+
+def test_llm_coach_failure_falls_back_to_mechanical():
+    f1, d1 = build([(10, 3), (20, 0)])
+    coach = _StubLlmCoach(raises=RuntimeError("coach timed out"))
+    ctl = Controller(StubSearcher(["(^ q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([f1, dry(), EngineError("stop")], d1), coach=coach,
+                     mechanical=MechanicalSearchCoach(top_results_to_show=2, min_show_grade=3),
+                     max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    # the failure is recorded and the mechanical feedback (a [rank N] listing) is delivered
+    fb = _ev(result, "coach_fallback")
+    assert len(fb) == 1 and fb[0]["error_type"] == "RuntimeError"
+    assert "[rank 1] grade=3" in ctl.searcher.tool_results[-1]
+    # no coach llm_call event on the fallback path
+    assert [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"] == []

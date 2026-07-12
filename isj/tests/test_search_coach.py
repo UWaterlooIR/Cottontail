@@ -1,8 +1,11 @@
-"""SearchCoach protocol + MechanicalSearchCoach + select() (TASK-40 phase 1)."""
+"""SearchCoach protocol + MechanicalSearchCoach + select() + SearchCoachAgent (TASK-40)."""
+
+from types import SimpleNamespace
 
 from isj_agent.agents.search_coach import (
     CoachContext,
     MechanicalSearchCoach,
+    SearchCoachAgent,
     select,
 )
 
@@ -56,3 +59,89 @@ def test_mechanical_coach_report_and_referenced():
 def test_mechanical_coach_empty():
     out = MechanicalSearchCoach().coach(CoachContext(intent="q", stats={}, results=[]))
     assert out.report == "(no results surfaced)" and out.referenced == []
+
+
+# --- SearchCoachAgent (the LLM coach) ------------------------------------------
+
+def _response(content, reasoning="thinking...", ptok=100, ctok=20):
+    msg = SimpleNamespace(content=content, reasoning_content=reasoning)
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=msg)],
+        usage=SimpleNamespace(prompt_tokens=ptok, completion_tokens=ctok, total_tokens=ptok + ctok),
+    )
+
+
+class StubClient:
+    """Captures create() kwargs and returns a canned report (or one derived from them)."""
+
+    def __init__(self, handler):
+        self._handler = handler
+        self.calls = []
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._handler(kwargs)
+
+
+def _agent(handler, **kw):
+    return SearchCoachAgent(StubClient(handler), "stub-model", **kw)
+
+
+def test_agent_report_is_the_message_content():
+    out = _agent(lambda kw: _response("## coach report body")).coach(
+        CoachContext(intent="q", stats={}, results=_results([3, 1, 2]))
+    )
+    assert out.report == "## coach report body"
+    assert out.usage["total_tokens"] == 120 and out.reasoning == "thinking..."
+
+
+def test_agent_sends_free_text_no_response_format():
+    client = StubClient(lambda kw: _response("ok"))
+    SearchCoachAgent(client, "m").coach(CoachContext(intent="q", stats={}, results=_results([3])))
+    kwargs = client.calls[0]
+    assert "response_format" not in kwargs  # free text, not guided JSON
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["max_tokens"] == 8000 and kwargs["timeout"] == 120.0
+    assert kwargs["extra_body"] == {"reasoning_effort": "medium"}
+
+
+def test_agent_prompt_carries_intent_and_passages_with_handles():
+    client = StubClient(lambda kw: _response("ok"))
+    SearchCoachAgent(client, "m").coach(
+        CoachContext(intent="find the beavers", stats={}, results=_results([3, 0]))
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "find the beavers" in prompt
+    assert "[R1] grade=3" in prompt and "[R2] grade=0" in prompt
+    assert "sum-0" in prompt and "why-1" in prompt
+
+
+def test_agent_referenced_extraction_is_bracket_tolerant():
+    # R1 bracketed, R3 bold, R5 bare -> all extracted, in first-mention order, mapped to docnos.
+    # R2 appears twice (dedup); R99 is not a real handle (dropped).
+    report = "See [R1] and **R3**, plus R5. Again R1. Also R2 then R2. And bogus R99."
+    out = _agent(lambda kw: _response(report)).coach(
+        CoachContext(intent="q", stats={}, results=_results([0, 0, 0, 0, 0]))
+    )
+    # handles R1..R5 -> docnos d0..d4 (input_min_grade default 3, but top_k default 25 shows all 5)
+    assert out.referenced == ["d0", "d2", "d4", "d1"]  # R1,R3,R5,R2 in first-mention order; R99 gone
+
+
+def test_agent_no_citations_is_empty_not_a_failure():
+    out = _agent(lambda kw: _response("A report with no citations at all.")).coach(
+        CoachContext(intent="q", stats={}, results=_results([3, 2]))
+    )
+    assert out.referenced == []
+
+
+def test_agent_input_selection_limits_passages_shown():
+    # input_top_k=2, input_min_grade=3: ranks 1-2 (any grade) + the deeper grade-3 at rank 5.
+    client = StubClient(lambda kw: _response("ok"))
+    SearchCoachAgent(client, "m", input_top_k=2, input_min_grade=3).coach(
+        CoachContext(intent="q", stats={}, results=_results([1, 0, 1, 1, 3]))
+    )
+    prompt = client.calls[0]["messages"][0]["content"]
+    assert "[R1] grade=1" in prompt and "[R2] grade=0" in prompt and "[R3] grade=3" in prompt
+    assert "[R4]" not in prompt  # only three passages shown
+    assert "sum-4" in prompt  # the deep grade-3 nugget (rank 5) is R3

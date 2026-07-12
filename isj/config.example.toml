@@ -102,18 +102,38 @@ llm = "default"
 
 # ---------------------------------------------------------------------------
 # [coach] — the SearchCoach that turns a query's judged results into the Searcher's
-# feedback after judging (TASK-40). Phase 1 supports the MechanicalSearchCoach only (a
-# deterministic listing of the top-N + high-grade-nugget passages); a later phase adds the
-# LLM SearchCoachAgent. See docs/design/search-coach.md.
+# feedback after judging (TASK-40). Two implementations:
+#   MechanicalSearchCoach — deterministic listing of the top-N + high-grade-nugget passages
+#                           (the default, and the always-works fallback).
+#   SearchCoachAgent       — an LLM that writes a free-text coaching report (what's working /
+#                           hurting / pursue next + a self-contained "Cited passages" section
+#                           reproducing the excerpts verbatim). Query-blind and atom-blind.
+# See docs/design/search-coach.md.
 # ---------------------------------------------------------------------------
 # [coach]
 # class = "isj_agent.agents.search_coach.MechanicalSearchCoach"   # default
+#
+# --- LLM coach: swap the class and (optionally) name a distinct [llm.*] profile ----------
+# The coach BOUNDS its generation (TASK-37) and is bracketed by an 'await_coach' live marker
+# and a purpose="coach" trace event. If it raises (timeout / connection / parse), the
+# Controller silently falls back to the mechanical coach below, so a coach failure never
+# stalls the search. It writes FREE TEXT (no guided decoding — that degraded on gpt-oss-120b).
+# class = "isj_agent.agents.search_coach.SearchCoachAgent"
+# llm = "default"                # [llm.*] profile for the coach (defaults to "default")
+# reasoning_effort = "medium"    # default; forwarded via extra_body
+# temperature = 0.0              # GREEDY default; deterministic coaching
+# max_tokens = 8000              # generation cap (default)
+# timeout_s = 120                # per-call timeout in seconds (default)
+# input_top_k = 25               # coach INPUT: top band by rank (any grade) it is shown
+# input_min_grade = 3            # plus any deeper doc graded >= this (the gold nuggets)
+# prompt = "isj/scouting/search-coach/prompt-v6.md"   # optional override of the bundled prompt
 
-# The mechanical coach's selection (also the always-works fallback). Per query it forwards
-# the TOP `top_results_to_show` of the ranking regardless of grade (so the Searcher always
-# sees what its query does at the top, including docs judged on prior queries) PLUS any
-# deeper doc graded >= `min_show_grade` (the gold nuggets). Shown docs keep their TRUE ranks.
-# These moved here from [loop] (still read from [loop] as a DEPRECATED fallback).
+# The mechanical coach's selection (also the always-works fallback whenever an LLM coach is
+# configured). Per query it forwards the TOP `top_results_to_show` of the ranking regardless
+# of grade (so the Searcher always sees what its query does at the top, including docs judged
+# on prior queries) PLUS any deeper doc graded >= `min_show_grade` (the gold nuggets). Shown
+# docs keep their TRUE ranks. These moved here from [loop] (still read from [loop] as a
+# DEPRECATED fallback).
 # [coach.mechanical]
 # top_results_to_show = 10
 # min_show_grade = 3

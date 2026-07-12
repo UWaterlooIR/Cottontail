@@ -1,10 +1,11 @@
 ---
 id: TASK-40.2
 title: 'SearchCoach phase 2: add SearchCoachAgent (LLM free-text coaching report)'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-07-11 21:30'
-updated_date: '2026-07-11 23:42'
+updated_date: '2026-07-12 00:18'
 labels: []
 dependencies:
   - TASK-40.1
@@ -20,10 +21,10 @@ Add SearchCoachAgent: an LLM agent (client+model+prompt+temp 0 + TASK-37 caps) t
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 SearchCoachAgent produces the v6 free-text report; config [coach] class selects it; the Searcher receives query echo + stats + atom counts (Cottontail only) + the coach report.
-- [ ] #2 On any coach error/timeout the Controller falls back to MechanicalSearchCoach (run never fails); a coach_fallback trace event records it.
-- [ ] #3 Citation extraction is tolerant (bracketed or bare handles, validated) and used only for logging referenced docs; a report with no parseable citations is not treated as a failure.
-- [ ] #4 The coach LLM call appears as a purpose=coach trace event; tests cover the agent, the fallback, and tolerant extraction; the isj suite passes.
+- [x] #1 SearchCoachAgent produces the v6 free-text report; config [coach] class selects it; the Searcher receives query echo + stats + atom counts (Cottontail only) + the coach report.
+- [x] #2 On any coach error/timeout the Controller falls back to MechanicalSearchCoach (run never fails); a coach_fallback trace event records it.
+- [x] #3 Citation extraction is tolerant (bracketed or bare handles, validated) and used only for logging referenced docs; a report with no parseable citations is not treated as a failure.
+- [x] #4 The coach LLM call appears as a purpose=coach trace event; tests cover the agent, the fallback, and tolerant extraction; the isj suite passes.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -64,3 +65,26 @@ GOTCHAS/DECISIONS: FREE TEXT -- do NOT pass response_format (guided JSON failed;
 
 FORWARD-COMPAT (phase 3 compaction): the coach report is the tool-message content -- prompt-v6 emits a "## Cited passages" section; keep that header so phase-3 compaction can drop that section (else it hard-truncates). (phase 4): coach-off is just [coach].class = MechanicalSearchCoach.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/task-40-searchcoach-tasks (follows 40.1).
+
+Files:
+- isj/isj_agent/agents/search_coach.md -- bundled coach prompt, copied verbatim from isj/scouting/search-coach/prompt-v6.md ({intent}/{passages} placeholders; the "## Cited passages" header is kept for phase-3 compaction).
+- isj/isj_agent/agents/search_coach.py -- added SearchCoachAgent (mirrors judger.py: client+model, temp 0, reasoning_effort, TASK-37 max_tokens/timeout caps; NO response_format = free text). coach(ctx): select(input_top_k=25/input_min_grade=3) -> R1..Rn handles + passages block -> chat.completions.create -> report=message.content, reasoning=reasoning_content, usage dict. Added module-level _referenced_docnos() with the tolerant handle regex (?<![A-Za-z0-9])R\d+(?![A-Za-z0-9]) -- matches [R3]/**R3**/bare R3, first-mention dedup, validated against the input handles, mapped to docnos; empty is not a failure. is_llm class flag on both coaches (True/False).
+- isj/isj_agent/controller.py -- __init__ gained `mechanical` (always-works fallback; defaults to the coach itself when it is non-LLM, else a fresh MechanicalSearchCoach). At the coach call: if is_llm, mark("await_coach"); try coach.coach(ctx) except -> emit "coach_fallback" (error_type/message) + self.mechanical.coach(ctx); else, when is_llm, emit "llm_call" purpose="coach" with referenced + reasoning + usage.
+- isj/isj_agent/config.py -- build_coach now returns (coach, mechanical); added the SearchCoachAgent branch (client/model from [coach].llm, defaults "default"; knobs prompt/reasoning_effort/temperature/max_tokens/timeout_s/input_top_k/input_min_grade); always builds the mechanical fallback; raises SystemExit on a bad llm profile or unsupported class.
+- isj/isj_agent/cli.py -- coach, mechanical = build_coach(config, clients, llm_configs); Controller(..., coach=coach, mechanical=mechanical).
+- isj/config.example.toml -- documented the SearchCoachAgent [coach] block (llm/caps/input_top_k/input_min_grade/prompt) alongside the mechanical default + [coach.mechanical] fallback.
+- Tests: tests/test_search_coach.py (7 SearchCoachAgent tests: report/usage/reasoning, no response_format + temp 0 + caps + extra_body, prompt carries intent+handles, tolerant bracket/bold/bare extraction w/ dedup + hallucinated-handle drop, no-citations==[], input selection limits passages). tests/test_controller.py (2 tests: purpose="coach" llm_call event carries referenced+usage & the report reaches the searcher; RuntimeError coach -> single coach_fallback event + mechanical [rank N] feedback + no coach llm_call).
+
+Suite: 199 passed, 1 skipped. build_coach smoke-verified across all config paths.
+
+DEVIATIONS FROM PLAN (both refinements, flagged):
+1. coach_fallback event uses error_type + message (matching the codebase's other error events) rather than a single error= string.
+2. The await_coach marker and purpose="coach" llm_call event are gated on the coach's is_llm flag, so a standalone MechanicalSearchCoach emits no misleading "LLM call" trace/marker. Added a small is_llm class attribute to both coaches for this.
+
+CARRIED FROM 40.1 (still open for owner): top_results_to_show/min_show_grade remain on the Controller as convenience defaults for the auto-built mechanical coach. Not stripped.
+<!-- SECTION:NOTES:END -->

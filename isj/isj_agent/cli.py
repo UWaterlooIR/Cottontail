@@ -82,10 +82,12 @@ def main(argv: list[str] | None = None) -> None:
         **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in judger_cfg},
     )
     engine = build_engine(config, burrow_override=args.burrow)
+    coach, mechanical = build_coach(config, clients, llm_configs)
     loop_cfg = config.get("loop", {})
     controller = Controller(
         searcher, judger, engine,
-        coach=build_coach(config),
+        coach=coach,
+        mechanical=mechanical,
         fetch_k=searcher_cfg.get("fetch_k", 200),
         window=searcher_cfg.get("window", 75),
         max_queries=searcher_cfg.get("max_queries", 100),
