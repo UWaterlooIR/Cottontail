@@ -1,9 +1,10 @@
 ---
 id: TASK-40
 title: 'Implement the SearchCoach: pluggable coaching feedback for the Searcher'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-11 21:27'
+updated_date: '2026-07-12 04:45'
 labels: []
 dependencies: []
 ordinal: 54000
