@@ -99,15 +99,24 @@ llm = "default"
 # max_judgments = 1000          # RUN-TOTAL judgment budget, split evenly across intents
 # max_doc_chars = 50000         # truncate each judged document to this many chars
 # max_list_depth =              # optional per-query descent safety cap (unset = off)
-#
-# Searcher feedback shaping -- keeps the Searcher's accumulating context BOUNDED (a run
-# that feeds back every judged doc overflows gpt-oss-120b's 128k context after only a few
-# hundred docs). Per query the Searcher is shown: the TOP `top_results_to_show` docs of the
-# ranking regardless of grade (so it always sees what its query does at the top, including
-# docs already judged on prior queries), PLUS any deeper doc with grade >= `min_show_grade`
-# (the gold nuggets, for vocabulary). Shown docs keep their TRUE ranks (not renumbered).
+
+# ---------------------------------------------------------------------------
+# [coach] — the SearchCoach that turns a query's judged results into the Searcher's
+# feedback after judging (TASK-40). Phase 1 supports the MechanicalSearchCoach only (a
+# deterministic listing of the top-N + high-grade-nugget passages); a later phase adds the
+# LLM SearchCoachAgent. See docs/design/search-coach.md.
+# ---------------------------------------------------------------------------
+# [coach]
+# class = "isj_agent.agents.search_coach.MechanicalSearchCoach"   # default
+
+# The mechanical coach's selection (also the always-works fallback). Per query it forwards
+# the TOP `top_results_to_show` of the ranking regardless of grade (so the Searcher always
+# sees what its query does at the top, including docs judged on prior queries) PLUS any
+# deeper doc graded >= `min_show_grade` (the gold nuggets). Shown docs keep their TRUE ranks.
+# These moved here from [loop] (still read from [loop] as a DEPRECATED fallback).
+# [coach.mechanical]
 # top_results_to_show = 10
-# min_show_grade = 3            # below the top band, show only docs graded >= this
+# min_show_grade = 3
 
 # ---------------------------------------------------------------------------
 # [index]

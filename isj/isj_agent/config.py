@@ -151,3 +151,25 @@ def build_multishard_engine(cfg: dict):
     eng = MultiShardSearchEngine(engines)
     eng.healthz()  # fail fast if any shard server is down
     return eng
+
+
+def build_coach(config: dict):
+    """Build the configured SearchCoach (TASK-40). Phase 1 supports MechanicalSearchCoach
+    only. `[coach.mechanical]` carries top_results_to_show / min_show_grade (migrated out of
+    `[loop]`, which is still read as a DEPRECATED fallback). A later phase adds the LLM
+    SearchCoachAgent branch. See docs/design/search-coach.md."""
+    from isj_agent.agents.search_coach import MechanicalSearchCoach
+
+    coach_cfg = config.get("coach", {})
+    mech_cfg = coach_cfg.get("mechanical", {})
+    loop = config.get("loop", {})  # deprecated fallback for the migrated knobs
+    top = mech_cfg.get("top_results_to_show", loop.get("top_results_to_show", 10))
+    min_g = mech_cfg.get("min_show_grade", loop.get("min_show_grade", 3))
+
+    cls_path = coach_cfg.get("class")
+    if cls_path and load_class(cls_path) is not MechanicalSearchCoach:
+        raise SystemExit(
+            f"[coach] class {cls_path!r} is not available yet "
+            "(phase 1 supports isj_agent.agents.search_coach.MechanicalSearchCoach)"
+        )
+    return MechanicalSearchCoach(top_results_to_show=top, min_show_grade=min_g)

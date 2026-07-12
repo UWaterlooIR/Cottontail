@@ -26,6 +26,7 @@ import json
 import time
 
 from isj_agent.agents.judger import Judger
+from isj_agent.agents.search_coach import CoachContext, MechanicalSearchCoach, SearchCoach
 from isj_agent.agents.searcher import Searcher
 from isj_agent.engine.base import EngineError, SearchEngine
 from collections.abc import Callable
@@ -75,6 +76,7 @@ class Controller:
         max_doc_chars: int = 50000,
         max_queries: int = 100,
         max_list_depth: int | None = None,
+        coach: SearchCoach | None = None,
         top_results_to_show: int = 10,
         min_show_grade: int = 3,
     ) -> None:
@@ -88,11 +90,13 @@ class Controller:
         self.max_doc_chars = max_doc_chars
         self.max_queries = max_queries
         self.max_list_depth = max_list_depth
-        # Searcher feedback shaping (keeps the Searcher's accumulating context bounded):
-        # always show the top `top_results_to_show` of a query's ranking, plus any deeper
-        # doc with grade >= `min_show_grade`.
-        self.top_results_to_show = top_results_to_show
-        self.min_show_grade = min_show_grade
+        # The SearchCoach turns a query's judged descent into the Searcher's feedback
+        # (TASK-40). Default: a MechanicalSearchCoach built from top_results_to_show /
+        # min_show_grade (kept here as convenience defaults for the auto-built coach); the
+        # CLI injects a configured coach.
+        self.coach: SearchCoach = coach or MechanicalSearchCoach(
+            top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
+        )
 
     # wave width = the Judger's concurrency (ONE knob; do not add a second)
     @property
@@ -187,7 +191,16 @@ class Controller:
                      message=str(jf), turn=queries, request=None, **last_usage)
                 run_error = str(jf)
                 break
-            self._tool(msgs, pr.tool_call_id, outcome)
+            if "error" in outcome:  # malformed-query bounce -> back to the Searcher as-is
+                self._tool(msgs, pr.tool_call_id, outcome)
+            else:  # build the Searcher feedback via the coach
+                descended = outcome["descended"]
+                stats = {"count": len(descended),
+                         "relevant": sum(1 for d in descended if self._relevant(d["grade"])),
+                         "total_matches": outcome["total_matches"]}
+                out = self.coach.coach(CoachContext(intent=intent, stats=stats, results=descended))
+                content = self._compose_feedback(pr.queryable, outcome["atom_counts"], stats, out)
+                self._tool(msgs, pr.tool_call_id, content)
 
         return SearcherResult(
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
@@ -294,9 +307,9 @@ class Controller:
                     emit("judge", time.time(), 0.0, id=h.id, grade=v.grade, reason=v.reason)
                     g = v.grade
                     is_new = True
-                # Capture the doc IN RANK ORDER (depth = its true cross-refill rank) for the
-                # Searcher feedback: the top band is shown regardless of grade, deeper docs
-                # only if grade >= min_show_grade (see _select_feedback).
+                # Capture the doc IN RANK ORDER (depth = its true cross-refill rank). This
+                # full descent is the coach's input (CoachContext.results); the coach/
+                # search_coach.select() decides what the Searcher ultimately sees.
                 descended.append({"rank": depth, "id": h.id, "score": h.score, "grade": g,
                                   "summary": h.summary, "reason": v.reason, "is_new": is_new})
                 if g < 0:      # TASK-27 sentinel: an ERROR is evidence of neither
@@ -312,50 +325,30 @@ class Controller:
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        return self._summarize(queryable, atom_counts, total_matches, descended)
+        # Return the raw descent + diagnostics; run() builds the Searcher feedback via the
+        # coach. (A malformed-query bounce still returns {"error": msg} above.)
+        return {"descended": descended, "atom_counts": atom_counts, "total_matches": total_matches}
 
-    def _select_feedback(self, descended: list[dict]) -> list[dict]:
-        """Pick which descended docs the Searcher sees. The TOP band -- the first
-        min(top_results_to_show, K) docs in rank order -- is shown regardless of grade
-        (so the agent always sees what its query does at the top, including docs already
-        judged in prior queries). BELOW that band, a doc is shown only if its grade is
-        >= min_show_grade (the gold nuggets, for vocabulary). Rank order is preserved and
-        each doc keeps its TRUE rank -- skipped docs are not renumbered."""
-        return [
-            d for pos, d in enumerate(descended)
-            if pos < self.top_results_to_show or d["grade"] >= self.min_show_grade
-        ]
-
-    def _summarize(self, queryable, atom_counts, total_matches, descended: list[dict]) -> dict:
-        # Field order is deliberate -- it is what the Searcher reads top-to-bottom:
-        # the queryable's own field(s) first (cover -> "query"; tiered -> "tiers"), then
-        # diagnostics (atom_counts up top so a count-0 dead atom is caught early), then the
-        # descent aggregate, then the shown results; per result rank/score then summary
-        # BEFORE reason BEFORE grade, so the agent reads the passage before the verdict.
-        k = len(descended)
-        relevant = sum(1 for d in descended if self._relevant(d["grade"]))
-        shown = self._select_feedback(descended)
-        out: dict = {**queryable.trace_arguments()}
-        if atom_counts is not None:      # OPTIONAL (Q3): omit for an engine that omits them
-            out["atom_counts"] = atom_counts
-        if total_matches is not None:
-            out["total_matches"] = total_matches
-        return {
-            **out,
-            # Coverage aggregate: the Searcher went K docs deep, `relevant` were relevant,
-            # and `shown` of the K appear below (the rest were non-nugget docs past the top band).
-            "descended": {"count": k, "relevant": relevant,
-                          "shown": len(shown), "hidden": k - len(shown)},
-            "results": [
-                {"rank": d["rank"], "score": d["score"], "summary": d["summary"],
-                 "reason": d["reason"], "grade": d["grade"]}
-                for d in shown
-            ],
-        }
+    def _compose_feedback(self, queryable, atom_counts, stats: dict, out) -> str:
+        """Assemble the Searcher's feedback string: the query echo + coverage stats +
+        (Cottontail only, iff the engine returned them) atom counts + the coach's report.
+        The coach is query-blind/atom-blind, so the Controller owns the first three parts."""
+        cov = (f"Coverage: judged {stats['count']} results this query, "
+               f"{stats['relevant']} relevant")
+        if stats["total_matches"] is not None:
+            cov += f"; {stats['total_matches']} total corpus matches"
+        lines = [f"Your query: {queryable.query_string()}", cov + "."]
+        if atom_counts is not None:  # engine-provided per-term corpus counts (Cottontail only)
+            lines.append("Atom matches: " + ", ".join(
+                f"{a['term']}={a['count']}" for a in atom_counts))
+        return "\n".join(lines) + "\n\n" + out.report
 
     @staticmethod
-    def _tool(msgs: list[dict], tool_call_id: str, payload: dict) -> None:
-        msgs.append({"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(payload)})
+    def _tool(msgs: list[dict], tool_call_id: str, payload) -> None:
+        # payload is the Searcher-feedback STRING (the coach path) or a dict (the bounce
+        # path); a dict is JSON-serialized, a string sent as-is.
+        content = payload if isinstance(payload, str) else json.dumps(payload)
+        msgs.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
 
     @staticmethod
     def _compile(intent: str, entries: list[RankedEntry]) -> RankedList:

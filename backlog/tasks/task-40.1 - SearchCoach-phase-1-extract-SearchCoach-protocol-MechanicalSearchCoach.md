@@ -1,10 +1,11 @@
 ---
 id: TASK-40.1
 title: 'SearchCoach phase 1: extract SearchCoach protocol + MechanicalSearchCoach'
-status: To Do
-assignee: []
+status: Done
+assignee:
+  - '@claude'
 created_date: '2026-07-11 21:30'
-updated_date: '2026-07-11 23:42'
+updated_date: '2026-07-12 00:02'
 labels: []
 dependencies: []
 parent_task_id: TASK-40
@@ -19,10 +20,10 @@ Refactor the Controller's feedback assembly (_summarize / _select_feedback in is
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A SearchCoach Protocol exists; MechanicalSearchCoach implements it and the Controller uses it to build the Searcher feedback.
-- [ ] #2 MechanicalSearchCoach is a pure function of its context (no LLM, cannot fail) and produces the top-N + high-grade-nuggets passage listing.
-- [ ] #3 top_results_to_show/min_show_grade are read from [coach.mechanical] (with a deprecated [loop] fallback); config.example.toml documents the [coach] and [coach.mechanical] blocks.
-- [ ] #4 Tests cover the mechanical coach's selection and the Controller wiring; the isj suite passes.
+- [x] #1 A SearchCoach Protocol exists; MechanicalSearchCoach implements it and the Controller uses it to build the Searcher feedback.
+- [x] #2 MechanicalSearchCoach is a pure function of its context (no LLM, cannot fail) and produces the top-N + high-grade-nuggets passage listing.
+- [x] #3 top_results_to_show/min_show_grade are read from [coach.mechanical] (with a deprecated [loop] fallback); config.example.toml documents the [coach] and [coach.mechanical] blocks.
+- [x] #4 Tests cover the mechanical coach's selection and the Controller wiring; the isj suite passes.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -72,3 +73,17 @@ GOTCHAS/DECISIONS: descended keys are `id`+`is_new` (not docno/revisit). searche
 
 FORWARD-COMPAT (phase 2): the run() flow is now `out=self.coach.coach(ctx); content=self._compose_feedback(...); self._tool(...)`. Phase 2 swaps MechanicalSearchCoach->SearchCoachAgent (out.report becomes the coaching report); _compose_feedback + _tool + agnostic searcher.md unchanged. Phase 2 adds a `mechanical` fallback slot to the Controller. CoachContext/CoachOutput/select() are established here.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented. New isj_agent/agents/search_coach.py: SearchCoach Protocol + CoachContext/CoachOutput + select() + MechanicalSearchCoach (pure, cannot fail; forwards top-N + high-grade nuggets as a markdown listing). Controller: _descend now returns the raw {descended,atom_counts,total_matches}; run() builds CoachContext and calls self.coach.coach(ctx); new _compose_feedback wraps the coach report with the query echo + coverage + (Cottontail-only) atom counts as a STRING; _tool sends a str as-is (dict json.dumps for the {error} bounce); _summarize/_select_feedback deleted. searcher.md PART 2 rewritten to agnostic prose (no JSON spec). config.py build_coach (MechanicalSearchCoach; [coach.mechanical] with deprecated [loop] fallback); cli.py wires coach=build_coach(config); config.example [coach]/[coach.mechanical] documented. Tests: new tests/test_search_coach.py (select worked example, defaults, prior-judged-in-top-band, mechanical report/referenced/empty); test_controller.py payload-shape tests rewritten to string assertions; TASK-36 selection tests moved to test_search_coach. Full suite 191 passed / 1 skipped. build_coach smoke: [coach.mechanical]/[loop]-fallback/default/explicit-class all resolve; sample report renders.
+
+DEVIATION from the plan (noted): kept top_results_to_show/min_show_grade as Controller __init__ params that AUTO-BUILD a default MechanicalSearchCoach when no explicit coach is passed -- avoids breaking the many Controller(...)/ _ctl(...) test constructions on signature. The feedback LOGIC still moved to the coach; the CLI injects an explicit coach via build_coach. Feedback is now a markdown STRING (forward-compatible with the coach's report), per the searcher.md-agnostic decision.
+<!-- SECTION:NOTES:END -->
+
+## Final Summary
+
+<!-- SECTION:FINAL_SUMMARY:BEGIN -->
+Extracted the Searcher-feedback assembly behind a SearchCoach protocol with MechanicalSearchCoach as the deterministic fallback, and made searcher.md format-agnostic so the feedback shape is decoupled from the prompt. Feedback is now a markdown string (query echo + coverage + atom counts + the coach report). Config: [coach]/[coach.mechanical] with a deprecated [loop] fallback; cli injects the coach. 191 tests pass. Sets the seam for phase 2 (SearchCoachAgent) to swap in.
+<!-- SECTION:FINAL_SUMMARY:END -->

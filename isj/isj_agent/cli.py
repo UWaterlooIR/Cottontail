@@ -22,6 +22,7 @@ from pathlib import Path
 
 from isj_agent.config import (
     build_client,
+    build_coach,
     build_engine,
     load_class,
 )
@@ -84,6 +85,7 @@ def main(argv: list[str] | None = None) -> None:
     loop_cfg = config.get("loop", {})
     controller = Controller(
         searcher, judger, engine,
+        coach=build_coach(config),
         fetch_k=searcher_cfg.get("fetch_k", 200),
         window=searcher_cfg.get("window", 75),
         max_queries=searcher_cfg.get("max_queries", 100),
@@ -91,8 +93,6 @@ def main(argv: list[str] | None = None) -> None:
         relevant_grade_threshold=loop_cfg.get("relevant_grade_threshold", 1),
         max_doc_chars=loop_cfg.get("max_doc_chars", 50000),
         max_list_depth=loop_cfg.get("max_list_depth"),
-        top_results_to_show=loop_cfg.get("top_results_to_show", 10),
-        min_show_grade=loop_cfg.get("min_show_grade", 3),
     )
 
     orchestrator = Orchestrator(
