@@ -80,6 +80,9 @@ class Controller:
         mechanical: SearchCoach | None = None,
         top_results_to_show: int = 10,
         min_show_grade: int = 3,
+        context_limit: int | None = None,
+        compact_trigger: float = 0.80,
+        shrink_truncate_tokens: int = 800,
     ) -> None:
         self.searcher = searcher
         self.judger = judger
@@ -107,6 +110,14 @@ class Controller:
                 top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
             )
         )
+        # Context compaction (TASK-40.3): bound the Searcher's cumulative context by shrinking
+        # old feedback IN PLACE. `context_limit` is the model's token limit (config/vLLM; None
+        # disables compaction). Trigger at `compact_trigger` of it on the server-reported
+        # prompt_tokens; a shrink pass drops the oldest un-shrunk tool messages' cited-passages
+        # sections (or hard-truncates to `shrink_truncate_tokens`). See docs/design.
+        self.context_limit = context_limit
+        self.compact_trigger = compact_trigger
+        self.shrink_truncate_tokens = shrink_truncate_tokens
 
     # wave width = the Judger's concurrency (ONE knob; do not add a second)
     @property
@@ -136,6 +147,7 @@ class Controller:
         judged: dict[str, Verdict] = {}      # GLOBAL: docno -> verdict judged in ANY prior query
         recorded: list[RankedEntry] = []     # one entry per NEW judgment this intent
         events: list[TraceEvent] = []
+        shrunk: set[int] = set()             # msgs indices of tool messages already compacted
         queries = 0
         last_usage: dict = {}
         run_error: str | None = None
@@ -225,6 +237,11 @@ class Controller:
                              referenced=out.referenced, content=out.reasoning, **(out.usage or {}))
                 content = self._compose_feedback(pr.queryable, outcome["atom_counts"], stats, out)
                 self._tool(msgs, pr.tool_call_id, content)
+
+            # Bound the cumulative context before the next propose (TASK-40.3). Trigger on the
+            # size the server saw for THIS turn's request (pr.usage.prompt_tokens); the shrink
+            # lands before the next turn reads msgs.
+            self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
 
         return SearcherResult(
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
@@ -373,6 +390,61 @@ class Controller:
         # path); a dict is JSON-serialized, a string sent as-is.
         content = payload if isinstance(payload, str) else json.dumps(payload)
         msgs.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
+
+    _CITED_HEADER = "## Cited passages"
+
+    def _maybe_compact(self, msgs: list[dict], last_pt: int | None, shrunk: set[int], emit) -> None:
+        """Shrink old feedback IN PLACE when the conversation nears the context limit (TASK-40.3).
+
+        Rewrites tool-message CONTENT only -- never deletes a message (an assistant tool-call
+        must keep its paired tool reply, or the API 400s), never touches the most recent tool
+        message (the one the Searcher reformulates from), and never touches assistant/system/
+        user messages. Each pass shrinks the oldest half of the still-full tool messages
+        (K -> K/2 -> K/4 ...). A rarely-triggering safety net (see docs/design)."""
+        if self.context_limit is None or last_pt is None:
+            return
+        if last_pt < self.compact_trigger * self.context_limit:
+            return
+        tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+        if len(tool_idx) <= 1:                       # nothing to shrink but the untouchable last
+            return
+        candidates = [i for i in tool_idx[:-1] if i not in shrunk]  # oldest-first, exclude last
+        if not candidates:
+            # Degenerate floor: everything but the last is already shrunk and we are STILL over
+            # trigger (cannot happen in a normal max_queries run). Hard-truncate the shrunk ones.
+            n = 0
+            for i in tool_idx[:-1]:
+                if self._hard_truncate(msgs[i]):
+                    n += 1
+            if n:
+                emit("compact", time.time(), 0.0, prompt_tokens=last_pt, shrunk=n,
+                     tool_messages=len(tool_idx), pass_="floor")
+            return
+        take = -(-len(candidates) // 2)              # ceil(len/2): the oldest half
+        for i in candidates[:take]:
+            self._shrink_message(msgs[i])
+            shrunk.add(i)
+        emit("compact", time.time(), 0.0, prompt_tokens=last_pt, shrunk=take,
+             tool_messages=len(tool_idx))
+
+    def _shrink_message(self, m: dict) -> None:
+        """Drop the '## Cited passages' section (keep the coaching prose + Vocabulary line);
+        if that header is absent (a mechanical listing, or drift), hard-truncate instead."""
+        c = m.get("content")
+        if isinstance(c, str) and self._CITED_HEADER in c:
+            m["content"] = c[: c.index(self._CITED_HEADER)].rstrip()
+        else:
+            self._hard_truncate(m)
+
+    def _hard_truncate(self, m: dict) -> bool:
+        """Hard-truncate a tool message to ~shrink_truncate_tokens (chars/4). Returns whether
+        it actually shortened the content (idempotent: a no-op once already short)."""
+        c = m.get("content")
+        keep = self.shrink_truncate_tokens * 4       # ~4 chars/token; sizing only
+        if isinstance(c, str) and len(c) > keep:
+            m["content"] = c[:keep].rstrip() + "\n...[older feedback truncated]"
+            return True
+        return False
 
     @staticmethod
     def _compile(intent: str, entries: list[RankedEntry]) -> RankedList:

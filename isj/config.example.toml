@@ -26,6 +26,12 @@ model = "gpt.oss.120b"
 # startup or an error is raised.
 # api_key_env = "MY_VLLM_API_KEY"
 
+# Model context window in tokens. Used by the SEARCHER's profile to bound the Searcher's
+# cumulative conversation via context compaction (TASK-40; see [loop].compact_trigger). If
+# omitted, the CLI best-effort auto-discovers it from vLLM's /v1/models (max_model_len);
+# if that also fails, compaction is simply disabled (safe). Never hardcoded.
+# context_limit = 131072
+
 # ---------------------------------------------------------------------------
 # [agents.<role>]
 # Maps each agent role to an implementation class and a named LLM profile.
@@ -99,6 +105,15 @@ llm = "default"
 # max_judgments = 1000          # RUN-TOTAL judgment budget, split evenly across intents
 # max_doc_chars = 50000         # truncate each judged document to this many chars
 # max_list_depth =              # optional per-query descent safety cap (unset = off)
+#
+# Context compaction (TASK-40) -- a rarely-triggering SAFETY NET that bounds the Searcher's
+# cumulative context by shrinking OLD coaching feedback in place (drops each old report's
+# "## Cited passages" section, keeping the coaching prose + vocabulary line; hard-truncates
+# if that section is absent). Needs the searcher [llm.*] profile's context_limit (above);
+# without it, compaction is disabled. Triggers on the server-reported prompt_tokens, so it
+# only fires on genuinely long runs; not something you normally tune.
+# compact_trigger = 0.80        # shrink a pass once prompt_tokens reaches this fraction of context_limit
+# shrink_truncate_tokens = 800  # hard-truncate size (~tokens) when a report has no "## Cited passages"
 
 # ---------------------------------------------------------------------------
 # [coach] — the SearchCoach that turns a query's judged results into the Searcher's

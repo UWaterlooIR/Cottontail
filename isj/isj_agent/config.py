@@ -40,6 +40,26 @@ def build_client(llm_config: dict) -> openai.OpenAI:
     return openai.OpenAI(base_url=llm_config["base_url"], api_key=api_key)
 
 
+def resolve_context_limit(llm_config: dict, client: openai.OpenAI | None = None) -> int | None:
+    """The model's context limit for compaction (TASK-40.3), never hardcoded.
+
+    Config is primary: a `context_limit` on the [llm.*] profile wins. Otherwise best-effort
+    auto-discovery from vLLM's /v1/models (`max_model_len`); any failure -> None (compaction
+    stays disabled, which is safe). Returns None if neither is available."""
+    if "context_limit" in llm_config:
+        return int(llm_config["context_limit"])
+    if client is None:
+        return None
+    try:  # vLLM exposes max_model_len on each served model
+        for model in client.models.list().data:
+            limit = getattr(model, "max_model_len", None)
+            if limit:
+                return int(limit)
+    except Exception:
+        return None
+    return None
+
+
 def build_search_engine(cfg: dict, burrow_override: str | None = None) -> HttpSearchEngine:
     """Construct an HttpSearchEngine from a parsed [cottontail_http_json_server] entry.
 

@@ -1,10 +1,10 @@
 ---
 id: TASK-40.3
 title: 'SearchCoach phase 3: context compaction (shrink-in-place)'
-status: To Do
+status: Done
 assignee: []
 created_date: '2026-07-11 21:30'
-updated_date: '2026-07-11 23:43'
+updated_date: '2026-07-12 00:23'
 labels: []
 dependencies:
   - TASK-40.2
@@ -20,9 +20,9 @@ Bound the Searcher's cumulative context by compacting old feedback in place (the
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 The Controller shrinks in place at compact_trigger of the model context limit (from config/vLLM, not hardcoded), shrinking only tool messages, oldest-un-shrunk-first, never the most recent.
-- [ ] #2 Shrink drops the ## Cited passages section (regex), falling back to a hard-truncate at shrink_truncate_tokens when that section is absent; message count and tool_call_id pairing are preserved (protocol-safe).
-- [ ] #3 A compact trace event records each pass; tests cover the shrink rule, the fallback truncate, and the keep-last invariant; the isj suite passes.
+- [x] #1 The Controller shrinks in place at compact_trigger of the model context limit (from config/vLLM, not hardcoded), shrinking only tool messages, oldest-un-shrunk-first, never the most recent.
+- [x] #2 Shrink drops the ## Cited passages section (regex), falling back to a hard-truncate at shrink_truncate_tokens when that section is absent; message count and tool_call_id pairing are preserved (protocol-safe).
+- [x] #3 A compact trace event records each pass; tests cover the shrink rule, the fallback truncate, and the keep-last invariant; the isj suite passes.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -58,3 +58,26 @@ GOTCHAS/DECISIONS: rewrite content only, never delete a tool message (tool_call_
 
 FORWARD-COMPAT: last structural phase (phase 4 only relies on long runs staying under the limit).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/task-40-searchcoach-tasks (follows 40.2).
+
+Files:
+- isj/isj_agent/controller.py -- Controller.__init__ gained context_limit:int|None=None, compact_trigger:float=0.80, shrink_truncate_tokens:int=800. run() keeps a per-run `shrunk:set[int]` and calls self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit) after each turn's tool append (both coach and bounce paths). New methods:
+  * _maybe_compact: no-op unless context_limit and last_pt are set and last_pt >= compact_trigger*context_limit; collects tool-message indices, protects the LAST one, shrinks the oldest ceil(half) of the still-un-shrunk candidates (K->K/2->K/4...), emits a "compact" trace event (prompt_tokens/shrunk/tool_messages). Degenerate floor: if all-but-last are already shrunk and still over trigger, hard-truncate them (pass_="floor").
+  * _shrink_message: drops the "## Cited passages" section (keeps coaching prose + Vocabulary line) via a fixed-header index; hard-truncates when the header is absent.
+  * _hard_truncate: trims to shrink_truncate_tokens*4 chars + "...[older feedback truncated]"; idempotent (returns whether it changed anything).
+  Content is rewritten IN PLACE only -- no message is ever deleted, so assistant tool-call <-> tool_call_id pairing is preserved.
+- isj/isj_agent/config.py -- resolve_context_limit(llm_config, client): config context_limit primary; else best-effort vLLM /v1/models max_model_len discovery; any failure -> None (compaction disabled, safe). Never hardcoded.
+- isj/isj_agent/cli.py -- resolves the SEARCHER profile's context_limit (that is the conversation being bounded) and passes context_limit/compact_trigger/shrink_truncate_tokens (from [loop]) into the Controller.
+- isj/config.example.toml -- documented context_limit on [llm.*] and compact_trigger/shrink_truncate_tokens under [loop].
+- isj/tests/test_compaction.py (NEW, 9 tests): no-op guards (no context_limit / under trigger / None prompt_tokens / <=1 tool msg); over-trigger shrinks oldest-half, never the last tool msg, never assistant/system/user, message count + role/tool_call_id shape invariant, compact event emitted; header-drop keeps prose+vocab; no-header hard-truncate; repeated triggers halve remaining (4,2,1,1 for 8 candidates) then a floor pass; floor hard-truncate.
+
+Suite: 208 passed, 1 skipped. resolve_context_limit smoke-verified (config / none / discovery / discovery-fail).
+
+DEVIATION (minor): AC#2 says "regex" for the section drop; I used a fixed-substring index on the literal "## Cited passages" header (simpler and more robust than a regex for a constant header). Behavior is identical.
+
+NATURE: rarely-triggering safety net, not tuned. Won't fire in a normal max_queries run (needs ~105k accumulated feedback). If it never triggers, that is expected.
+<!-- SECTION:NOTES:END -->
