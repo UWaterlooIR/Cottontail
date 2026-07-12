@@ -26,6 +26,12 @@ model = "gpt.oss.120b"
 # startup or an error is raised.
 # api_key_env = "MY_VLLM_API_KEY"
 
+# Model context window in tokens. Used by the SEARCHER's profile to bound the Searcher's
+# cumulative conversation via context compaction (TASK-40; see [loop].compact_trigger). If
+# omitted, the CLI best-effort auto-discovers it from vLLM's /v1/models (max_model_len);
+# if that also fails, compaction is simply disabled (safe). Never hardcoded.
+# context_limit = 131072
+
 # ---------------------------------------------------------------------------
 # [agents.<role>]
 # Maps each agent role to an implementation class and a named LLM profile.
@@ -100,14 +106,52 @@ llm = "default"
 # max_doc_chars = 50000         # truncate each judged document to this many chars
 # max_list_depth =              # optional per-query descent safety cap (unset = off)
 #
-# Searcher feedback shaping -- keeps the Searcher's accumulating context BOUNDED (a run
-# that feeds back every judged doc overflows gpt-oss-120b's 128k context after only a few
-# hundred docs). Per query the Searcher is shown: the TOP `top_results_to_show` docs of the
-# ranking regardless of grade (so it always sees what its query does at the top, including
-# docs already judged on prior queries), PLUS any deeper doc with grade >= `min_show_grade`
-# (the gold nuggets, for vocabulary). Shown docs keep their TRUE ranks (not renumbered).
+# Context compaction (TASK-40) -- a rarely-triggering SAFETY NET that bounds the Searcher's
+# cumulative context by shrinking OLD coaching feedback in place (drops each old report's
+# "## Cited passages" section, keeping the coaching prose + vocabulary line; hard-truncates
+# if that section is absent). Needs the searcher [llm.*] profile's context_limit (above);
+# without it, compaction is disabled. Triggers on the server-reported prompt_tokens, so it
+# only fires on genuinely long runs; not something you normally tune.
+# compact_trigger = 0.80        # shrink a pass once prompt_tokens reaches this fraction of context_limit
+# shrink_truncate_tokens = 800  # hard-truncate size (~tokens) when a report has no "## Cited passages"
+
+# ---------------------------------------------------------------------------
+# [coach] — the SearchCoach that turns a query's judged results into the Searcher's
+# feedback after judging (TASK-40). Two implementations:
+#   MechanicalSearchCoach — deterministic listing of the top-N + high-grade-nugget passages
+#                           (the default, and the always-works fallback).
+#   SearchCoachAgent       — an LLM that writes a free-text coaching report (what's working /
+#                           hurting / pursue next + a self-contained "Cited passages" section
+#                           reproducing the excerpts verbatim). Query-blind and atom-blind.
+# See docs/design/search-coach.md.
+# ---------------------------------------------------------------------------
+# [coach]
+# class = "isj_agent.agents.search_coach.MechanicalSearchCoach"   # default
+#
+# --- LLM coach: swap the class and (optionally) name a distinct [llm.*] profile ----------
+# The coach BOUNDS its generation (TASK-37) and is bracketed by an 'await_coach' live marker
+# and a purpose="coach" trace event. If it raises (timeout / connection / parse), the
+# Controller silently falls back to the mechanical coach below, so a coach failure never
+# stalls the search. It writes FREE TEXT (no guided decoding — that degraded on gpt-oss-120b).
+# class = "isj_agent.agents.search_coach.SearchCoachAgent"
+# llm = "default"                # [llm.*] profile for the coach (defaults to "default")
+# reasoning_effort = "medium"    # default; forwarded via extra_body
+# temperature = 0.0              # GREEDY default; deterministic coaching
+# max_tokens = 8000              # generation cap (default)
+# timeout_s = 120                # per-call timeout in seconds (default)
+# input_top_k = 25               # coach INPUT: top band by rank (any grade) it is shown
+# input_min_grade = 3            # plus any deeper doc graded >= this (the gold nuggets)
+# prompt = "isj/scouting/search-coach/prompt-v6.md"   # optional override of the bundled prompt
+
+# The mechanical coach's selection (also the always-works fallback whenever an LLM coach is
+# configured). Per query it forwards the TOP `top_results_to_show` of the ranking regardless
+# of grade (so the Searcher always sees what its query does at the top, including docs judged
+# on prior queries) PLUS any deeper doc graded >= `min_show_grade` (the gold nuggets). Shown
+# docs keep their TRUE ranks. These moved here from [loop] (still read from [loop] as a
+# DEPRECATED fallback).
+# [coach.mechanical]
 # top_results_to_show = 10
-# min_show_grade = 3            # below the top band, show only docs graded >= this
+# min_show_grade = 3
 
 # ---------------------------------------------------------------------------
 # [index]

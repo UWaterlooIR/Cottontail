@@ -136,9 +136,17 @@ The Controller composes the tool message it sends back from four parts:
 
 Swapping coaches is a config change. The **mechanical fallback** replaces item 4 with a
 plain deterministic listing of the top-N + high-grade passages (handle, grade, reason,
-verbatim excerpt) — no coaching prose. The Searcher prompt is written once and tolerant of
-both: "you receive a coaching report; if coaching is unavailable you receive a plain list
-of the top graded passages."
+verbatim excerpt) — no coaching prose.
+
+For this to work with either coach, **`searcher.md` is made format-agnostic** — like the
+other search prompts (`tiered_searcher.md`, `mt_tiered_searcher.md`, `lucindri_searcher.md`),
+which describe the returned feedback loosely rather than specifying it field-by-field.
+Today `searcher.md` documents the exact JSON result shape; that rigid spec is dropped in
+favor of prose ("after each query you receive a summary of what it found — the top results
+with their grades and the assessor's reasons, coverage stats, and, for Cottontail, atom
+counts — read it and adapt"). Decoupling the Searcher from the feedback *shape* is what lets
+the coach emit a markdown report, the mechanical coach emit a listing, and both work under
+one prompt — no per-coach prompt fork.
 
 ## Delivery, and why the Controller owns the seam
 
@@ -233,13 +241,25 @@ class SearchCoach(Protocol):
 Controller flow, per query, after the descent:
 
 ```
-ctx = build_context(descended, stats)
-try:    out = self.coach.coach(ctx)
-except Exception:   out = self.mechanical.coach(ctx)   # emit a coach_fallback event
+if stats.count == 0:                                   # query matched NOTHING -> over-constrained
+    out = CoachOutput(OVER_CONSTRAINED_FEEDBACK)       # deterministic broaden-it guidance; skip the LLM
+    emit("over_constrained")                           # (the query-blind coach whiffs on an empty set)
+else:
+    ctx = build_context(descended, stats)
+    try:    out = self.coach.coach(ctx)
+    except Exception:   out = self.mechanical.coach(ctx)   # emit a coach_fallback event
 content = compose(query_echo, stats, atom_counts_if_present, out.report)
 self._tool(msgs, tool_call_id, content)
 maybe_compact(msgs)                                    # shrink-in-place at 80% of context_limit
 ```
+
+**Empty-result guard.** A query that judges **0 results** is over-constrained, and the coach
+(query-blind, given an empty passage set) whiffs — it asks for the missing passages instead
+of advising. So on `stats.count == 0` the Controller **skips the coach** and feeds back a
+fixed, playbook-grounded *broaden-it* message (drop the rarest facet; relax exact phrases /
+required clauses; step back to the general question; substitute vocabulary) — cheaper (no LLM
+call) and strictly more useful. Fires only for count 0; any non-empty set still goes to the
+coach.
 
 ## Implementations
 
@@ -325,9 +345,11 @@ compaction (bounding the conversation), since capping a free-text report is not 
 
 1. **Extract `SearchCoach` protocol + `MechanicalSearchCoach`** — pull the Controller's
    feedback assembly (`_summarize` / `_select_feedback`) behind the protocol as the
-   deterministic text-listing fallback; migrate `[loop]` knobs → `[coach.mechanical]`.
-   (Behavior changes from a JSON dict to a text listing, so verify the Searcher still reads
-   it; not a pure no-op.)
+   deterministic text-listing fallback; migrate `[loop]` knobs → `[coach.mechanical]`. The
+   enabling change is making **`searcher.md` format-agnostic** (drop the rigid JSON spec, as
+   the other search prompts already are), so the Searcher is decoupled from the feedback
+   shape and any coach output works. Behavior changes from a JSON dict to a text listing, so
+   update `searcher.md` and the payload-shape tests; not a pure no-op.
 2. **Add `SearchCoachAgent`** — v6 prompt, query-blind/atom-blind context, free-text report,
    tolerant citation extraction, Controller fallback, `purpose="coach"` /
    `coach_fallback` traces, config wiring.

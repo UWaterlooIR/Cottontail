@@ -40,6 +40,26 @@ def build_client(llm_config: dict) -> openai.OpenAI:
     return openai.OpenAI(base_url=llm_config["base_url"], api_key=api_key)
 
 
+def resolve_context_limit(llm_config: dict, client: openai.OpenAI | None = None) -> int | None:
+    """The model's context limit for compaction (TASK-40.3), never hardcoded.
+
+    Config is primary: a `context_limit` on the [llm.*] profile wins. Otherwise best-effort
+    auto-discovery from vLLM's /v1/models (`max_model_len`); any failure -> None (compaction
+    stays disabled, which is safe). Returns None if neither is available."""
+    if "context_limit" in llm_config:
+        return int(llm_config["context_limit"])
+    if client is None:
+        return None
+    try:  # vLLM exposes max_model_len on each served model
+        for model in client.models.list().data:
+            limit = getattr(model, "max_model_len", None)
+            if limit:
+                return int(limit)
+    except Exception:
+        return None
+    return None
+
+
 def build_search_engine(cfg: dict, burrow_override: str | None = None) -> HttpSearchEngine:
     """Construct an HttpSearchEngine from a parsed [cottontail_http_json_server] entry.
 
@@ -151,3 +171,48 @@ def build_multishard_engine(cfg: dict):
     eng = MultiShardSearchEngine(engines)
     eng.healthz()  # fail fast if any shard server is down
     return eng
+
+
+def build_coach(config: dict, clients: dict | None = None, llm_configs: dict | None = None):
+    """Build the configured SearchCoach (TASK-40) as a (coach, mechanical_fallback) pair.
+
+    The MechanicalSearchCoach is ALWAYS built -- it is both the default coach and the
+    always-works fallback the Controller drops to if an LLM coach raises. `[coach.mechanical]`
+    carries top_results_to_show / min_show_grade (migrated out of `[loop]`, which is still
+    read as a DEPRECATED fallback). If `[coach].class` selects the LLM SearchCoachAgent, it
+    is built from `[coach].llm` (a [llm.*] profile; defaults to "default") plus the coach's
+    own knobs, and returned as the coach with the mechanical one as its fallback. See
+    docs/design/search-coach.md."""
+    from isj_agent.agents.search_coach import MechanicalSearchCoach, SearchCoachAgent
+
+    coach_cfg = config.get("coach", {})
+    mech_cfg = coach_cfg.get("mechanical", {})
+    loop = config.get("loop", {})  # deprecated fallback for the migrated knobs
+    top = mech_cfg.get("top_results_to_show", loop.get("top_results_to_show", 10))
+    min_g = mech_cfg.get("min_show_grade", loop.get("min_show_grade", 3))
+    mechanical = MechanicalSearchCoach(top_results_to_show=top, min_show_grade=min_g)
+
+    cls_path = coach_cfg.get("class")
+    if not cls_path or load_class(cls_path) is MechanicalSearchCoach:
+        return mechanical, mechanical
+
+    cls = load_class(cls_path)
+    if cls is SearchCoachAgent:
+        if clients is None or llm_configs is None:
+            raise SystemExit("[coach] SearchCoachAgent needs the LLM clients (internal wiring error)")
+        llm_name = coach_cfg.get("llm", "default")
+        if llm_name not in clients:
+            raise SystemExit(f"[coach] llm profile {llm_name!r} is not defined in [llm.*]")
+        kwargs = {
+            k: coach_cfg[k]
+            for k in ("prompt", "reasoning_effort", "temperature", "max_tokens",
+                      "timeout_s", "input_top_k", "input_min_grade")
+            if k in coach_cfg
+        }
+        agent = SearchCoachAgent(client=clients[llm_name], model=llm_configs[llm_name]["model"], **kwargs)
+        return agent, mechanical
+
+    raise SystemExit(
+        f"[coach] class {cls_path!r} is not supported (use "
+        "isj_agent.agents.search_coach.MechanicalSearchCoach or ...SearchCoachAgent)"
+    )

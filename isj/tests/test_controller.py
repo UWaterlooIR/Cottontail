@@ -44,7 +44,7 @@ class StubSearcher:
         # capture the most recent tool result the controller appended (this query's history)
         for m in reversed(messages):
             if m.get("role") == "tool":
-                self.tool_results.append(json.loads(m["content"]))
+                self.tool_results.append(m["content"])  # feedback string (or an {"error"} json on a bounce)
                 break
         q = self.queries[self.i] if self.i < len(self.queries) else "(^ more)"
         self.i += 1
@@ -74,7 +74,7 @@ class StubTieredSearcher:
     def propose(self, messages):
         for m in reversed(messages):
             if m.get("role") == "tool":
-                self.tool_results.append(json.loads(m["content"]))
+                self.tool_results.append(m["content"])  # feedback string (or an {"error"} json on a bounce)
                 break
         tiers = self.tier_lists[self.i] if self.i < len(self.tier_lists) else ("(^ more)",)
         self.i += 1
@@ -173,10 +173,10 @@ def test_prior_judged_counted_not_rejudged():
     assert sum("body-10 " in d for d in judger.judged_docs) == 1
     assert len(_ev(result, "revisit")) == 1    # 10 re-encountered in q2 -> counted
     # query 2 descended 2 docs (10 revisit grade 3, 30 new grade 2); both in the top band,
-    # so both are SHOWN in rank order -- the prior-judged 10 is visible at the top, not hidden.
-    q2_hist = ctl.searcher.tool_results[-1]
-    assert q2_hist["descended"] == {"count": 2, "relevant": 2, "shown": 2, "hidden": 0}
-    assert [r["grade"] for r in q2_hist["results"]] == [3, 2]
+    # so both are SHOWN -- the prior-judged 10 is visible at the top, not hidden.
+    q2_hist = ctl.searcher.tool_results[-1]   # the Searcher feedback STRING
+    assert "judged 2 results this query, 2 relevant" in q2_hist
+    assert "grade=3" in q2_hist and "grade=2" in q2_hist
 
 
 def test_intent_budget_stops_recording():
@@ -208,7 +208,7 @@ def test_engine_error_bounces_back_to_searcher():
     assert "error" in ctl.searcher.tool_results[0]  # query 1's history was the error
 
 
-def test_dry_query_yields_empty_history():
+def test_dry_query_yields_over_constrained_guidance():
     eng = FakeEngine([dry()], {})
     # max_queries=2 so the Searcher's 2nd propose captures the dry query's history payload.
     ctl = Controller(StubSearcher(["(^ nothing)"]), StubJudger(), eng,
@@ -216,9 +216,12 @@ def test_dry_query_yields_empty_history():
     result = ctl.run("intent", intent_budget=100)
     assert result.ranked_list.entries == []
     assert _ev(result, "search")[0]["returned"] == 0
-    dry_hist = ctl.searcher.tool_results[0]
-    assert dry_hist["results"] == []
-    assert dry_hist["descended"] == {"count": 0, "relevant": 0, "shown": 0, "hidden": 0}
+    dry_hist = ctl.searcher.tool_results[0]   # the Searcher feedback STRING
+    assert "judged 0 results this query, 0 relevant" in dry_hist
+    # a zero-result query now gets the deterministic over-constrained guidance, not a coach report
+    assert "over-constrained. Broaden it." in dry_hist
+    oc = _ev(result, "over_constrained")
+    assert oc and oc[0]["query"] == "(^ nothing)"
 
 
 def test_single_judge_failure_records_minus2_and_continues():
@@ -271,14 +274,13 @@ def test_result_payload_has_atom_counts_and_ordered_fields():
     resp, docs = build([(10, 2), (20, 1)])  # build() gives atom_counts=[{term:x,count:1}]
     ctl = _ctl(["(^ q1)"], [resp], docs, nonrelevant_streak=9, max_queries=2)
     ctl.run("intent", intent_budget=100)
-    payload = ctl.searcher.tool_results[-1]  # query 1's history, captured at query 2's propose
-    assert payload["atom_counts"] == [{"term": "x", "count": 1}]
-    # top-level order: diagnostics first, coverage aggregate, then the shown results
-    assert list(payload) == [
-        "query", "atom_counts", "total_matches", "descended", "results"
-    ]
-    # per-result order: rank, score, summary, reason, grade (summary BEFORE reason/grade)
-    assert list(payload["results"][0]) == ["rank", "score", "summary", "reason", "grade"]
+    payload = ctl.searcher.tool_results[-1]  # query 1's feedback STRING, captured at query 2's propose
+    # the Controller wraps the coach report with the query echo, coverage, and atom counts
+    assert "Your query: (^ q1)" in payload
+    assert "Coverage: judged 2 results this query" in payload
+    assert "Atom matches: x=1" in payload
+    # the shown docs appear (grade 2 and grade 1, with their assessor reasons)
+    assert "grade=2" in payload and "grade=1" in payload and "assessor:" in payload
 
 
 def test_judge_llm_call_keeps_verbatim_request():
@@ -309,12 +311,9 @@ def test_tiered_query_payload_leads_with_tiers_and_surfacing_query_joins():
     assert {e.id for e in result.ranked_list.entries} == {"10", "20"}
     # surfacing_query is the joined tier string, never a dict
     assert result.ranked_list.entries[0].surfacing_query == "(>> (# 8) (^ a b)) ; (^ a b)"
-    # the judged-results payload leads with "tiers" (the queryable's trace descriptor)
+    # the feedback echoes the query via queryable.query_string() -- the joined tier string
     payload = ctl.searcher.tool_results[-1]
-    assert list(payload) == [
-        "tiers", "atom_counts", "total_matches", "descended", "results"
-    ]
-    assert payload["tiers"] == tiers
+    assert "Your query: (>> (# 8) (^ a b)) ; (^ a b)" in payload
     # the controller executed via engine.tiered_search (the call carries a `tiers` key)
     assert "tiers" in ctl.engine.calls[0]
 
@@ -383,74 +382,94 @@ def test_no_observer_is_byte_for_byte_unchanged():
     assert [e.type for e in result.events][:2] == ["llm_call", "propose"]
 
 
-# --- TASK-36: rank-aware, context-bounded Searcher feedback --------------------
-
-def _payload_after(cp_grades, *, top, min_grade, streak=999, wave=8):
-    """Run one query over cp_grades and return the tool-result payload the Searcher sees."""
-    resp, docs = build(cp_grades)
-    ctl = Controller(StubSearcher(["(^ q1)"]), StubJudger(concurrency=wave),
-                     FakeEngine([resp], docs), nonrelevant_streak=streak, max_queries=2,
-                     top_results_to_show=top, min_show_grade=min_grade)
-    ctl.run("intent", intent_budget=100)
-    return ctl.searcher.tool_results[-1]
-
-
-def test_feedback_worked_example_top5_min3():
-    # Owner's worked example: grades by rank
-    #   0 0 1 0 2 0 3 1 2 0 0 1 2 0 1 2 3 0 0 3 0 0 1
-    # with top_results_to_show=5, min_show_grade=3 -> show grades 0 0 1 0 2 3 3 3
-    # at TRUE ranks 1,2,3,4,5,7,17,20 (skipped docs are NOT renumbered).
-    grades = [0,0,1,0,2,0,3,1,2,0,0,1,2,0,1,2,3,0,0,3,0,0,1]
-    cp_grades = [(1000 + i, g) for i, g in enumerate(grades)]   # distinct docnos
-    payload = _payload_after(cp_grades, top=5, min_grade=3, streak=999, wave=100)
-
-    assert [r["grade"] for r in payload["results"]] == [0, 0, 1, 0, 2, 3, 3, 3]
-    assert [r["rank"] for r in payload["results"]] == [1, 2, 3, 4, 5, 7, 17, 20]
-    # relevant = grade >= relevant_grade_threshold (default 1): 12 of the 23; 8 shown, 15 hidden
-    assert payload["descended"] == {"count": 23, "relevant": 12, "shown": 8, "hidden": 15}
-
-
-def test_feedback_default_top10_min3():
-    # With the shipped defaults (10 / 3), the top 10 show regardless of grade, then only
-    # grade-3 docs deeper. grades: ranks 1..12 = 0..(mix), a grade-3 at rank 12.
-    grades = [0,1,0,2,0,1,0,2,0,1,0,3]   # 12 docs; rank 12 is grade 3
-    cp_grades = [(2000 + i, g) for i, g in enumerate(grades)]
-    payload = _payload_after(cp_grades, top=10, min_grade=3, streak=999, wave=100)
-    # top 10 (ranks 1..10) + the grade-3 at rank 12; rank 11 (grade 0) hidden
-    assert [r["rank"] for r in payload["results"]] == [1,2,3,4,5,6,7,8,9,10,12]
-    assert payload["descended"]["hidden"] == 1
-
+# --- feedback (coach) behavior at the Controller level ------------------------
 
 def test_feedback_ranks_are_true_across_a_fetch_refill():
-    # Two fetches of 3; a nugget in the SECOND fetch must report its GLOBAL rank (>3),
-    # not its per-fetch Hit.rank (which resets to 1..3 each fetch).
+    # Two fetches of 3; a nugget in the SECOND fetch must be reported at its GLOBAL rank
+    # (>3), not its per-fetch Hit.rank (which resets to 1..3 each fetch). This is a
+    # Controller/_descend property; the mechanical coach then surfaces it at that rank.
     f1, d1 = build([(10, 0), (20, 0), (30, 0)])   # fetch 1: ranks 1,2,3 (all non-rel)
     f2, d2 = build([(40, 0), (50, 3), (60, 0)])   # fetch 2: the gold doc 50 is global rank 5
     ctl = Controller(StubSearcher(["(^ q1)"]), StubJudger(concurrency=3),
                      FakeEngine([f1, f2, dry()], {**d1, **d2}),
                      nonrelevant_streak=999, max_queries=2, top_results_to_show=2, min_show_grade=3)
     ctl.run("intent", intent_budget=100)
-    payload = ctl.searcher.tool_results[-1]
-    nugget = [r for r in payload["results"] if r["grade"] == 3]
-    assert len(nugget) == 1 and nugget[0]["rank"] == 5    # global rank, not per-fetch rank 2
+    feedback = ctl.searcher.tool_results[-1]   # the Searcher feedback STRING
+    # the grade-3 nugget is shown at its TRUE global rank 5 (not per-fetch rank 2)
+    assert "[rank 5] grade=3" in feedback
 
 
-def test_feedback_shows_prior_judged_doc_in_top_band():
-    # A doc judged on a PRIOR query that re-surfaces in THIS query's top band is SHOWN
-    # (with its stored grade), so the agent sees what its query does at the top.
-    b1, d1 = build([(10, 3), (20, 0)])            # q1 judges 10 (grade 3), 20
-    b2, d2 = build([(10, 3), (30, 1)])            # q2 re-surfaces 10 (prior) + new 30
-    ctl = Controller(StubSearcher(["(^ q1)", "(^ q2)"]), StubJudger(concurrency=8),
-                     FakeEngine([b1, dry(), b2], {**d1, **d2}),
-                     nonrelevant_streak=5, max_queries=3, top_results_to_show=10, min_show_grade=3)
-    ctl.run("intent", intent_budget=100)
-    q2 = ctl.searcher.tool_results[-1]
-    ids_shown = [(r["rank"], r["grade"]) for r in q2["results"]]
-    # rank 1 is the already-judged doc 10 (grade 3), rank 2 the new doc 30 (grade 1)
-    assert ids_shown == [(1, 3), (2, 1)]
+# --- LLM coach: trace event + fallback (TASK-40.2) ----------------------------
+
+from isj_agent.agents.search_coach import CoachOutput, MechanicalSearchCoach  # noqa: E402
 
 
-def test_feedback_defaults_are_10_and_3():
-    resp, docs = build([(1, 1)])
-    ctl = Controller(StubSearcher(["(^ q1)"]), StubJudger(), FakeEngine([resp], docs))
-    assert ctl.top_results_to_show == 10 and ctl.min_show_grade == 3
+class _StubLlmCoach:
+    """A stand-in LLM coach: is_llm=True so the Controller traces/marks it. Either returns a
+    canned CoachOutput or raises (to exercise the fallback)."""
+
+    is_llm = True
+
+    def __init__(self, output=None, raises=None):
+        self._output = output
+        self._raises = raises
+        self.calls = 0
+
+    def coach(self, ctx):
+        self.calls += 1
+        if self._raises is not None:
+            raise self._raises
+        return self._output
+
+
+# A 2nd scripted query that bounces (EngineError) so it does NOT re-invoke the coach, while
+# still triggering the 2nd propose that captures q1's feedback into StubSearcher.tool_results.
+
+def test_llm_coach_report_and_trace_event():
+    f1, d1 = build([(10, 3), (20, 0)])
+    coach = _StubLlmCoach(CoachOutput(report="## COACHING\npursue beavers", referenced=["10"],
+                                      usage={"total_tokens": 42}, reasoning="mulling"))
+    ctl = Controller(StubSearcher(["(^ q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([f1, dry(), EngineError("stop")], d1), coach=coach, max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    assert coach.calls == 1  # the bounced 2nd query does not reach the coach
+    # the coach report is wrapped into the Searcher feedback (captured on the 2nd propose)
+    assert "## COACHING" in ctl.searcher.tool_results[-1]
+    # a purpose="coach" llm_call trace event carries usage + referenced
+    coach_ev = [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"]
+    assert len(coach_ev) == 1
+    assert coach_ev[0]["referenced"] == ["10"] and coach_ev[0]["total_tokens"] == 42
+
+
+def test_llm_coach_failure_falls_back_to_mechanical():
+    f1, d1 = build([(10, 3), (20, 0)])
+    coach = _StubLlmCoach(raises=RuntimeError("coach timed out"))
+    ctl = Controller(StubSearcher(["(^ q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([f1, dry(), EngineError("stop")], d1), coach=coach,
+                     mechanical=MechanicalSearchCoach(top_results_to_show=2, min_show_grade=3),
+                     max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    # the failure is recorded and the mechanical feedback (a [rank N] listing) is delivered
+    fb = _ev(result, "coach_fallback")
+    assert len(fb) == 1 and fb[0]["error_type"] == "RuntimeError"
+    assert "[rank 1] grade=3" in ctl.searcher.tool_results[-1]
+    # no coach llm_call event on the fallback path
+    assert [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"] == []
+
+
+def test_zero_results_skips_coach_and_returns_over_constrained_guidance():
+    # A query that matches NOTHING (dry search) must skip the coach entirely and feed back
+    # the deterministic over-constrained guidance. q2 bounces so a 2nd propose captures q1's
+    # feedback into tool_results.
+    coach = _StubLlmCoach(CoachOutput(report="SHOULD NOT RUN"))
+    ctl = Controller(StubSearcher(["(^ over-constrained q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([dry(), EngineError("stop")], {}), coach=coach, max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    assert coach.calls == 0                                   # the coach never ran on the empty set
+    ev = _ev(result, "over_constrained")
+    assert len(ev) == 1 and ev[0]["query"] == "(^ over-constrained q1)"
+    feedback = ctl.searcher.tool_results[-1]
+    assert "over-constrained. Broaden it." in feedback and "Drop the rarest facet." in feedback
+    assert "Coverage: judged 0 results" in feedback          # the Controller header still wraps it
+    # no coach llm_call event was emitted for the empty query
+    assert [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"] == []

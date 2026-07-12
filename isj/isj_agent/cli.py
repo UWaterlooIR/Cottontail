@@ -22,8 +22,10 @@ from pathlib import Path
 
 from isj_agent.config import (
     build_client,
+    build_coach,
     build_engine,
     load_class,
+    resolve_context_limit,
 )
 from isj_agent.controller import Controller
 from isj_agent.orchestrator import Orchestrator
@@ -81,9 +83,16 @@ def main(argv: list[str] | None = None) -> None:
         **{k: judger_cfg[k] for k in ("concurrency", "reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in judger_cfg},
     )
     engine = build_engine(config, burrow_override=args.burrow)
+    coach, mechanical = build_coach(config, clients, llm_configs)
     loop_cfg = config.get("loop", {})
+    # Context-compaction limit is the SEARCHER's model context (that is the conversation being
+    # bounded): config context_limit on its [llm.*] profile, else vLLM discovery, else None.
+    searcher_llm = llm_configs[searcher_cfg["llm"]]
+    context_limit = resolve_context_limit(searcher_llm, clients[searcher_cfg["llm"]])
     controller = Controller(
         searcher, judger, engine,
+        coach=coach,
+        mechanical=mechanical,
         fetch_k=searcher_cfg.get("fetch_k", 200),
         window=searcher_cfg.get("window", 75),
         max_queries=searcher_cfg.get("max_queries", 100),
@@ -91,8 +100,9 @@ def main(argv: list[str] | None = None) -> None:
         relevant_grade_threshold=loop_cfg.get("relevant_grade_threshold", 1),
         max_doc_chars=loop_cfg.get("max_doc_chars", 50000),
         max_list_depth=loop_cfg.get("max_list_depth"),
-        top_results_to_show=loop_cfg.get("top_results_to_show", 10),
-        min_show_grade=loop_cfg.get("min_show_grade", 3),
+        context_limit=context_limit,
+        compact_trigger=loop_cfg.get("compact_trigger", 0.80),
+        shrink_truncate_tokens=loop_cfg.get("shrink_truncate_tokens", 800),
     )
 
     orchestrator = Orchestrator(

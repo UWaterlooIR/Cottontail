@@ -26,9 +26,34 @@ import json
 import time
 
 from isj_agent.agents.judger import Judger
+from isj_agent.agents.search_coach import (
+    CoachContext,
+    CoachOutput,
+    MechanicalSearchCoach,
+    SearchCoach,
+)
 from isj_agent.agents.searcher import Searcher
 from isj_agent.engine.base import EngineError, SearchEngine
 from collections.abc import Callable
+
+# Fixed feedback when a query matches NOTHING (stats.count == 0). The SearchCoach is
+# query-blind and, given an empty passage set, whiffs (it asks for the missing passages); a
+# zero-result query is over-constrained and the useful advice is about QUERY STRUCTURE, which
+# the Controller can give deterministically (and cheaply -- no LLM call). Mined from
+# docs/playbooks/search-tactics-playbook-by-claude.md (over-specifying; generalize/step-back).
+OVER_CONSTRAINED_FEEDBACK = (
+    "Your query matched 0 documents — it is over-constrained. Broaden it.\n"
+    "Requiring many facets (or exact phrases) together hides relevant material; "
+    "over-specifying is a classic recall killer. In order:\n"
+    "1. Drop the rarest facet.\n"
+    "2. Relax exact phrases to their component words (e.g. \"sport and society\" "
+    "→ sport, society) and turn a required clause into OR-alternatives.\n"
+    "3. Step back to the more general question, requiring only your 1–2 most "
+    "distinctive facets, then add constraints back only as needed.\n"
+    "4. If the topic's right but the words may be wrong, substitute synonyms / field "
+    "jargon / variant forms, or imagine an ideal answer passage and search using its "
+    "language."
+)
 
 from isj_agent.protocol.results import (
     LiveMarker,
@@ -75,8 +100,13 @@ class Controller:
         max_doc_chars: int = 50000,
         max_queries: int = 100,
         max_list_depth: int | None = None,
+        coach: SearchCoach | None = None,
+        mechanical: SearchCoach | None = None,
         top_results_to_show: int = 10,
         min_show_grade: int = 3,
+        context_limit: int | None = None,
+        compact_trigger: float = 0.80,
+        shrink_truncate_tokens: int = 800,
     ) -> None:
         self.searcher = searcher
         self.judger = judger
@@ -88,11 +118,30 @@ class Controller:
         self.max_doc_chars = max_doc_chars
         self.max_queries = max_queries
         self.max_list_depth = max_list_depth
-        # Searcher feedback shaping (keeps the Searcher's accumulating context bounded):
-        # always show the top `top_results_to_show` of a query's ranking, plus any deeper
-        # doc with grade >= `min_show_grade`.
-        self.top_results_to_show = top_results_to_show
-        self.min_show_grade = min_show_grade
+        # The SearchCoach turns a query's judged descent into the Searcher's feedback
+        # (TASK-40). Default: a MechanicalSearchCoach built from top_results_to_show /
+        # min_show_grade (kept here as convenience defaults for the auto-built coach); the
+        # CLI injects a configured coach. `mechanical` is the always-works fallback the
+        # Controller drops to if an LLM coach RAISES mid-run -- so the search never stalls on
+        # a coach failure. It defaults to the mechanical coach itself when none is injected.
+        self.coach: SearchCoach = coach or MechanicalSearchCoach(
+            top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
+        )
+        self.mechanical: SearchCoach = mechanical or (
+            self.coach
+            if not getattr(self.coach, "is_llm", False)
+            else MechanicalSearchCoach(
+                top_results_to_show=top_results_to_show, min_show_grade=min_show_grade
+            )
+        )
+        # Context compaction (TASK-40.3): bound the Searcher's cumulative context by shrinking
+        # old feedback IN PLACE. `context_limit` is the model's token limit (config/vLLM; None
+        # disables compaction). Trigger at `compact_trigger` of it on the server-reported
+        # prompt_tokens; a shrink pass drops the oldest un-shrunk tool messages' cited-passages
+        # sections (or hard-truncates to `shrink_truncate_tokens`). See docs/design.
+        self.context_limit = context_limit
+        self.compact_trigger = compact_trigger
+        self.shrink_truncate_tokens = shrink_truncate_tokens
 
     # wave width = the Judger's concurrency (ONE knob; do not add a second)
     @property
@@ -122,6 +171,7 @@ class Controller:
         judged: dict[str, Verdict] = {}      # GLOBAL: docno -> verdict judged in ANY prior query
         recorded: list[RankedEntry] = []     # one entry per NEW judgment this intent
         events: list[TraceEvent] = []
+        shrunk: set[int] = set()             # msgs indices of tool messages already compacted
         queries = 0
         last_usage: dict = {}
         run_error: str | None = None
@@ -187,7 +237,47 @@ class Controller:
                      message=str(jf), turn=queries, request=None, **last_usage)
                 run_error = str(jf)
                 break
-            self._tool(msgs, pr.tool_call_id, outcome)
+            if "error" in outcome:  # malformed-query bounce -> back to the Searcher as-is
+                self._tool(msgs, pr.tool_call_id, outcome)
+            else:  # build the Searcher feedback via the coach
+                descended = outcome["descended"]
+                stats = {"count": len(descended),
+                         "relevant": sum(1 for d in descended if self._relevant(d["grade"])),
+                         "total_matches": outcome["total_matches"]}
+                if stats["count"] == 0:
+                    # Nothing matched -> the query is over-constrained. Skip the (query-blind)
+                    # coach and feed back deterministic broaden-it guidance instead.
+                    emit("over_constrained", time.time(), 0.0,
+                         query=pr.queryable.query_string())
+                    content = self._compose_feedback(
+                        pr.queryable, outcome["atom_counts"], stats,
+                        CoachOutput(report=OVER_CONSTRAINED_FEEDBACK))
+                    self._tool(msgs, pr.tool_call_id, content)
+                    self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
+                    continue
+                # --- non-empty result set: coach it ---
+                ctx = CoachContext(intent=intent, stats=stats, results=descended)
+                coach_is_llm = getattr(self.coach, "is_llm", False)
+                if coach_is_llm:
+                    mark("await_coach")  # live: the coach's LLM call is starting
+                c0 = time.time()
+                try:
+                    out = self.coach.coach(ctx)
+                except Exception as exc:  # an LLM coach failed -> never stall; use the fallback
+                    emit("coach_fallback", time.time(), (time.time() - c0) * 1000.0,
+                         error_type=type(exc).__name__, message=str(exc))
+                    out = self.mechanical.coach(ctx)
+                else:
+                    if coach_is_llm:  # a real LLM call happened; the mechanical coach is silent
+                        emit("llm_call", c0, (time.time() - c0) * 1000.0, purpose="coach",
+                             referenced=out.referenced, content=out.reasoning, **(out.usage or {}))
+                content = self._compose_feedback(pr.queryable, outcome["atom_counts"], stats, out)
+                self._tool(msgs, pr.tool_call_id, content)
+
+            # Bound the cumulative context before the next propose (TASK-40.3). Trigger on the
+            # size the server saw for THIS turn's request (pr.usage.prompt_tokens); the shrink
+            # lands before the next turn reads msgs.
+            self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
 
         return SearcherResult(
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
@@ -294,9 +384,9 @@ class Controller:
                     emit("judge", time.time(), 0.0, id=h.id, grade=v.grade, reason=v.reason)
                     g = v.grade
                     is_new = True
-                # Capture the doc IN RANK ORDER (depth = its true cross-refill rank) for the
-                # Searcher feedback: the top band is shown regardless of grade, deeper docs
-                # only if grade >= min_show_grade (see _select_feedback).
+                # Capture the doc IN RANK ORDER (depth = its true cross-refill rank). This
+                # full descent is the coach's input (CoachContext.results); the coach/
+                # search_coach.select() decides what the Searcher ultimately sees.
                 descended.append({"rank": depth, "id": h.id, "score": h.score, "grade": g,
                                   "summary": h.summary, "reason": v.reason, "is_new": is_new})
                 if g < 0:      # TASK-27 sentinel: an ERROR is evidence of neither
@@ -312,50 +402,85 @@ class Controller:
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        return self._summarize(queryable, atom_counts, total_matches, descended)
+        # Return the raw descent + diagnostics; run() builds the Searcher feedback via the
+        # coach. (A malformed-query bounce still returns {"error": msg} above.)
+        return {"descended": descended, "atom_counts": atom_counts, "total_matches": total_matches}
 
-    def _select_feedback(self, descended: list[dict]) -> list[dict]:
-        """Pick which descended docs the Searcher sees. The TOP band -- the first
-        min(top_results_to_show, K) docs in rank order -- is shown regardless of grade
-        (so the agent always sees what its query does at the top, including docs already
-        judged in prior queries). BELOW that band, a doc is shown only if its grade is
-        >= min_show_grade (the gold nuggets, for vocabulary). Rank order is preserved and
-        each doc keeps its TRUE rank -- skipped docs are not renumbered."""
-        return [
-            d for pos, d in enumerate(descended)
-            if pos < self.top_results_to_show or d["grade"] >= self.min_show_grade
-        ]
-
-    def _summarize(self, queryable, atom_counts, total_matches, descended: list[dict]) -> dict:
-        # Field order is deliberate -- it is what the Searcher reads top-to-bottom:
-        # the queryable's own field(s) first (cover -> "query"; tiered -> "tiers"), then
-        # diagnostics (atom_counts up top so a count-0 dead atom is caught early), then the
-        # descent aggregate, then the shown results; per result rank/score then summary
-        # BEFORE reason BEFORE grade, so the agent reads the passage before the verdict.
-        k = len(descended)
-        relevant = sum(1 for d in descended if self._relevant(d["grade"]))
-        shown = self._select_feedback(descended)
-        out: dict = {**queryable.trace_arguments()}
-        if atom_counts is not None:      # OPTIONAL (Q3): omit for an engine that omits them
-            out["atom_counts"] = atom_counts
-        if total_matches is not None:
-            out["total_matches"] = total_matches
-        return {
-            **out,
-            # Coverage aggregate: the Searcher went K docs deep, `relevant` were relevant,
-            # and `shown` of the K appear below (the rest were non-nugget docs past the top band).
-            "descended": {"count": k, "relevant": relevant,
-                          "shown": len(shown), "hidden": k - len(shown)},
-            "results": [
-                {"rank": d["rank"], "score": d["score"], "summary": d["summary"],
-                 "reason": d["reason"], "grade": d["grade"]}
-                for d in shown
-            ],
-        }
+    def _compose_feedback(self, queryable, atom_counts, stats: dict, out) -> str:
+        """Assemble the Searcher's feedback string: the query echo + coverage stats +
+        (Cottontail only, iff the engine returned them) atom counts + the coach's report.
+        The coach is query-blind/atom-blind, so the Controller owns the first three parts."""
+        cov = (f"Coverage: judged {stats['count']} results this query, "
+               f"{stats['relevant']} relevant")
+        if stats["total_matches"] is not None:
+            cov += f"; {stats['total_matches']} total corpus matches"
+        lines = [f"Your query: {queryable.query_string()}", cov + "."]
+        if atom_counts is not None:  # engine-provided per-term corpus counts (Cottontail only)
+            lines.append("Atom matches: " + ", ".join(
+                f"{a['term']}={a['count']}" for a in atom_counts))
+        return "\n".join(lines) + "\n\n" + out.report
 
     @staticmethod
-    def _tool(msgs: list[dict], tool_call_id: str, payload: dict) -> None:
-        msgs.append({"role": "tool", "tool_call_id": tool_call_id, "content": json.dumps(payload)})
+    def _tool(msgs: list[dict], tool_call_id: str, payload) -> None:
+        # payload is the Searcher-feedback STRING (the coach path) or a dict (the bounce
+        # path); a dict is JSON-serialized, a string sent as-is.
+        content = payload if isinstance(payload, str) else json.dumps(payload)
+        msgs.append({"role": "tool", "tool_call_id": tool_call_id, "content": content})
+
+    _CITED_HEADER = "## Cited passages"
+
+    def _maybe_compact(self, msgs: list[dict], last_pt: int | None, shrunk: set[int], emit) -> None:
+        """Shrink old feedback IN PLACE when the conversation nears the context limit (TASK-40.3).
+
+        Rewrites tool-message CONTENT only -- never deletes a message (an assistant tool-call
+        must keep its paired tool reply, or the API 400s), never touches the most recent tool
+        message (the one the Searcher reformulates from), and never touches assistant/system/
+        user messages. Each pass shrinks the oldest half of the still-full tool messages
+        (K -> K/2 -> K/4 ...). A rarely-triggering safety net (see docs/design)."""
+        if self.context_limit is None or last_pt is None:
+            return
+        if last_pt < self.compact_trigger * self.context_limit:
+            return
+        tool_idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+        if len(tool_idx) <= 1:                       # nothing to shrink but the untouchable last
+            return
+        candidates = [i for i in tool_idx[:-1] if i not in shrunk]  # oldest-first, exclude last
+        if not candidates:
+            # Degenerate floor: everything but the last is already shrunk and we are STILL over
+            # trigger (cannot happen in a normal max_queries run). Hard-truncate the shrunk ones.
+            n = 0
+            for i in tool_idx[:-1]:
+                if self._hard_truncate(msgs[i]):
+                    n += 1
+            if n:
+                emit("compact", time.time(), 0.0, prompt_tokens=last_pt, shrunk=n,
+                     tool_messages=len(tool_idx), pass_="floor")
+            return
+        take = -(-len(candidates) // 2)              # ceil(len/2): the oldest half
+        for i in candidates[:take]:
+            self._shrink_message(msgs[i])
+            shrunk.add(i)
+        emit("compact", time.time(), 0.0, prompt_tokens=last_pt, shrunk=take,
+             tool_messages=len(tool_idx))
+
+    def _shrink_message(self, m: dict) -> None:
+        """Drop the '## Cited passages' section (keep the coaching prose + Vocabulary line);
+        if that header is absent (a mechanical listing, or drift), hard-truncate instead."""
+        c = m.get("content")
+        if isinstance(c, str) and self._CITED_HEADER in c:
+            m["content"] = c[: c.index(self._CITED_HEADER)].rstrip()
+        else:
+            self._hard_truncate(m)
+
+    def _hard_truncate(self, m: dict) -> bool:
+        """Hard-truncate a tool message to ~shrink_truncate_tokens (chars/4). Returns whether
+        it actually shortened the content (idempotent: a no-op once already short)."""
+        c = m.get("content")
+        keep = self.shrink_truncate_tokens * 4       # ~4 chars/token; sizing only
+        if isinstance(c, str) and len(c) > keep:
+            m["content"] = c[:keep].rstrip() + "\n...[older feedback truncated]"
+            return True
+        return False
 
     @staticmethod
     def _compile(intent: str, entries: list[RankedEntry]) -> RankedList:

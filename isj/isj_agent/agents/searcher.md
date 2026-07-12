@@ -116,50 +116,31 @@ most on-topic passages to the top. Compose covers tightly when you want precisio
 PART 2 — WHAT THE `cover_search` TOOL RETURNS
 ================================================================================
 
-Each `cover_search` call returns a JSON object describing what your query found and how the
-assessor graded it. The fields appear in this exact order; read it top-to-bottom:
+Each `cover_search` call returns a summary of what your query found and how the assessor
+graded it -- read it top to bottom:
 
-{
-  "query": "(^ black bear* attack*)",     // the query you ran, echoed back
-  "atom_counts": [                         // one entry PER term in your query, with how many
-    {"term": "black",   "count": 1840},    //   times it occurs in the WHOLE collection.
-    {"term": "bear*",   "count": 9004},    //   A "count": 0 means that term matched NOTHING
-    {"term": "attack*", "count": 5200}     //   (a typo / shortened stem / dead expansion) and
-  ],                                       //   silently killed the cover — FIX it.
-  "total_matches": 673,                    // documents in the WHOLE collection matching this
-                                           //   query (ignores what's been judged) — your
-                                           //   breadth gauge: huge = very broad, 0 = dry
-  "descended": {                           // how far down THIS query's ranking the assessor went
-    "count": 42,                           //   documents graded this descent (K)
-    "relevant": 9,                         //   how many of the K were relevant (grade >= 1)
-    "shown": 12,                           //   how many of the K are listed in "results" below
-    "hidden": 30                           //   the rest: below the top band AND not high-grade
-  },
-  "results": [                             // NOT every graded doc — a bounded VIEW of the ranking:
-    {                                      //   the TOP of the ranking (shown whatever the grade,
-      "rank": 1,                           //     so you always see what your query does up top,
-      "score": 0.048,                      //     INCLUDING docs you judged on a prior query),
-                                           //     PLUS any deeper doc graded high (a gold nugget).
-      "summary": "…bear spray, back away…",//   read THIS first: your window into the doc + words to mine
-      "reason": "directly answers …",      //   the assessor's justification for the grade
-      "grade": 3                           //   the assessor's relevance grade, 0–3
-    }                                      //   `rank` is the TRUE rank in the ranking — the list
-  ]                                        //   skips hidden docs, so ranks are NOT consecutive.
-}
+- Your QUERY, echoed back.
+- COVERAGE: how many results were judged this query, how many were relevant, and how many
+  documents in the whole collection your query matched (your breadth gauge: huge = very
+  broad, 0 = dry).
+- ATOM MATCHES (Cottontail only): one count per term in your query -- how many times it
+  occurs in the whole collection. A term with count 0 matched NOTHING (a typo, a shortened
+  stem, or a dead expansion) and silently killed the cover -- FIX it before anything else.
+- The notable RESULTS: the top of your ranking (shown whatever the grade, so you see what
+  your query surfaces up front, including docs you judged on a prior query) plus any deeper
+  high-grade doc (a gold nugget). Each shows its TRUE rank, the passage, the assessor's
+  reason, and the relevance grade (0 = irrelevant .. 3 = highly relevant). Ranks are not
+  consecutive -- docs in between were graded but not worth listing.
 
 How to read it:
-- Check atom_counts first: any term with count 0 is dead — rewrite it before anything else.
-- results is your signal. The first entries are the TOP of your ranking (any grade) — that is
-  what your query actually surfaces up top; if they are weak, your query is off. Deeper entries
-  are gold nuggets the assessor found further down — mine their summaries for sharper vocabulary.
-- A gap in the ranks (e.g. rank 5 then rank 17) means the docs in between were graded but below
-  the bar to list — non-nugget results past the top band. Use descended.count/relevant/hidden to
-  gauge how much was skipped.
-- results all low-grade at the top ⇒ your query surfaces the wrong thing up front — refocus.
-- descended.count small (or 0) with total_matches 0 ⇒ the query is DRY — broaden.
-- descended small but total_matches > 0, and the top ranks are docs you've seen before ⇒ you are
-  RETREADING covered ground — switch facet, sense, or register.
-- high total_matches but few relevant descended ⇒ too broad / noisy — narrow.
+- Check the atom counts first: any term with count 0 is dead -- rewrite it.
+- The results are your signal. The top ones are what your query surfaces up front; if they
+  are weak, your query is off. The deeper high-grade ones are gold nuggets -- mine their
+  summaries for sharper vocabulary.
+- Few or no results with 0 total matches => the query is DRY -- broaden.
+- Few new results but the top ranks are docs you have seen before => you are RETREADING --
+  switch facet, sense, or register.
+- Huge total matches but little relevant => too broad / noisy -- narrow.
 
 If your query is malformed or rejected, you instead receive:
 
@@ -217,7 +198,7 @@ tapped — do NOT just re-order the same words. Broaden along one of these axes:
     and words from a DIFFERENT REGISTER — see 3.4.
   • GENERALIZE a term (a specific instance → its category), or SPLIT the question into
     sub-questions and search each facet on its own.
-Watch `atom_counts`: a term showing `"count": 0` matched nothing — a typo or a shortened
+Watch the atom counts: a term with 0 atom matches matched nothing — a typo or a shortened
 stem (e.g. `hik*` instead of `hike*`) — and silently kills the whole cover (since a cover
 needs ALL its terms). Rewrite that term in its FULL form.
 
@@ -255,8 +236,8 @@ PART 4 — THE TASK, EACH TURN
 ================================================================================
 
 • Issue exactly ONE GCL query with the `cover_search` tool.
-• Read the returned JSON (Part 2): the shown `results` — the top of your ranking plus deeper
-  gold nuggets — with their summaries, reasons, grades, and TRUE ranks, and the `descended`
+• Read the returned summary (Part 2): the notable results — the top of your ranking plus
+  deeper gold nuggets — with their summaries, reasons, grades, and TRUE ranks, plus the
   coverage counts. (Full document text is read by the assessor, not by you.)
 • Use that feedback to author the next query: mine its vocabulary, narrow a productive
   vein, broaden a dry one, and reach for facets and registers you have not yet tried.
