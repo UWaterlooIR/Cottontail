@@ -241,13 +241,25 @@ class SearchCoach(Protocol):
 Controller flow, per query, after the descent:
 
 ```
-ctx = build_context(descended, stats)
-try:    out = self.coach.coach(ctx)
-except Exception:   out = self.mechanical.coach(ctx)   # emit a coach_fallback event
+if stats.count == 0:                                   # query matched NOTHING -> over-constrained
+    out = CoachOutput(OVER_CONSTRAINED_FEEDBACK)       # deterministic broaden-it guidance; skip the LLM
+    emit("over_constrained")                           # (the query-blind coach whiffs on an empty set)
+else:
+    ctx = build_context(descended, stats)
+    try:    out = self.coach.coach(ctx)
+    except Exception:   out = self.mechanical.coach(ctx)   # emit a coach_fallback event
 content = compose(query_echo, stats, atom_counts_if_present, out.report)
 self._tool(msgs, tool_call_id, content)
 maybe_compact(msgs)                                    # shrink-in-place at 80% of context_limit
 ```
+
+**Empty-result guard.** A query that judges **0 results** is over-constrained, and the coach
+(query-blind, given an empty passage set) whiffs — it asks for the missing passages instead
+of advising. So on `stats.count == 0` the Controller **skips the coach** and feeds back a
+fixed, playbook-grounded *broaden-it* message (drop the rarest facet; relax exact phrases /
+required clauses; step back to the general question; substitute vocabulary) — cheaper (no LLM
+call) and strictly more useful. Fires only for count 0; any non-empty set still goes to the
+coach.
 
 ## Implementations
 

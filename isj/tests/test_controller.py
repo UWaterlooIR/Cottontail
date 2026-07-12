@@ -208,7 +208,7 @@ def test_engine_error_bounces_back_to_searcher():
     assert "error" in ctl.searcher.tool_results[0]  # query 1's history was the error
 
 
-def test_dry_query_yields_empty_history():
+def test_dry_query_yields_over_constrained_guidance():
     eng = FakeEngine([dry()], {})
     # max_queries=2 so the Searcher's 2nd propose captures the dry query's history payload.
     ctl = Controller(StubSearcher(["(^ nothing)"]), StubJudger(), eng,
@@ -218,7 +218,10 @@ def test_dry_query_yields_empty_history():
     assert _ev(result, "search")[0]["returned"] == 0
     dry_hist = ctl.searcher.tool_results[0]   # the Searcher feedback STRING
     assert "judged 0 results this query, 0 relevant" in dry_hist
-    assert "(no results surfaced)" in dry_hist
+    # a zero-result query now gets the deterministic over-constrained guidance, not a coach report
+    assert "over-constrained. Broaden it." in dry_hist
+    oc = _ev(result, "over_constrained")
+    assert oc and oc[0]["query"] == "(^ nothing)"
 
 
 def test_single_judge_failure_records_minus2_and_continues():
@@ -451,4 +454,22 @@ def test_llm_coach_failure_falls_back_to_mechanical():
     assert len(fb) == 1 and fb[0]["error_type"] == "RuntimeError"
     assert "[rank 1] grade=3" in ctl.searcher.tool_results[-1]
     # no coach llm_call event on the fallback path
+    assert [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"] == []
+
+
+def test_zero_results_skips_coach_and_returns_over_constrained_guidance():
+    # A query that matches NOTHING (dry search) must skip the coach entirely and feed back
+    # the deterministic over-constrained guidance. q2 bounces so a 2nd propose captures q1's
+    # feedback into tool_results.
+    coach = _StubLlmCoach(CoachOutput(report="SHOULD NOT RUN"))
+    ctl = Controller(StubSearcher(["(^ over-constrained q1)", "(^ q2)"]), StubJudger(concurrency=2),
+                     FakeEngine([dry(), EngineError("stop")], {}), coach=coach, max_queries=2)
+    result = ctl.run("intent", intent_budget=100)
+    assert coach.calls == 0                                   # the coach never ran on the empty set
+    ev = _ev(result, "over_constrained")
+    assert len(ev) == 1 and ev[0]["query"] == "(^ over-constrained q1)"
+    feedback = ctl.searcher.tool_results[-1]
+    assert "over-constrained. Broaden it." in feedback and "Drop the rarest facet." in feedback
+    assert "Coverage: judged 0 results" in feedback          # the Controller header still wraps it
+    # no coach llm_call event was emitted for the empty query
     assert [e for e in _ev(result, "llm_call") if e.get("purpose") == "coach"] == []

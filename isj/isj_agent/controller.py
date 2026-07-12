@@ -26,10 +26,34 @@ import json
 import time
 
 from isj_agent.agents.judger import Judger
-from isj_agent.agents.search_coach import CoachContext, MechanicalSearchCoach, SearchCoach
+from isj_agent.agents.search_coach import (
+    CoachContext,
+    CoachOutput,
+    MechanicalSearchCoach,
+    SearchCoach,
+)
 from isj_agent.agents.searcher import Searcher
 from isj_agent.engine.base import EngineError, SearchEngine
 from collections.abc import Callable
+
+# Fixed feedback when a query matches NOTHING (stats.count == 0). The SearchCoach is
+# query-blind and, given an empty passage set, whiffs (it asks for the missing passages); a
+# zero-result query is over-constrained and the useful advice is about QUERY STRUCTURE, which
+# the Controller can give deterministically (and cheaply -- no LLM call). Mined from
+# docs/playbooks/search-tactics-playbook-by-claude.md (over-specifying; generalize/step-back).
+OVER_CONSTRAINED_FEEDBACK = (
+    "Your query matched 0 documents — it is over-constrained. Broaden it.\n"
+    "Requiring many facets (or exact phrases) together hides relevant material; "
+    "over-specifying is a classic recall killer. In order:\n"
+    "1. Drop the rarest facet.\n"
+    "2. Relax exact phrases to their component words (e.g. \"sport and society\" "
+    "→ sport, society) and turn a required clause into OR-alternatives.\n"
+    "3. Step back to the more general question, requiring only your 1–2 most "
+    "distinctive facets, then add constraints back only as needed.\n"
+    "4. If the topic's right but the words may be wrong, substitute synonyms / field "
+    "jargon / variant forms, or imagine an ideal answer passage and search using its "
+    "language."
+)
 
 from isj_agent.protocol.results import (
     LiveMarker,
@@ -220,6 +244,18 @@ class Controller:
                 stats = {"count": len(descended),
                          "relevant": sum(1 for d in descended if self._relevant(d["grade"])),
                          "total_matches": outcome["total_matches"]}
+                if stats["count"] == 0:
+                    # Nothing matched -> the query is over-constrained. Skip the (query-blind)
+                    # coach and feed back deterministic broaden-it guidance instead.
+                    emit("over_constrained", time.time(), 0.0,
+                         query=pr.queryable.query_string())
+                    content = self._compose_feedback(
+                        pr.queryable, outcome["atom_counts"], stats,
+                        CoachOutput(report=OVER_CONSTRAINED_FEEDBACK))
+                    self._tool(msgs, pr.tool_call_id, content)
+                    self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
+                    continue
+                # --- non-empty result set: coach it ---
                 ctx = CoachContext(intent=intent, stats=stats, results=descended)
                 coach_is_llm = getattr(self.coach, "is_llm", False)
                 if coach_is_llm:
