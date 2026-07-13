@@ -114,6 +114,23 @@ def _referenced_docnos(report: str, handles: dict) -> list[str]:
     return out
 
 
+def _novelty_line(ctx: CoachContext) -> str:
+    """A one-line summary of how much NEW ground the query covered vs re-surfacing already-judged
+    docs (revisits). Lets the coach detect a searcher stuck re-mining the same vein (the plateau
+    counterpart to a 0-result query) and coach a shift/loosen instead of a tighten."""
+    total = len(ctx.results)
+    if total == 0:
+        return "This query surfaced no results."
+    seen = sum(1 for d in ctx.results if not d.get("is_new", True))
+    new = total - seen
+    line = (f"This query judged {total} result(s): {new} newly surfaced and "
+            f"{seen} already judged on earlier queries (revisits).")
+    tm = ctx.stats.get("total_matches")
+    if tm is not None:
+        line += f" The collection holds {tm} document(s) matching this query."
+    return line
+
+
 class SearchCoachAgent:
     """The LLM coach (TASK-40): given the information need and the query's judged results,
     it writes a free-text coaching report (the v6 prompt: what's working / hurting / pursue
@@ -166,11 +183,18 @@ class SearchCoachAgent:
         sel = select(ctx.results, self.input_top_k, self.input_min_grade)
         handles = {f"R{i + 1}": d for i, d in enumerate(sel)}
         passages = "\n".join(
-            f"[{h}] grade={d['grade']}\n  reason: {d['reason']}\n  summary: {d['summary']}"
+            f"[{h}] grade={d['grade']}"
+            # mark a re-surfaced (already-judged) doc so the coach can see the rut, not just grades
+            + ("" if d.get("is_new", True) else "  (already judged on an earlier query)")
+            + f"\n  reason: {d['reason']}\n  summary: {d['summary']}"
             for h, d in handles.items()
         )
+        novelty = _novelty_line(ctx)
         # str.replace, NOT str.format -- reasons/summaries can contain literal braces.
-        content = self.prompt.replace("{intent}", ctx.intent).replace("{passages}", passages)
+        content = (self.prompt
+                   .replace("{intent}", ctx.intent)
+                   .replace("{novelty}", novelty)
+                   .replace("{passages}", passages))
         extra = {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
         bound = {}  # token cap + per-call timeout (TASK-37); omit when unset
         if self.max_tokens is not None:

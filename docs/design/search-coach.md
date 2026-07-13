@@ -63,6 +63,13 @@ queries.
   summary** (top-N-by-rank + high-grade nuggets), built by the shared
   `select(descended, top_k, min_grade)` helper — we feed the coach today's summary and ask
   it to write a better one.
+- a **novelty signal** so the coach can spot a searcher stuck re-mining the same vein:
+  each selected passage that was already judged on an earlier query is tagged
+  `(already judged on an earlier query)` (from its `is_new` flag), and a one-line
+  **RESULT NOVELTY** summary reports how many of the query's results were newly surfaced
+  vs revisits (plus `total_matches`). The prompt instructs the coach that when a large
+  share are revisits it should coach a **shift/loosen** (change facet or broaden), not a
+  tighten — the plateau counterpart to the Controller's 0-result over-constrained guard.
 
 **The coach is NOT given:**
 

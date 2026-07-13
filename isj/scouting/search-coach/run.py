@@ -37,9 +37,10 @@ HANDLE_RE = re.compile(r"\[(R\d+)\]")
 
 
 def slices_from_trace(trace_path):
-    """Yield (query, slice) per proposed query. `slice` = the top INPUT_TOP_K judged docs
-    by true rank (new OR revisit) + any deeper doc graded >= INPUT_MIN_GRADE. Each item:
-    {docno, rank, score, summary, grade, reason, revisit}."""
+    """Yield (query, slice, novelty) per proposed query. `slice` = the top INPUT_TOP_K judged
+    docs by true rank (new OR revisit) + any deeper doc graded >= INPUT_MIN_GRADE. Each item:
+    {docno, rank, score, summary, grade, reason, revisit}. `novelty` = this query's descent-wide
+    counts {new, seen, total_matches} -- what the production coach's RESULT NOVELTY line reports."""
     rows = [json.loads(l) for l in open(trace_path, encoding="utf-8") if l.strip()]
     judged = {}                       # docno -> (grade, reason) from every judge event (intent-global)
     for d in rows:
@@ -50,6 +51,8 @@ def slices_from_trace(trace_path):
     cur = None
     results = []                      # this query's search hits, in rank order (across refills)
     revisited = set()                 # docnos re-encountered (already judged) under the current query
+    new_count = 0                     # NEW judgments made under the current query
+    tmatches = None                   # total corpus matches reported for the current query
 
     def flush():
         if cur is None:
@@ -66,38 +69,72 @@ def slices_from_trace(trace_path):
                            "revisit": dn in revisited})
         top = ranked[:INPUT_TOP_K]
         deep = [x for x in ranked[INPUT_TOP_K:] if x["grade"] >= INPUT_MIN_GRADE]
-        out.append((cur, top + deep))
+        out.append((cur, top + deep,
+                    {"new": new_count, "seen": len(revisited), "total_matches": tmatches}))
 
     for d in rows:
         t = d["type"]
         if t == "propose":
-            flush(); cur = d["query"]; results = []; revisited = set()
+            flush(); cur = d["query"]; results = []; revisited = set(); new_count = 0; tmatches = None
         elif t == "search" and cur is not None:
             results.extend(d.get("results", []))
+            if d.get("total_matches") is not None:
+                tmatches = d["total_matches"]
+        elif t == "judge" and cur is not None:
+            new_count += 1
         elif t == "revisit" and cur is not None:
             revisited.add(d["docno"])
     flush()
     return out
 
 
-def run_one(client, prompt, schema, intent, sel, max_str):
+def novelty_line(nov):
+    """Reproduce the production coach's RESULT NOVELTY line (see search_coach._novelty_line)."""
+    total = nov["new"] + nov["seen"]
+    if total == 0:
+        return "This query surfaced no results."
+    line = (f"This query judged {total} result(s): {nov['new']} newly surfaced and "
+            f"{nov['seen']} already judged on earlier queries (revisits).")
+    if nov["total_matches"] is not None:
+        line += f" The collection holds {nov['total_matches']} document(s) matching this query."
+    return line
+
+
+def run_one(client, prompt, schema, intent, sel, nov, max_str, hide_revisit_text=False):
     handles = {f"R{i + 1}": e for i, e in enumerate(sel)}
-    # the coach is NOT told new-vs-revisit -- just judged passages with grades (per the design)
-    passages = "\n".join(
-        f"[{h}] grade={e['grade']}\n  reason: {e['reason'][:max_str]}\n  summary: {e['summary'][:max_str]}"
-        for h, e in handles.items())
+    # Novelty-aware ONLY if the prompt asks for it (has a {novelty} placeholder, i.e. v7+). This
+    # keeps a v6 run byte-identical to before -- fair v6-vs-v7 comparison -- while v7 gets the
+    # revisit markers + RESULT NOVELTY line exactly as production (search_coach.SearchCoachAgent).
+    novelty_aware = "{novelty}" in prompt
+
+    def render(h, e):
+        rev = novelty_aware and e["revisit"]
+        # v8 philosophy (--revisit-text hide): withhold the TEXT of an already-judged doc entirely,
+        # so the coach can't keep re-analyzing content it has already seen -- only the grade + a
+        # "resurfaced" marker, steering it harder toward NEW ground.
+        if rev and hide_revisit_text:
+            return f"[{h}] grade={e['grade']}  (resurfaced document: already judged on an earlier query)"
+        mark = "  (already judged on an earlier query)" if rev else ""
+        return (f"[{h}] grade={e['grade']}{mark}"
+                f"\n  reason: {e['reason'][:max_str]}\n  summary: {e['summary'][:max_str]}")
+
+    passages = "\n".join(render(h, e) for h, e in handles.items())
+    novelty_shown = novelty_line(nov) if novelty_aware else None
+    content = (prompt.replace("{intent}", intent).replace("{passages}", passages))
+    if novelty_aware:
+        content = content.replace("{novelty}", novelty_shown)
     kwargs = {}
     if schema is not None:            # guided decoding (v1/v2); v3+ free-text runs without it
         kwargs["response_format"] = {"type": "json_schema",
                                      "json_schema": {"name": "coach", "schema": schema}}
     resp = client.chat.completions.create(
         model="gpt.oss.120b",
-        messages=[{"role": "user", "content": prompt.format(intent=intent, passages=passages)}],
+        messages=[{"role": "user", "content": content}],
         temperature=0.0, max_tokens=8000, extra_body={"reasoning_effort": "medium"},
         **kwargs,
     )
     msg = resp.choices[0].message
-    return handles, passages, msg.content, getattr(msg, "reasoning_content", None), resp.usage
+    return handles, passages, novelty_shown, msg.content, getattr(msg, "reasoning_content", None), resp.usage
 
 
 def _parse(content):
@@ -133,12 +170,13 @@ def _pick_stats(lines, handles, sel, bad):
     return gp, gmax
 
 
-def transcript(intent, query, handles, passages, content, reasoning, usage, guided):
+def transcript(intent, query, handles, passages, novelty_shown, content, reasoning, usage, guided):
     gd = dict(sorted(collections.Counter(e["grade"] for e in handles.values()).items()))
     nrev = sum(1 for e in handles.values() if e["revisit"])
     lines = ["# search-coach scout transcript (trace-reconstructed)", "",
              f"passages fed: {len(handles)}   grade dist: {gd}   revisits: {nrev}",
              f"coach tokens: {usage.prompt_tokens}+{usage.completion_tokens}   mode: {'guided-json' if guided else 'free-text'}", "",
+             "## RESULT NOVELTY line shown to the coach", (novelty_shown or "(not shown -- prompt is not novelty-aware)"), "",
              "## information need", intent, "",
              "## query that produced these results (NOT shown to the coach)", query, "",
              "## input passages fed to the coach  (rev = already-judged revisit)",
@@ -176,6 +214,9 @@ def main():
                     help="guided-output JSON schema file; default derives from --prompt (prompt-vN.md -> "
                          "schema-vN.json). If the derived file does not exist, runs free-text (no guided decoding).")
     ap.add_argument("--queries", type=int, default=99)
+    ap.add_argument("--query", type=int, default=None, help="run ONLY this slice index (0-based)")
+    ap.add_argument("--revisit-text", choices=("show", "hide"), default="show",
+                    help="hide = withhold the reason/summary TEXT of already-judged revisits (v8 philosophy)")
     ap.add_argument("--max-str", type=int, default=600)
     a = ap.parse_args()
 
@@ -205,14 +246,17 @@ def main():
     print(f"prompt: {prompt_path.name}   schema: {schema_path.name if guided else '(none -- free-text report)'}"
           f"   ->  captured/{outdir.name}/")
     print(f"intent: {intent}\ntrace: {trace}\n")
-    for i, (q, sel) in enumerate(slices_from_trace(trace)):
-        if i >= a.queries:
+    for i, (q, sel, nov) in enumerate(slices_from_trace(trace)):
+        if a.query is not None and i != a.query:
+            continue
+        if a.query is None and i >= a.queries:
             break
         if not sel:
             print(f"q{i:02d}: (no judged results)   {q[:60]}"); continue
-        handles, passages, content, reasoning, usage = run_one(client, prompt, schema, intent, sel, a.max_str)
+        handles, passages, novelty_shown, content, reasoning, usage = run_one(
+            client, prompt, schema, intent, sel, nov, a.max_str, hide_revisit_text=(a.revisit_text == "hide"))
         out_md = outdir / f"{stem}-q{i:02d}.md"
-        out_md.write_text(transcript(intent, q, handles, passages, content, reasoning, usage, guided),
+        out_md.write_text(transcript(intent, q, handles, passages, novelty_shown, content, reasoning, usage, guided),
                           encoding="utf-8")
         nrev = sum(1 for e in sel if e["revisit"])
         gmax = max(e["grade"] for e in sel)
