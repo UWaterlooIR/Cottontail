@@ -18,7 +18,7 @@ def test_report_analyst_is_an_analyst_subclass():
 
 
 def test_report_analyst_bundles_the_report_prompt():
-    # distinctive phrase unique to prompt-report-v3.md (absent from the default analyst.md)
+    # distinctive phrase unique to the report prompt (prompt-report-v4.md; absent from analyst.md)
     assert "report will be built from" in ReportAnalyst.prompt
     assert ReportAnalyst.prompt != Analyst.prompt
 

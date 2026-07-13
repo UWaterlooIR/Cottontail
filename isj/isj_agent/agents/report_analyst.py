@@ -8,7 +8,7 @@ nothing downstream (Orchestrator, Controller, analysis artifact, run_output) cha
 via `[agents.analyst].class = "isj_agent.agents.report_analyst.ReportAnalyst"`.
 
 The only difference from `Analyst` is the bundled prompt (report_analyst.md, a shipped copy of
-scouting/analyst/prompt-report-v3.md); `analyze()` is inherited and reads `self.prompt`.
+scouting/analyst/prompt-report-v4.md); `analyze()` is inherited and reads `self.prompt`.
 """
 from importlib.resources import files
 
