@@ -180,7 +180,9 @@ uv run --directory isj python -m isj_agent.cli \
 `<id>.json` already exists is skipped unless `--overwrite`. Each artifact is
 `{topic_id, question, interpretations[], analyst{class,model,reasoning_effort,temperature}}`
 (the analyst provenance travels with it); the shape is **analyst-agnostic**, so swapping
-`[agents.analyst].class` for a different decomposer changes only the contents.
+`[agents.analyst].class` changes only the contents. Two analysts ship: the default `Analyst`
+(disambiguated interpretations) and `ReportAnalyst` (TASK-42), which decomposes the need into the
+information components a RAG report must synthesize.
 
 **Alternative backend — Lucindri (a Dirichlet-LM engine; TASK-33).** The engine is
 config-selected, so the same agent runs over UWaterloo's Lucindri instead of

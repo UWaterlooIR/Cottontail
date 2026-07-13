@@ -1,10 +1,11 @@
 ---
 id: TASK-42
 title: 'Add ReportAnalyst (report-component decomposition, v3 report prompt)'
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-13 17:46'
-updated_date: '2026-07-13 17:51'
+updated_date: '2026-07-13 19:01'
 labels:
   - analyst
   - isj
@@ -20,9 +21,9 @@ A new Analyst type that decomposes an information need into the information COMP
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 ReportAnalyst(Analyst) bundles report_analyst.md (= scouting prompt-report-v3.md) and is selectable via [agents.analyst].class. It fills interpretations[] with report components and validates as Intents.
-- [ ] #2 The Intents schema docstring is neutralized (e.g. 'each is a self-contained, search-ready statement of one distinct thing to find') so it fits both interpretations and components without the json_schema description fighting the report prompt.
-- [ ] #3 isj analyze with the ReportAnalyst config produces per-topic artifacts whose analyst.class/prompt record the ReportAnalyst provenance; tests cover the class + a sample decomposition shape; isj suite green.
+- [x] #1 ReportAnalyst(Analyst) bundles report_analyst.md (= scouting prompt-report-v3.md) and is selectable via [agents.analyst].class. It fills interpretations[] with report components and validates as Intents.
+- [x] #2 The Intents schema docstring is neutralized (e.g. 'each is a self-contained, search-ready statement of one distinct thing to find') so it fits both interpretations and components without the json_schema description fighting the report prompt.
+- [x] #3 isj analyze with the ReportAnalyst config produces per-topic artifacts whose analyst.class/prompt record the ReportAnalyst provenance; tests cover the class + a sample decomposition shape; isj suite green.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -94,3 +95,21 @@ GOTCHAS:
 - Keep the field name `interpretations` (renaming would ripple through Intents/Orchestrator/Controller/
   run_output). The report components simply populate that list.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/analyst-report-scout (isj/), depends on TASK-41:
+- isj_agent/agents/report_analyst.md: shipped COPY of scouting/analyst/prompt-report-v3.md (same relationship as search_coach.md <- scouting prompt). If v3 changes later, re-copy.
+- isj_agent/agents/report_analyst.py: ReportAnalyst(Analyst) overriding only the bundled `prompt` (analyze() inherited).
+- protocol/intents.py: neutralized the Intents docstring (the shared json_schema description sent to vLLM) so it fits both interpretations and report components.
+- tests/test_report_analyst.py (5): subclass, prompt bundling, load_class, analyze()->Intents, build_analyst->ReportAnalyst. Full isj suite green: 226 passed, 1 skipped.
+
+Docs updated:
+- config.example.toml: [agents.analyst] documents the two class choices.
+- isj/README.md, docs/design/reference-specs/running-the-search-stack.md, docs/design/agent-architecture.txt: the 'analyst-agnostic' passages now name ReportAnalyst as the concrete shipped variant (report-component decomposition) alongside the default Analyst.
+
+Notes:
+- AC#3 provenance: analyst_meta records analyst.class (+ model/reasoning/temperature), which fixes the prompt via class identity; the raw prompt text is intentionally NOT stored (same decision as TASK-41).
+- End-to-end `isj analyze` with the ReportAnalyst config and the docstring sanity-check (shipped Analyst dev-topic output unharmed) need a live vLLM endpoint; verified at the unit level, live run by hand.
+<!-- SECTION:NOTES:END -->

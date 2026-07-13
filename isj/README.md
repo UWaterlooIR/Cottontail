@@ -113,8 +113,11 @@ Feed one to a run via `--analysis-file <topic_id>.json` (instead of `--question`
 Orchestrator uses its interpretations directly — the Analyst is never built or called. `analyze`
 is resumable (skips a topic whose `<id>.json` exists unless `--overwrite`) and takes `--only <id>`
 (repeatable), `--limit N`, and `--config`. The artifact shape is **analyst-agnostic**: point
-`[agents.analyst].class` at a different decomposer and only the contents change. Helpers live in
-`isj_agent/analysis.py` (`write_report`/`load_report`); the run guide has the end-to-end flow.
+`[agents.analyst].class` at a different analyst and only the contents change. Two ship today —
+the default `Analyst` (disambiguated interpretations) and `ReportAnalyst`
+(`agents.report_analyst.ReportAnalyst`, TASK-42) which decomposes the need into the information
+**components** a RAG report must synthesize. Helpers live in `isj_agent/analysis.py`
+(`write_report`/`load_report`); the run guide has the end-to-end flow.
 
 It needs **both** a running vLLM (the `[llm.*]` endpoint) and the configured search
 engine (the `[engine]` section) — for the default Cottontail engine, a running

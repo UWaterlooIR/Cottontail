@@ -29,6 +29,9 @@ ANALYST AGENT
 - Each intent is explored independently and ultimately produces its own final
   ranked list.
 - Implementations are interchangeable as long as they return a list of intents.
+  Two ship today: the default Analyst (disambiguated interpretations) and the
+  ReportAnalyst, which decomposes the need into the information COMPONENTS a RAG
+  report must synthesize. Both fill the same interpretations[] list.
 - The intents are a REUSABLE ARTIFACT. `isj analyze` runs the Analyst once per
   topic and stores {question, interpretations} as JSON; a run can consume that
   artifact instead of re-running the Analyst, so ONE analysis drives many runs
