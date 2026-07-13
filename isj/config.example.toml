@@ -57,6 +57,14 @@ llm = "default"
 #                               # fair. Raise it only to deliberately diversify decompositions.
 # max_tokens = 8000             # generation cap (default)
 # timeout_s = 120               # per-call timeout in seconds (default)
+#
+# REUSABLE ANALYSIS (TASK-41). This same [agents.analyst] block also drives
+# `python -m isj_agent.analyze --topics <tsv> --out <dir>`, which runs the analyst once per
+# topic and writes a reusable artifact (<dir>/<topic_id>.json). Feed one to a run with
+# `isj run --analysis-file <topic_id>.json` (instead of --question) and the Analyst is skipped
+# entirely — so ONE analysis drives many searcher configs and analyst variation is factored out
+# of cross-searcher comparisons. To use a different analyst (e.g. a report-component decomposer),
+# just point `class` at it here; the artifact shape is analyst-agnostic.
 
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"

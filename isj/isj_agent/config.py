@@ -173,6 +173,31 @@ def build_multishard_engine(cfg: dict):
     return eng
 
 
+def build_analyst(config: dict, clients: dict, llm_configs: dict):
+    """Build the configured Analyst (TASK-41), mirroring the CLI's per-agent construction. The
+    class is `[agents.analyst].class` (Analyst, ReportAnalyst, ...); only the kwargs the analyst
+    accepts are forwarded. Used by `isj analyze` to produce the reusable analysis artifacts."""
+    cfg = config["agents"]["analyst"]
+    cls = load_class(cfg["class"])
+    kwargs = {
+        k: cfg[k]
+        for k in ("reasoning_effort", "temperature", "max_tokens", "timeout_s")
+        if k in cfg
+    }
+    return cls(client=clients[cfg["llm"]], model=llm_configs[cfg["llm"]]["model"], **kwargs)
+
+
+def analyst_meta(config: dict, llm_configs: dict) -> dict:
+    """Provenance for an analysis artifact: which analyst class / model / knobs produced it."""
+    a = config["agents"]["analyst"]
+    return {
+        "class": a["class"],
+        "model": llm_configs[a["llm"]]["model"],
+        "reasoning_effort": a.get("reasoning_effort", "medium"),
+        "temperature": a.get("temperature", 0.0),
+    }
+
+
 def build_coach(config: dict, clients: dict | None = None, llm_configs: dict | None = None):
     """Build the configured SearchCoach (TASK-40) as a (coach, mechanical_fallback) pair.
 

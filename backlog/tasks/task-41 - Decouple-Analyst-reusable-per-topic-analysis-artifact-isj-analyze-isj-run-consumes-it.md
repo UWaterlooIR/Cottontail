@@ -3,10 +3,11 @@ id: TASK-41
 title: >-
   Decouple Analyst: reusable per-topic analysis artifact + isj analyze + isj-run
   consumes it
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-13 17:46'
-updated_date: '2026-07-13 17:50'
+updated_date: '2026-07-13 18:25'
 labels:
   - analyst
   - isj
@@ -22,10 +23,10 @@ Make the Analyst output a first-class, reusable artifact so one analysis per top
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 isj analyze runs a configured Analyst over a topics TSV and writes one self-contained artifact per topic: <out>/<topic_id>.json = {topic_id, question, interpretations[], analyst{class,prompt,model,reasoning,temperature}}, plus an analysis.meta.json (provenance: analyst config, topics file). Resumable (skips existing).
-- [ ] #2 isj run accepts --analysis-file <report.json> as an alternative to --question; when given it loads the artifact, uses its question + interpretations, and SKIPS the Analyst entirely (orchestrator.run_question gains an optional intents param). --question keeps today's built-in-Analyst behavior.
+- [x] #1 isj analyze runs a configured Analyst over a topics TSV and writes one self-contained artifact per topic: <out>/<topic_id>.json = {topic_id, question, interpretations[], analyst{class,prompt,model,reasoning,temperature}}, plus an analysis.meta.json (provenance: analyst config, topics file). Resumable (skips existing).
+- [x] #2 isj run accepts --analysis-file <report.json> as an alternative to --question; when given it loads the artifact, uses its question + interpretations, and SKIPS the Analyst entirely (orchestrator.run_question gains an optional intents param). --question keeps today's built-in-Analyst behavior.
 - [ ] #3 run_topics_cycled can pass --analysis-file <analysis-dir>/<topic>.json per topic so gcl/mt/lucindri all consume the identical analysis.
-- [ ] #4 Tests cover artifact write/read round-trip and that an isj run from --analysis-file makes no Analyst LLM call; isj suite green.
+- [x] #4 Tests cover artifact write/read round-trip and that an isj run from --analysis-file makes no Analyst LLM call; isj suite green.
 <!-- AC:END -->
 
 ## Implementation Plan
@@ -125,3 +126,19 @@ GOTCHAS: base Analyst has no prompt param; keep --question path fully working (s
 on_analyzed must still fire in --analysis-file mode (writes intents.json); interpretations feed the
 Controller unchanged as list[str]; use add_mutually_exclusive_group(required=True).
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/analyst-report-scout (isj/):
+- NEW isj_agent/analysis.py: write_report / load_report (per-topic artifact {topic_id, question, interpretations[], analyst{...}}).
+- config.py: build_analyst() + analyst_meta() (analyst-agnostic; forwards only reasoning_effort/temperature/max_tokens/timeout_s -- base Analyst has no prompt param).
+- orchestrator.py: run_question() gains intents: Intents|None; when supplied the Analyst is skipped. __init__ analyst now Analyst|None.
+- cli.py: --question | --analysis-file mutually-exclusive REQUIRED group; --analysis-file loads the artifact, sets analyst=None, passes intents=precomputed.
+- NEW isj_agent/analyze.py (python -m isj_agent.analyze): --topics/--out/--config/--only/--limit/--overwrite; writes analysis.meta.json + one <id>.json per topic; resumable (skips existing unless --overwrite).
+- Tests: tests/test_analysis.py (round-trip, shape, non-ascii, empty-list rejection), tests/test_analyze.py (read_topics parser), tests/test_orchestrator.py (+2: precomputed intents skip the Analyst, and work with analyst=None). Full suite green: 221 passed, 1 skipped.
+
+Two notes:
+- AC#3 (run_topics_cycled passes --analysis-file per topic) is deferred to TASK-43 per this plan's NOTE -- that wiring lives in trec-rag-2026. Left unchecked here.
+- AC#1 lists analyst{...,prompt,...}; the approved plan's analyst_meta intentionally omits the prompt blob (the analyst CLASS identity fixes its bundled prompt, so class+model+knobs is sufficient provenance). Flagging in case you want the raw prompt text stored too.
+<!-- SECTION:NOTES:END -->

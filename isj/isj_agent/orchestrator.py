@@ -25,9 +25,9 @@ class Orchestrator:
     """Runs Analyst -> per-intent Controller for one question."""
 
     def __init__(
-        self, analyst: Analyst, controller: Controller, *, max_judgments: int = 1000
+        self, analyst: Analyst | None, controller: Controller, *, max_judgments: int = 1000
     ) -> None:
-        self.analyst = analyst
+        self.analyst = analyst  # may be None when a precomputed `intents` is supplied to run_question
         self.controller = controller
         self.max_judgments = max_judgments
 
@@ -35,6 +35,7 @@ class Orchestrator:
         self,
         question: str,
         *,
+        intents: Intents | None = None,
         on_intent: Callable[[int, str, Outcome], None] | None = None,
         observer: Callable[[int, TraceEvent | LiveMarker], None] | None = None,
         on_analyzed: Callable[[Intents], None] | None = None,
@@ -46,6 +47,10 @@ class Orchestrator:
         per-intent failure (the run continues). If analysis itself fails (no
         interpretations), returns (None, [], <message>).
 
+        `intents`, if given, is a precomputed analysis (e.g. loaded from an analysis artifact,
+        TASK-41): the Analyst is skipped entirely and these interpretations drive the run, so one
+        analysis can feed many searcher configs. When None, the Analyst produces them.
+
         Callbacks (all optional, for live observability -- TASK-35):
         - `on_analyzed(intents)` fires once, right after analysis succeeds (before any
           intent runs), so a caller can open the run directory / write intents.json.
@@ -53,10 +58,11 @@ class Orchestrator:
           emits each trace event (or a live-only pre-call marker) -- a real-time stream.
         - `on_intent(i, interp, outcome)` fires after each interpretation completes.
         """
-        try:
-            intents = self.analyst.analyze(question)
-        except Exception as exc:  # run-level failure: analysis produced nothing
-            return None, [], f"analysis failed: {type(exc).__name__}: {exc}"
+        if intents is None:
+            try:
+                intents = self.analyst.analyze(question)
+            except Exception as exc:  # run-level failure: analysis produced nothing
+                return None, [], f"analysis failed: {type(exc).__name__}: {exc}"
 
         if on_analyzed is not None:
             on_analyzed(intents)
