@@ -3,10 +3,11 @@ id: TASK-43
 title: >-
   Bring the cycled batch runner in-house (isj run_topics) + drive arms from one
   analysis
-status: To Do
-assignee: []
+status: In Progress
+assignee:
+  - '@claude'
 created_date: '2026-07-13 18:10'
-updated_date: '2026-07-13 18:16'
+updated_date: '2026-07-13 20:07'
 labels:
   - analyst
   - isj
@@ -25,17 +26,13 @@ Port trec-rag-2026/scripts/run_topics_cycled.py into the Cottontail isj package 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A canonical in-house runner (python -m isj_agent.run_topics) runs one or more searcher arms (--run NAME=CONFIG, ordered) over a topics TSV, cycling the 8 shard servers UP-before / DOWN-after each topic (memory-safe), serial within a topic, resumable per (arm,topic), with per-arm run_manifest.tsv, a servers.log, and guaranteed teardown on exit/interrupt.
-- [ ] #2 It drives each arm via the isj CLI with --analysis-file <analysis-dir>/<topic>.json (TASK-41), so all arms consume the IDENTICAL analysis (no per-arm analyst variation). It either takes a prebuilt --analysis <dir> or, given an analyst config, runs the analyze step first (python -m isj_agent.analyze) to produce it.
+- [x] #1 A canonical in-house runner (python -m isj_agent.run_topics) runs one or more searcher arms (--run NAME=CONFIG, ordered) over a topics TSV, cycling the 8 shard servers UP-before / DOWN-after each topic (memory-safe), serial within a topic, resumable per (arm,topic), with per-arm run_manifest.tsv, a servers.log, and guaranteed teardown on exit/interrupt.
+- [x] #2 It drives each arm via the isj CLI with --analysis-file <analysis-dir>/<topic>.json (TASK-41), so all arms consume the IDENTICAL analysis (no per-arm analyst variation). It either takes a prebuilt --analysis <dir> or, given an analyst config, runs the analyze step first (python -m isj_agent.analyze) to produce it.
 - [ ] #3 trec-rag-2026's scripts/run_topics_cycled.py is retired in favor of the in-house tool (its README points at python -m isj_agent.run_topics) -- flagged as a trec-rag-2026 follow-up, not required to land in Cottontail.
-- [ ] #4 Options preserved: --only ID, --limit N, --overwrite, --dry-run, --shard-ports, --healthz-timeout, --teardown-timeout, --settle. --dry-run prints the per-topic UP->arms->DOWN plan. isj suite green (a smoke/dry-run test where feasible).
-- [ ] #5 Server lifecycle delegates to launch-full-shard-servers.sh; --cottontail (default: in-repo root, overridable for out-of-repo use) resolves the launch script + isj CLI, and --launch-script overrides just the script path. It waits for all shard /healthz green before running, and tears down + waits ports-free + --settle before the next topic.
-- [ ] #6 The runner brings the shard servers DOWN before exiting on SIGTERM (a signal handler triggers the teardown), in addition to normal completion and SIGINT/Ctrl-C, so no kill path leaks the ~8x66 GB of servers.
+- [x] #4 Options preserved: --only ID, --limit N, --overwrite, --dry-run, --shard-ports, --healthz-timeout, --teardown-timeout, --settle. --dry-run prints the per-topic UP->arms->DOWN plan. isj suite green (a smoke/dry-run test where feasible).
+- [x] #5 Server lifecycle delegates to launch-full-shard-servers.sh; --cottontail (default: in-repo root, overridable for out-of-repo use) resolves the launch script + isj CLI, and --launch-script overrides just the script path. It waits for all shard /healthz green before running, and tears down + waits ports-free + --settle before the next topic.
+- [x] #6 The runner brings the shard servers DOWN before exiting on SIGTERM (a signal handler triggers the teardown), in addition to normal completion and SIGINT/Ctrl-C, so no kill path leaks the ~8x66 GB of servers.
 <!-- AC:END -->
-
-
-
-
 
 ## Implementation Plan
 
@@ -86,3 +83,19 @@ GOTCHAS: keep --cottontail (default in-repo, overridable) so out-of-repo use sti
 --analysis-file not --question so all arms share the one analysis; teardown guaranteed on normal
 exit, SIGINT, AND SIGTERM; subprocess per run for process isolation; --dry-run must touch nothing.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/analyst-report-scout (isj/), depends on TASK-41/42:
+- isj_agent/run_topics.py (python -m isj_agent.run_topics): ported from trec-rag-2026/scripts/run_topics_cycled.py (read with one-time permission) with the TASK-43 changes:
+  * --cottontail now defaults to THIS in-repo checkout (Path(__file__).parents[2]); still overridable for out-of-repo use. Resolves both the launch script and the isj CLI.
+  * drives each arm via --analysis-file <analysis-dir>/<topic>.json (never --question), so all arms consume the IDENTICAL analysis. Source: --analysis <prebuilt-dir> OR --analyst-config <cfg> (runs `isj analyze` once up front).
+  * --no-cycle mode (servers already up) absorbs the simpler run_topics.py.
+  * SIGTERM teardown: signal handler raises SystemExit(143) that propagates through the teardown finally (guarded so a non-main-thread test caller doesn't break). Teardown now guaranteed on normal exit, SIGINT, AND SIGTERM.
+  * --dry-run now touches nothing (guarded the results mkdir; the trec-rag-2026 source created dirs on dry-run).
+- tests/test_run_topics.py (7): parse_ports, is_done, read_topics, and --dry-run plan (cycled + --no-cycle + analyst-config) asserting it prints the plan and creates no files. Full isj suite green: 233 passed, 1 skipped.
+- Docs: README layout + running-the-search-stack.md §4 gain a "Batch runs over many topics" subsection.
+
+AC#3 (retire trec-rag-2026's scripts/run_topics_cycled.py, point its README here) is a SEPARATE-REPO follow-up, not landing in Cottontail -> left unchecked. Live server cycling / bring-up needs the 8-shard infra -> verified by hand; unit tests cover parsing + the dry-run plan.
+<!-- SECTION:NOTES:END -->

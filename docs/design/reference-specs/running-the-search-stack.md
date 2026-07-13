@@ -184,6 +184,31 @@ uv run --directory isj python -m isj_agent.cli \
 (disambiguated interpretations) and `ReportAnalyst` (TASK-42), which decomposes the need into the
 information components a RAG report must synthesize.
 
+### Batch runs over many topics — `isj run_topics` (TASK-43)
+
+To run several searcher arms over a whole topics file — driven by ONE shared analysis so the
+Analyst's variation is out of the comparison — use the in-house batch runner. It runs each arm
+via the CLI's `--analysis-file` (never `--question`), and by default **cycles the shard servers
+per topic** (bring up → run every arm on that topic → tear down) because Cottontail's posting
+cache is unbounded and never evicts (`src/simple_idx.h`), so leaving all shards up across a long
+batch would OOM the box:
+
+```sh
+uv run --directory isj python -m isj_agent.run_topics \
+  --run UWatMDS-gcl=configs/config-gcl-cover.toml \
+  --run UWatMDS-mt=configs/config-multitext-tiered.toml \
+  --topics topics.dev.tsv \
+  --analyst-config configs/analyst.toml       # runs `isj analyze` up front; OR --analysis <prebuilt-dir>
+```
+
+Each `--run NAME=CONFIG` writes `results/<NAME>/<topic>/` (resumable per (arm, topic)) plus a
+`results/<NAME>/run_manifest.tsv`; server lifecycle logs to `results/servers.log`. The servers are
+torn down on normal exit, Ctrl-C (SIGINT), **and** `kill` (SIGTERM). Useful flags: `--no-cycle`
+(servers already up — skip cycling), `--dry-run` (print the per-topic UP→arms→DOWN plan, touch
+nothing), `--only ID` / `--limit N` / `--overwrite`, `--shard-ports 7000-7007`, and
+`--cottontail <root>` (defaults to this checkout; point it elsewhere to run from another
+Cottontail). `--healthz-timeout` / `--teardown-timeout` / `--settle` tune the cycle.
+
 **Alternative backend — Lucindri (a Dirichlet-LM engine; TASK-33).** The engine is
 config-selected, so the same agent runs over UWaterloo's Lucindri instead of
 Cottontail with no code change. Start a `LucindriServer` (`--index <lucindri index>
