@@ -35,8 +35,11 @@ def main(argv=None) -> None:
     ap.add_argument("--json", action="store_true", help="print the raw Intents JSON instead")
     args = ap.parse_args(argv)
 
-    prompt = args.prompt.read_text(encoding="utf-8") if args.prompt.is_absolute() \
-        else (HERE / args.prompt).read_text(encoding="utf-8")
+    # resolve --prompt: try as given (relative to CWD), then relative to this scout dir
+    pp = next((c for c in (args.prompt, HERE / args.prompt.name, HERE / args.prompt) if c.is_file()), None)
+    if pp is None:
+        raise SystemExit(f"prompt file not found: {args.prompt}")
+    prompt = pp.read_text(encoding="utf-8")
 
     client = openai.OpenAI(base_url=args.base_url, api_key="EMPTY")
     analyst = Analyst(client, args.model, reasoning_effort=args.reasoning, temperature=args.temperature)
