@@ -131,6 +131,31 @@ def test_outputs_plug_into_write_run(tmp_path):
     assert rl["entries"][0]["docno"] == "100"  # id is the docno; written under `docno`
 
 
+def test_precomputed_intents_skip_the_analyst():
+    # TASK-41: a supplied `intents` (e.g. loaded from an analysis artifact) drives the run and the
+    # Analyst is never consulted -- so an analyst that would explode is proof it wasn't called.
+    precomputed = Intents(question="Q?", interpretations=["alpha", "beta"])
+    controller = StubController({"alpha": _result("alpha"), "beta": _result("beta")})
+    orch = Orchestrator(analyst=StubAnalyst(raises=RuntimeError("analyst must not run")),
+                        controller=controller)
+
+    got_intents, outcomes, run_error = orch.run_question("ignored?", intents=precomputed)
+    assert got_intents is precomputed
+    assert run_error is None
+    assert controller.calls == ["alpha", "beta"]
+
+
+def test_precomputed_intents_work_with_no_analyst():
+    # The CLI passes analyst=None when --analysis-file is given; run_question must not touch it.
+    precomputed = Intents(question="Q?", interpretations=["only"])
+    controller = StubController({"only": _result("only")})
+    orch = Orchestrator(analyst=None, controller=controller)
+
+    got_intents, outcomes, run_error = orch.run_question("ignored?", intents=precomputed)
+    assert got_intents is precomputed
+    assert [o.ranked_list.intent for o in outcomes] == ["only"]
+
+
 def test_analysis_failure_plugs_into_write_run(tmp_path):
     orch = Orchestrator(
         analyst=StubAnalyst(raises=ValueError("nope")),

@@ -36,7 +36,7 @@ bazel-bin/apps/cottontail-jsonl-index --input <dir-of-jsonl> --burrow corpus.bur
 ```
 
 - `--input <dir>` recurses for `*.jsonl` / `*.jsonl.gz`; **one JSON row = one document**.
-- `--docid-field` / `--contents-field` (default `docid` / `contents`) name the row fields.
+- `--docno-field` / `--text-field` (default `docid` / `contents`) name the row fields.
 - `--stem porter` also builds a stemmed stream — required for `--stem` queries later.
 - `--tokenizer ascii|utf8` (default `utf8`, Unicode-aware).
 - `--overwrite`, `--limit <n>`, `--strict`, `--verbose` for build control.
@@ -55,7 +55,7 @@ bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --gcl '(^ carabiner
 
 # other actions
 bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --count --text "carabiner belay"
-bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --get shard_00016_68307
+bazel-bin/apps/cottontail-jsonl-query --burrow corpus.burrow --get 68307   # by cp (integer) from a prior result; reports its docno
 bazel-bin/apps/cottontail-jsonl-query --describe        # LLM tool schema as JSON (no burrow)
 ```
 
@@ -110,7 +110,9 @@ token) is not. Lines from concurrent workers are serialized so they don't
 interleave.
 
 **Endpoints:** `GET /healthz` (public), `GET /describe`, and `POST /tools/<name>`
-for `search_text` · `search_gcl` · `get_document` · `count_matches`.
+for `search_text` · `search_gcl` · `cover_search` · `tiered_query_search` ·
+`multitext_tiered_search` · `get_document` · `count_matches`. The isj agent drives
+`cover_search` (or the tiered/multitext variants) and `get_document`.
 
 ```sh
 curl http://127.0.0.1:8080/healthz
@@ -124,18 +126,20 @@ Full contract: [server-spec](cottontail-search-server-spec.md). Concurrency desi
 ## 4. Run the ISJ Searcher — `isj/`
 
 The maintained agent is the **ISJ Searcher** under [`isj/`](../../../isj/): an Analyst
-(three interchangeable Searcher classes — plain cover, JSON tiered, and the
-MultiText-DSL program searcher — selected in `config.toml`; see the README)
-splits the question into interpretations, then a per-intent Searcher drives the
-server's **`cover_search`** tool (search → read cover summaries → judge →
-reformulate) and the CLI writes a run-output directory. One-time setup — the `uv`
-project, `config.toml`, and serving the model with vLLM — is in
-**[`isj/README.md`](../../../isj/README.md)** (its single source).
+(four interchangeable Searcher classes — plain cover, JSON tiered, the MultiText-DSL
+program searcher, and the Lucindri/Indri searcher — selected in `config.toml`; see the
+README) splits the question into interpretations, then a per-intent Searcher drives the
+server's **`cover_search`** tool (search → read cover summaries → judge → reformulate),
+with a **SearchCoach** shaping the between-query feedback, and the CLI streams a run-output
+directory. One-time setup — the `uv` project, `config.toml`, and serving the model with
+vLLM — is in **[`isj/README.md`](../../../isj/README.md)** (its single source).
 
 Prerequisites: a **`--stem porter`** burrow (§1 — `cover_search`'s `word*` family
 marker needs the stemmed stream), the **server** running over it (§3), and a
 **vLLM** OpenAI-compatible endpoint. Point `isj/config.toml` at both (the `[engine]`
-section — class + `base_url` [+ `burrow`] — and the `[llm.*]` endpoint).
+section — class + `base_url` [+ `burrow`] — and the `[llm.*]` endpoint). The searcher
+class (`[agents.searcher]`, e.g. cover / tiered / MultiText / Lucindri) and the optional
+`[coach]` feedback agent (TASK-40) are config too; see [`isj/README.md`](../../../isj/README.md).
 
 ```sh
 # from the repo root, with the server (§3) and vLLM both up:
@@ -144,9 +148,66 @@ uv run --directory isj python -m isj_agent.cli \
   --out runs/bear --verbose
 ```
 
-Flags: `--question` (required), `--out <dir>` (required), `--overwrite` (reuse a
-non-empty dir), `--verbose` (live per-intent trace), `--burrow <path>` (override
-the served burrow whose `docno-cp.sqlite` maps `cp`→`docno`).
+Flags: exactly one of `--question "<q>"` (runs the built-in Analyst) or
+`--analysis-file <report.json>` (a precomputed analysis; see below) is **required**;
+`--out <dir>` (required), `--overwrite` (reuse a non-empty dir), `--verbose` (live
+per-intent trace), `--burrow <path>` (override the served burrow whose
+`docno-cp.sqlite` maps `cp`→`docno`).
+
+### Reusable analysis — `isj analyze` → `--analysis-file` (TASK-41)
+
+For research runs you usually want **one Analyst output per topic**, reused across every
+searcher config, so analyst variation is factored out of cross-searcher comparisons. Run the
+configured Analyst (`[agents.analyst]`) over a topics TSV once — it needs only the vLLM
+endpoint, no server — to produce a directory of per-topic artifacts:
+
+```sh
+# id<TAB>question per line; writes <dir>/<topic_id>.json + <dir>/analysis.meta.json
+uv run --directory isj python -m isj_agent.analyze \
+  --topics topics.dev.tsv --out analysis/dev
+```
+
+Then drive each run from a topic's artifact instead of `--question` (the Analyst is skipped
+entirely; the artifact carries the question + interpretations):
+
+```sh
+uv run --directory isj python -m isj_agent.cli \
+  --analysis-file analysis/dev/rag2026-0.json --out runs/rag2026-0 --verbose
+```
+
+`isj analyze` flags: `--topics`/`--out` (required), `--config` (default `isj/config.toml`),
+`--only <id>` (repeatable), `--limit N`, `--overwrite`. It is **resumable** — a topic whose
+`<id>.json` already exists is skipped unless `--overwrite`. Each artifact is
+`{topic_id, question, interpretations[], analyst{class,model,reasoning_effort,temperature}}`
+(the analyst provenance travels with it); the shape is **analyst-agnostic**, so swapping
+`[agents.analyst].class` changes only the contents. Two analysts ship: the default `Analyst`
+(disambiguated interpretations) and `ReportAnalyst` (TASK-42), which decomposes the need into the
+information components a RAG report must synthesize.
+
+### Batch runs over many topics — `isj run_topics` (TASK-43)
+
+To run several searcher arms over a whole topics file — driven by ONE shared analysis so the
+Analyst's variation is out of the comparison — use the in-house batch runner. It runs each arm
+via the CLI's `--analysis-file` (never `--question`), and by default **cycles the shard servers
+per topic** (bring up → run every arm on that topic → tear down) because Cottontail's posting
+cache is unbounded and never evicts (`src/simple_idx.h`), so leaving all shards up across a long
+batch would OOM the box:
+
+```sh
+uv run --directory isj python -m isj_agent.run_topics \
+  --run UWatMDS-gcl=configs/config-gcl-cover.toml \
+  --run UWatMDS-mt=configs/config-multitext-tiered.toml \
+  --topics topics.dev.tsv \
+  --analyst-config configs/analyst.toml       # runs `isj analyze` up front; OR --analysis <prebuilt-dir>
+```
+
+Each `--run NAME=CONFIG` writes `results/<NAME>/<topic>/` (resumable per (arm, topic)) plus a
+`results/<NAME>/run_manifest.tsv`; server lifecycle logs to `results/servers.log`. The servers are
+torn down on normal exit, Ctrl-C (SIGINT), **and** `kill` (SIGTERM). Useful flags: `--no-cycle`
+(servers already up — skip cycling), `--dry-run` (print the per-topic UP→arms→DOWN plan, touch
+nothing), `--only ID` / `--limit N` / `--overwrite`, `--shard-ports 7000-7007`, and
+`--cottontail <root>` (defaults to this checkout; point it elsewhere to run from another
+Cottontail). `--healthz-timeout` / `--teardown-timeout` / `--settle` tune the cycle.
 
 **Alternative backend — Lucindri (a Dirichlet-LM engine; TASK-33).** The engine is
 config-selected, so the same agent runs over UWaterloo's Lucindri instead of
@@ -194,13 +255,18 @@ Any shard error fails the whole search (no silent partial results); every shard'
 `/healthz` is checked on startup. Works with every Cottontail searcher (cover / tiered /
 multitext).
 
-**Run output** (`<out>/`):
+**Run output** (`<out>/`, written **incrementally** as the run proceeds — TASK-35):
 
-- `intents.json` — the question + the Analyst's ordered interpretations.
+- `activity.log` — human-readable stream of every event as it happens; `tail -f` it
+  to watch a run live (or pass `--verbose` to mirror it to stdout). A killed or hung
+  run still leaves a partial, inspectable log.
+- `intents.json` — the question + the ordered interpretations (from the Analyst, or
+  from the `--analysis-file` artifact).
 - `intent-NN.json` — interpretation NN's judged, graded ranked list (ids as
   **docno**).
 - `intent-NN.trace.jsonl` — interpretation NN's heavy event trace (one JSON object
-  per line: per-turn LLM calls with token usage, searches, judgements, …).
+  per line: per-turn LLM calls with token usage, searches, judgements, coach reports, …).
+  Render it human-readably with `isj/scripts/traceview.py` (TASK-39).
 - `errors.log` — present **only if something failed**; its **absence means the whole
   run succeeded**. The CLI exits non-zero iff it was written.
 

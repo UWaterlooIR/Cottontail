@@ -20,6 +20,7 @@ import sys
 import tomllib
 from pathlib import Path
 
+from isj_agent.analysis import load_report
 from isj_agent.config import (
     build_client,
     build_coach,
@@ -37,7 +38,13 @@ def main(argv: list[str] | None = None) -> None:
         prog="isj_agent.cli",
         description="Run the ISJ Searcher pipeline on one question -> a run-output directory.",
     )
-    parser.add_argument("--question", required=True, help="the question to investigate")
+    # question source: a raw --question (runs the built-in Analyst) OR a precomputed
+    # --analysis-file (uses its interpretations, skipping the Analyst so one analysis can
+    # drive many searcher configs -- TASK-41). Exactly one is required.
+    src = parser.add_mutually_exclusive_group(required=True)
+    src.add_argument("--question", help="the question to investigate (runs the built-in Analyst)")
+    src.add_argument("--analysis-file", type=Path,
+                     help="precomputed analysis artifact JSON; uses its interpretations, skips the Analyst")
     parser.add_argument("--out", required=True, type=Path, help="run-output directory")
     parser.add_argument("--overwrite", action="store_true", help="overwrite a non-empty --out")
     parser.add_argument("--verbose", action="store_true", help="render each intent's events live")
@@ -67,11 +74,18 @@ def main(argv: list[str] | None = None) -> None:
         cls = load_class(cfg["class"])
         return cls(client=clients[cfg["llm"]], model=llm_configs[cfg["llm"]]["model"], **extra)
 
-    analyst_cfg = agent_configs["analyst"]
-    analyst = _build_agent(
-        "analyst",
-        **{k: analyst_cfg[k] for k in ("reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in analyst_cfg},
-    )
+    if args.analysis_file is not None:  # precomputed analysis: skip the Analyst (TASK-41)
+        _topic_id, precomputed = load_report(args.analysis_file)
+        question = precomputed.question
+        analyst = None
+    else:
+        question = args.question
+        precomputed = None
+        analyst_cfg = agent_configs["analyst"]
+        analyst = _build_agent(
+            "analyst",
+            **{k: analyst_cfg[k] for k in ("reasoning_effort", "temperature", "max_tokens", "timeout_s") if k in analyst_cfg},
+        )
     searcher_cfg = agent_configs["searcher"]
     judger_cfg = agent_configs["judger"]
     searcher = _build_agent(
@@ -112,7 +126,8 @@ def main(argv: list[str] | None = None) -> None:
     # not --overwrite) so activity streams to <out>/activity.log as the run proceeds.
     writer = StreamingRunWriter(args.out, overwrite=args.overwrite, echo=args.verbose)
     intents, outcomes, run_error = orchestrator.run_question(
-        args.question,
+        question,
+        intents=precomputed,
         on_analyzed=writer.start,
         observer=writer.observe,
         on_intent=writer.finish_intent,

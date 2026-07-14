@@ -49,6 +49,10 @@ model = "gpt.oss.120b"
 # Defaults: analyst/judger max_tokens=8000 timeout_s=120; searcher max_tokens=16000 timeout_s=180.
 
 [agents.analyst]
+# class choices (build_analyst resolves whichever is set):
+#   isj_agent.agents.analyst.Analyst              (default) -> disambiguated interpretations
+#   isj_agent.agents.report_analyst.ReportAnalyst (TASK-42) -> RAG-report components (prompt-report-v5)
+# Both emit the same Intents{question, interpretations[]} contract, so downstream is unchanged.
 class = "isj_agent.agents.analyst.Analyst"
 llm = "default"
 # reasoning_effort = "medium"   # default; forwarded via extra_body
@@ -57,6 +61,14 @@ llm = "default"
 #                               # fair. Raise it only to deliberately diversify decompositions.
 # max_tokens = 8000             # generation cap (default)
 # timeout_s = 120               # per-call timeout in seconds (default)
+#
+# REUSABLE ANALYSIS (TASK-41). This same [agents.analyst] block also drives
+# `python -m isj_agent.analyze --topics <tsv> --out <dir>`, which runs the analyst once per
+# topic and writes a reusable artifact (<dir>/<topic_id>.json). Feed one to a run with
+# `isj run --analysis-file <topic_id>.json` (instead of --question) and the Analyst is skipped
+# entirely — so ONE analysis drives many searcher configs and analyst variation is factored out
+# of cross-searcher comparisons. To use a different analyst (e.g. a report-component decomposer),
+# just point `class` at it here; the artifact shape is analyst-agnostic.
 
 [agents.searcher]
 class = "isj_agent.agents.searcher.Searcher"

@@ -4,21 +4,22 @@ ISJ FRAMEWORK: COMPONENTS AND RESPONSIBILITIES
 
 DESIGN GOAL: PLUGGABLE AGENTS OVER A STABLE BACKBONE
 ----------------------------------------------------
-- The Analyst, Searcher, and Judger are AGENT ROLES. Each role is a fixed
-  INTERFACE (a contract of inputs and outputs). Any implementation that meets
-  the contract can be plugged in.
+- The Analyst, Searcher, Judger, and SearchCoach are AGENT ROLES. Each role is a
+  fixed INTERFACE (a contract of inputs and outputs). Any implementation that
+  meets the contract can be plugged in.
 - The role -> implementation binding is configuration: [agents.<role>] names a
   class and an LLM profile. Swapping an agent (e.g. a single-query Searcher for
   a tiered Searcher) is a config change, not a controller change.
 - The CONTROLLER and the QUERYABLE abstraction are the stable backbone the
   pluggable agents talk through. The Controller runs the loop and owns ALL
-  interaction with Cottontail; the agents never touch the search system
+  interaction with the search engine; the agents never touch the search system
   directly, and they do not produce the trace.
 
 The interfaces at a glance:
     Analyst : user statement                                -> [intents]
-    Searcher: (intent, judged history, search stats, tools) -> queryable
+    Searcher: (intent, coach feedback, search stats, tools) -> queryable
     Judger  : (intent, document summary, document text)     -> (reason, grade)
+    Coach   : (intent, this query's judged results, stats)  -> feedback report
 
 
 ANALYST AGENT
@@ -28,22 +29,36 @@ ANALYST AGENT
 - Each intent is explored independently and ultimately produces its own final
   ranked list.
 - Implementations are interchangeable as long as they return a list of intents.
+  Two ship today: the default Analyst (disambiguated interpretations) and the
+  ReportAnalyst, which decomposes the need into the information COMPONENTS a RAG
+  report must synthesize. Both fill the same interpretations[] list.
+- The intents are a REUSABLE ARTIFACT. `isj analyze` runs the Analyst once per
+  topic and stores {question, interpretations} as JSON; a run can consume that
+  artifact instead of re-running the Analyst, so ONE analysis drives many runs
+  and analyst variation is factored out of cross-searcher comparisons. The
+  Analyst is therefore optional at run time -- skipped when intents are supplied.
 
 
 SEARCHER AGENT
 --------------
-- Interface: (intent, judged history, search statistics, available search
-  tools) -> a queryable (a query request handed to the Controller as a tool
-  call).
-- Does NOT run the query itself and never touches Cottontail directly.
+- Interface: (intent, coach feedback on prior searches, search statistics,
+  available search tools) -> a queryable (a query request handed to the
+  Controller as a tool call).
+- Does NOT run the query itself and never touches the search engine directly.
 - May produce any of the system's valid query types; the type is not fixed in
   advance, but is always one of the approved tool usages (see QUERY TYPES).
-- First call: given only the intent plus the available search tools (e.g.
-  cover_search and/or tiered_query_search).
-- Subsequent calls: given the intent plus the judged results of its prior
-  searches (returned via the Controller) so it can reformulate intelligently.
+- First call: given only the intent plus the available search tool(s).
+- Subsequent calls: given the intent plus the Coach's feedback on its prior
+  searches (the query echo, the judged results, and stats, assembled by the
+  Controller from the Coach's report) so it can reformulate intelligently.
 - Searcher implementations differ only in strategy and in which query types
-  they emit; all satisfy the same interface, so they are interchangeable.
+  they emit; all satisfy the same interface, so they are interchangeable. Four
+  concrete searchers exist today, each emitting one query type:
+    - a cover searcher            (tool cover_search),
+    - a tiered searcher           (tool tiered_query_search),
+    - a MultiText-DSL searcher    (tool submit_tiered_query), and
+    - a Lucindri/Indri searcher   (tool submit_query), which runs over a
+      Lucindri engine rather than Cottontail.
 
 
 JUDGER AGENT
@@ -53,23 +68,45 @@ JUDGER AGENT
 - Uses relevance grades 0, 1, 2, 3 (per UMBRELA).
 - Judges one document at a time; it has no view of the loop, the budget, or the
   other documents. Implementations are interchangeable.
+- Resilience: a judge call is retried a few times; if it still fails, the
+  Controller records a -2 error sentinel for that document (not an abort) and
+  moves on. Only a wave in which EVERY judge call fails aborts the intent. The
+  Judger's own interface stays 0-3; the -2 is a controller-side sentinel.
+
+
+SEARCHCOACH AGENT
+-----------------
+- Interface: (intent, this query's judged results, coverage/search statistics)
+  -> a feedback report the Searcher reads before its next query.
+- Sits in the seam between judging one query and the Searcher's next
+  reformulation. It shapes what the Searcher is told; it does NOT search, judge,
+  or touch the loop's control.
+- Two implementations, selected by config:
+    - a MECHANICAL coach (no LLM): a deterministic digest -- the top results by
+      grade plus aggregate counts. This is the default and the always-works
+      fallback.
+    - an LLM coach: a free-text coaching report from its own LLM profile/prompt.
+- The Controller invokes the coach each round and drops to the mechanical
+  fallback if an LLM coach raises. A zero-result query skips the coach and
+  returns fixed "over-constrained, broaden it" guidance instead.
 
 
 CONTROLLER (THE STABLE BACKBONE)
 --------------------------------
-- Receives the Searcher's queryable and EXECUTES it against Cottontail (the
-  Searcher does not). Specifies the top-k (the Searcher does not).
+- Receives the Searcher's queryable and EXECUTES it against the search engine
+  (the Searcher does not). Specifies the top-k (the Searcher does not).
 - Fetches each candidate document's full text (by cp) and uses the Judger to
   grade the document + its summary against the intent. (The Judger never touches
-  Cottontail; the Controller supplies the document text.)
+  the search engine; the Controller supplies the document text.)
 - JUDGE-DEPTH / STOPPING POLICY: decides how far down a result list to judge and
   when a Searcher's loop terminates (e.g. a non-relevant streak, a query or
   judgement budget). The Searcher and Judger do not own stopping.
 - DEDUP: holds the judged set and excludes it from new searches, so the judged
   results handed back never repeat an already-judged document.
-- Hands back to the Searcher each round:
+- Hands back to the Searcher each round the feedback the SearchCoach produced,
+  which the Controller wraps with:
     - the original search intent,
-    - the history of queries issued and their judged results, and
+    - the query just issued and (from the coach's report) its judged results, and
     - search statistics (atom counts, etc.).
   Each judged result displays:
     - rank,
@@ -77,6 +114,11 @@ CONTROLLER (THE STABLE BACKBONE)
     - document summary,
     - reason for being relevant or not, and
     - relevance grade.
+  (The Controller owns this seam but delegates the report's CONTENT to the
+  coach; see SEARCHCOACH AGENT.)
+- CONTEXT MANAGEMENT: when the Searcher conversation nears its model's context
+  limit, the Controller compacts it -- shrinking older messages in place -- so a
+  long reformulation loop cannot overflow the context window.
 - FINAL LIST: compiles each intent's final ranked list from the accumulated
   judged results. (Whether and how multiple intents' lists are combined is TBD.)
 - TRACE: the Controller is the single point that observes every interaction
@@ -90,8 +132,9 @@ RANKED LIST OF RESULTS
 ----------------------
 - A ranked list is a JSON record containing the intent and a list of entries
   (the ranked documents).
-- Ordering: descending by relevance grade; ties broken by score (higher score
-  better); tied scores broken by descending docno string.
+- Ordering: descending by relevance grade, ties broken by score (higher score
+  better). (Grades are 0-3, plus the -2 error sentinel the Controller records
+  when the Judger fails on a document -- see JUDGER AGENT.)
 - Each entry has: rank, relevance grade, score, document summary, reason for the
   grade, the query that first surfaced the document, and the docno.
 - (The in-loop "judged results" the Controller returns to the Searcher are the
@@ -107,15 +150,28 @@ QUERY TYPES (QUERYABLES)
 - This abstraction is what lets a Searcher emit different query types and the
   Controller execute any of them without knowing the specific type in advance --
   the seam that makes the Searcher role pluggable across query strategies.
-- Two concrete types currently exist:
+- Four concrete types currently exist:
     - Cover search: a single GCL query.
     - Tiered query search: an ordered series of GCL query tiers (run as a
       cascade with de-duplication).
+    - MultiText program: a tiered query authored as a MultiText-DSL program
+      (macros + a @rank directive), compiled server-side; compile diagnostics
+      bounce back to the Searcher for self-correction.
+    - Lucindri query: a single Indri-style query, executed by a Lucindri engine
+      (not GCL, not Cottontail).
 
 
-COTTONTAIL HTTP JSON SERVER
+SEARCH ENGINE (THE BACKEND)
 ---------------------------
-- The search system that executes GCL queries. Only the Controller talks to it.
-- Runs a given query and returns the top-k results, each with a query-biased
-  summary.
-- Can also fetch a document's full text given its cp (location in collection).
+- The search system that executes queries and fetches documents. Only the
+  Controller talks to it, through a small typed contract (a SearchEngine
+  "protocol"): run a query -> top-k results, each with a query-biased summary;
+  and fetch a document's full text given its cp (location in collection).
+- The engine is PLUGGABLE and config-selected -- one contract, several backends:
+    - Cottontail HTTP JSON server: executes GCL queries (cover / tiered /
+      MultiText). The default backend.
+    - Lucindri engine: an HTTP service executing Indri-style queries; docno-
+      native. Pairs with the Lucindri searcher.
+    - Multi-shard Cottontail: parallel fan-out over N single-burrow Cottontail
+      servers, merged by score into the true global top-k.
+- A scripted fake engine backs the offline tests (no network, no server).
