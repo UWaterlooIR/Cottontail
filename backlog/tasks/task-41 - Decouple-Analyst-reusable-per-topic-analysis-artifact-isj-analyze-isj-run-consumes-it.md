@@ -3,11 +3,11 @@ id: TASK-41
 title: >-
   Decouple Analyst: reusable per-topic analysis artifact + isj analyze + isj-run
   consumes it
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-13 17:46'
-updated_date: '2026-07-13 18:25'
+updated_date: '2026-07-14 03:35'
 labels:
   - analyst
   - isj

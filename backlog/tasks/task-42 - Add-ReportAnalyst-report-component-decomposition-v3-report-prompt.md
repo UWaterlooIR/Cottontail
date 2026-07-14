@@ -1,11 +1,11 @@
 ---
 id: TASK-42
 title: 'Add ReportAnalyst (report-component decomposition, v3 report prompt)'
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-13 17:46'
-updated_date: '2026-07-13 19:01'
+updated_date: '2026-07-14 03:35'
 labels:
   - analyst
   - isj

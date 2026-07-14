@@ -3,11 +3,11 @@ id: TASK-43
 title: >-
   Bring the cycled batch runner in-house (isj run_topics) + drive arms from one
   analysis
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-13 18:10'
-updated_date: '2026-07-13 20:07'
+updated_date: '2026-07-14 03:35'
 labels:
   - analyst
   - isj
