@@ -3,11 +3,11 @@ id: TASK-36
 title: >-
   isj Controller: rank-aware, context-bounded Searcher feedback (top-N always +
   high-grade nuggets below)
-status: In Progress
+status: Done
 assignee:
   - '@claude'
 created_date: '2026-07-10 17:16'
-updated_date: '2026-07-10 17:29'
+updated_date: '2026-07-14 15:09'
 labels: []
 dependencies: []
 ordinal: 50000
@@ -51,5 +51,7 @@ Decisions: rank = global descent position (fixes the per-fetch Hit.rank the old 
 ## Implementation Notes
 
 <!-- SECTION:NOTES:BEGIN -->
-Implemented. controller.py: _descend now accumulates a rank-ordered 'descended' list (rank=global depth, so ranks are true across fetch-refills) capturing every processed doc -- new (verdict) and already-judged (stored judged[id] verdict) -- with rank/id/score/grade/summary/reason/is_new. New _select_feedback() shows positions < top_results_to_show regardless of grade, plus deeper docs with grade >= min_show_grade. _summarize() now emits {descended:{count,relevant,shown,hidden}, results:[{rank,score,summary,reason,grade}]}, replacing new_results/already_judged; queryable fields + atom_counts + total_matches unchanged. Controller gains top_results_to_show=10, min_show_grade=3; wired from [loop] in cli.py; documented in config.example.toml. Prompts updated: searcher.md (result-shape block + task-recap line), tiered_searcher.md (PART 3), mt_tiered_searcher.md (intro). Tests: 4 pre-existing payload-shape tests updated to descended/results; 5 new (worked example 0 0 1 0 2 0 3 1 2 0 0 1 2 0 1 2 3 0 0 3 0 0 1 / top=5 min=3 -> grades 0 0 1 0 2 3 3 3 at ranks 1,2,3,4,5,7,17,20; default 10/3; true rank across a fetch-refill; prior-judged doc shown in top band; defaults). Full suite 181 passed / 1 skipped. Live e2e on topic 14 (the multitext run that previously overflowed 131072 at 456 docs) in progress to confirm the Searcher context stays bounded.
+Implemented. controller.py: _descend now accumulates a rank-ordered 'descended' list (rank=global depth, so ranks are true across fetch-refills) capturing every processed doc -- new (verdict) and already-judged (stored judged[id] verdict) -- with rank/id/score/grade/summary/reason/is_new. New _select_feedback() shows positions < top_results_to_show regardless of grade, plus deeper docs with grade >= min_show_grade. _summarize() now emits {descended:{count,relevant,shown,hidden}, results:[{rank,score,summary,reason,grade}]}, replacing new_results/already_judged; queryable fields + atom_counts + total_matches unchanged. Controller gains top_results_to_show=10, min_show_grade=3; wired from [loop] in cli.py; documented in config.example.toml. Prompts updated: searcher.md, tiered_searcher.md, mt_tiered_searcher.md. Tests: 4 payload-shape tests updated + 5 new (worked example, defaults, true rank across a fetch-refill, prior-judged doc in the top band). Full suite green.
+
+CLOSED 2026-07-14: all 7 ACs were checked and the work shipped; the task was only left In Progress pending a live e2e to confirm the Searcher context no longer overflows. That is now confirmed empirically -- the 2026-07-14 mt/topic-14 run judged 1045 docs and completed cleanly with no 131072 overflow (the pre-fix run overflowed at 456 docs). The select() mechanism this task introduced is also what TASK-40's SearchCoach input-selection builds on.
 <!-- SECTION:NOTES:END -->
