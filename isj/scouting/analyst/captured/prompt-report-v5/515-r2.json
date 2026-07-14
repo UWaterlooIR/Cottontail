@@ -1,0 +1,10 @@
+{
+  "question": "I'm interested in learning why cancer rates are rising, particularly among young people, and whether factors like cell phone use are connected. I’d also like up-to-date information on cancer mortality rates, including annual breast cancer deaths in the UK and the current life expectancy for lung cancer.",
+  "interpretations": [
+    "Epidemiological evidence and proposed explanations for the increase in overall cancer incidence, with a focus on trends among adolescents and young adults.",
+    "Scientific studies evaluating the association between cell phone (radiofrequency electromagnetic) exposure and cancer risk, especially in younger populations.",
+    "The most recent global or regional statistics on total cancer mortality rates.",
+    "The latest annual number of deaths from breast cancer in the United Kingdom.",
+    "Current median or average survival time (life expectancy) for patients diagnosed with lung cancer."
+  ]
+}

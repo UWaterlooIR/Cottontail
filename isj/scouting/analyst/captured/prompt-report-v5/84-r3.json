@@ -1,0 +1,12 @@
+{
+  "question": "I'm looking for detailed information about vaccines, including their safety, the causes of public hesitancy—especially around COVID-19—and the different types of human vaccines and their recommended schedules. I'm also interested in how vaccination affects global health, historical public health challenges, and recommendations for animal vaccinations.",
+  "interpretations": [
+    "The safety profile of human vaccines, including common adverse events and overall risk assessment.",
+    "The factors contributing to public vaccine hesitancy, with a focus on COVID-19 vaccine hesitancy.",
+    "The various types of human vaccines (e.g., live attenuated, inactivated, subunit, mRNA, viral vector) and their mechanisms of action.",
+    "The recommended immunization schedules for major human vaccines, covering childhood, adolescent, adult, and COVID-19 vaccinations.",
+    "The impact of vaccination programs on global health outcomes, such as disease incidence reduction, mortality declines, and eradication efforts.",
+    "Historical public health challenges and successes related to vaccine-preventable diseases, including smallpox eradication, polio campaigns, and measles resurgence.",
+    "Guidelines and recommendations for animal vaccinations across pets, livestock, and wildlife, and their role in controlling zoonotic diseases."
+  ]
+}
