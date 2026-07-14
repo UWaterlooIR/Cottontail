@@ -38,10 +38,12 @@ class StubController:
         self.budgets = []
         self.observers = []
 
-    def run(self, interp, intent_budget, observer=None):
+    def run(self, interp, intent_budget, *, question=None, interpretations=None, observer=None):
         self.calls.append(interp)
         self.budgets.append(intent_budget)
         self.observers.append(observer)
+        self.contexts = getattr(self, "contexts", [])
+        self.contexts.append((question, interpretations))
         b = self.behavior[interp]
         if isinstance(b, Exception):
             raise b

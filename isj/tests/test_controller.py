@@ -122,6 +122,45 @@ def _ctl(queries, script, docs, *, judger=None, **kw):
 
 # --- tests -----------------------------------------------------------------
 
+def test_composed_need_reaches_all_agents_but_intent_stays_clean():
+    # TASK-44.1: the Controller composes the per-intent need (request + analysis + target) and feeds
+    # it to the searcher seed, the Judger, and the Coach -- while RankedList.intent stays the clean target.
+    from isj_agent.agents.search_coach import CoachOutput
+
+    resp, docs = build([(10, 2)])  # one relevant hit -> the coach path fires (count > 0)
+
+    seeds: list[str] = []
+    class CapSearcher(StubSearcher):
+        def propose(self, messages):
+            if not seeds:  # first turn: the user seed is the composed need
+                seeds.append(next(m["content"] for m in messages if m["role"] == "user"))
+            return super().propose(messages)
+
+    judged: list[str] = []
+    class CapJudger(StubJudger):
+        def judge(self, intent, docs):
+            judged.append(intent)
+            return super().judge(intent, docs)
+
+    coached: list[str] = []
+    class CapCoach:
+        is_llm = False
+        def coach(self, ctx):
+            coached.append(ctx.intent)
+            return CoachOutput(report="ok")
+
+    ctl = Controller(CapSearcher(["(^ q1)"]), CapJudger(concurrency=8),
+                     FakeEngine([resp], docs), coach=CapCoach(), max_queries=1)
+    result = ctl.run("GOALX", intent_budget=100,
+                     question="THE-REQUEST", interpretations=["ALPHA", "GOALX", "BETA"])
+
+    for captured in (seeds[0], judged[0], coached[0]):        # need reached all three agents
+        assert "THE-REQUEST" in captured                     # the request
+        assert "ALPHA" in captured and "BETA" in captured    # the full analysis
+        assert "SEARCH TARGET" in captured and "GOALX" in captured
+    assert result.ranked_list.intent == "GOALX"              # persisted intent stays the clean target
+
+
 def test_retain_all_keeps_the_whole_tripping_wave():
     # one wave of 5; streak (2 grade-0) trips at rank 3, but ranks 4-5 are also kept.
     resp, docs = build([(10, 3), (20, 0), (30, 0), (40, 2), (50, 0)])
@@ -134,19 +173,31 @@ def test_retain_all_keeps_the_whole_tripping_wave():
     assert len(_ev(result, "judge")) == 5     # every judged doc recorded
 
 
-def test_streak_default_is_grade_zero_only():
-    # threshold defaults to 1: a grade-1 doc RESETS the streak; only grade 0 extends it.
-    resp, docs = build([(10, 0), (20, 1), (30, 0), (40, 0)])
+def test_streak_default_counts_grade_below_2_as_nonrelevant():
+    # threshold defaults to 2 (TASK-44): only a grade >=2 (target-relevant) RESETS the streak.
+    resp, docs = build([(10, 0), (20, 2), (30, 0), (40, 0)])
     ctl = _ctl(["(^ q1)"], [resp], docs, nonrelevant_streak=2, max_queries=1)
     result = ctl.run("intent", intent_budget=100)
-    # the grade-1 at rank 2 keeps it going; streak only trips at ranks 3-4 (two 0s).
+    # the grade-2 at rank 2 resets; streak only trips at ranks 3-4 (two 0s). All 4 retained.
     assert {e.id for e in result.ranked_list.entries} == {"10", "20", "30", "40"}
     le = _ev(result, "list_exhausted")[0]
     assert le["depth"] == 4 and le["streak"] == 2
 
 
+def test_grade_one_counts_toward_streak_and_does_not_reset_it():
+    # TASK-44: grade 1 = relevant to the report but NOT the target -> non-relevant for the streak.
+    # concurrency=1 (one doc per wave) so the streak stops descent mid-list, not masked by retain-all.
+    resp, docs = build([(10, 0), (20, 1), (30, 3)])  # if grade-1 reset, we'd reach 30; it must not.
+    ctl = _ctl(["(^ q1)"], [resp], docs, judger=StubJudger(concurrency=1),
+               nonrelevant_streak=2, max_queries=1)
+    result = ctl.run("intent", intent_budget=100)
+    le = _ev(result, "list_exhausted")[0]
+    assert le["depth"] == 2 and le["streak"] == 2         # tripped after the grade-0 then grade-1
+    assert {e.id for e in result.ranked_list.entries} == {"10", "20"}  # never descended to the grade-3
+
+
 def test_continuation_fetch_uses_exclude_of_seen():
-    b1, d1 = build([(1, 1), (2, 1), (3, 1), (4, 1)])  # 4 relevant -> no streak, buffer drains
+    b1, d1 = build([(1, 2), (2, 2), (3, 2), (4, 2)])  # 4 target-relevant -> no streak, buffer drains
     b2, d2 = build([(5, 0), (6, 0)])                  # next batch trips the streak
     eng = FakeEngine([b1, b2], {**d1, **d2})
     ctl = Controller(StubSearcher(["(^ q1)"]), StubJudger(concurrency=2), eng,

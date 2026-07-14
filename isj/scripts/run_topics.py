@@ -1,6 +1,6 @@
 """Batch-run one or more ISJ searcher arms over a topics file, driven by ONE shared analysis.
 
-    python -m isj_agent.run_topics \
+    uv run --directory isj python scripts/run_topics.py \
         --run UWatMDS-gcl=configs/config-gcl-cover.toml \
         --run UWatMDS-mt=configs/config-multitext-tiered.toml \
         --topics topics.dev.tsv \
@@ -171,7 +171,7 @@ def run_arm(name: str, cfg: Path, out: Path, tid: str, analysis_file: Path,
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(prog="isj_agent.run_topics", description=__doc__,
+    ap = argparse.ArgumentParser(prog="run_topics.py", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", action="append", default=[], metavar="NAME=CONFIG", required=True,
                     help="a searcher arm: results/<NAME>/ output dir + ISJ config toml (repeatable, ordered)")

@@ -3,9 +3,14 @@
 Server bring-up/cycling needs live infra, so it is exercised by hand; here we pin the parsing/
 resume helpers and that --dry-run prints the per-topic plan while touching nothing on disk.
 """
+import importlib.util
 from pathlib import Path
 
-from isj_agent import run_topics
+# run_topics is an operational script under isj/scripts/, not a package module -- load it by path.
+_RT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_topics.py"
+_spec = importlib.util.spec_from_file_location("run_topics", _RT_PATH)
+run_topics = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(run_topics)
 
 
 def test_parse_ports_range():

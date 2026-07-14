@@ -73,7 +73,11 @@ class Orchestrator:
         for i, interp in enumerate(intents.interpretations):
             obs = (lambda ev, i=i: observer(i, ev)) if observer is not None else None
             try:
-                outcome: Outcome = self.controller.run(interp, intent_budget, observer=obs)
+                outcome: Outcome = self.controller.run(
+                    interp, intent_budget,
+                    question=intents.question, interpretations=intents.interpretations,
+                    observer=obs,
+                )
             except Exception as exc:  # one failed intent must not abort the rest
                 outcome = RunError(message=f"{type(exc).__name__}: {exc}")
             outcomes.append(outcome)

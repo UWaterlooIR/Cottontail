@@ -29,10 +29,11 @@ isj/
     orchestrator.py     Orchestrator: Analyst -> per-intent Controller
     run_output.py       StreamingRunWriter (live activity.log) + write_run
     cli.py              CLI entry point (one question/analysis -> a run-output dir)
-    run_topics.py       `python -m isj_agent.run_topics`: batch N searcher arms over a
-                        topics TSV, one shared analysis, per-topic server cycling (TASK-43)
     docno_map.py, fetch.py, index.py   cp<->docno map, doc fetch, index helpers
-  scripts/traceview.py  human-readable *.trace.jsonl viewer (TASK-39)
+  scripts/             operational scripts (run as files, not package modules):
+    traceview.py       human-readable *.trace.jsonl viewer (TASK-39)
+    run_topics.py      batch N searcher arms over a topics TSV, one shared analysis,
+                       per-topic server cycling (TASK-43)
   tests/                pytest suite
 ```
 

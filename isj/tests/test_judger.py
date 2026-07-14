@@ -4,8 +4,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from isj_agent.agents.judger import JudgeCall, Judger
+from isj_agent.agents.judger import _PROMPT, JudgeCall, Judger
 from isj_agent.protocol.search import Verdict
+
+
+def test_prompt_uses_the_report_target_rubric():
+    # TASK-44.3: the bundled judger.md carries the report-aware rubric + the composed-need slot.
+    assert "SEARCH TARGET" in _PROMPT
+    assert "Relevant to the REPORT but NOT the SEARCH TARGET" in _PROMPT
+    assert "{intent}" in _PROMPT and "{document}" in _PROMPT
 
 
 # --- a stub OpenAI client whose create() derives the grade from the document ----

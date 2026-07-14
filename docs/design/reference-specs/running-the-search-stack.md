@@ -184,17 +184,17 @@ uv run --directory isj python -m isj_agent.cli \
 (disambiguated interpretations) and `ReportAnalyst` (TASK-42), which decomposes the need into the
 information components a RAG report must synthesize.
 
-### Batch runs over many topics — `isj run_topics` (TASK-43)
+### Batch runs over many topics — `scripts/run_topics.py` (TASK-43)
 
 To run several searcher arms over a whole topics file — driven by ONE shared analysis so the
-Analyst's variation is out of the comparison — use the in-house batch runner. It runs each arm
-via the CLI's `--analysis-file` (never `--question`), and by default **cycles the shard servers
-per topic** (bring up → run every arm on that topic → tear down) because Cottontail's posting
-cache is unbounded and never evicts (`src/simple_idx.h`), so leaving all shards up across a long
-batch would OOM the box:
+Analyst's variation is out of the comparison — use the in-house batch runner (`isj/scripts/run_topics.py`).
+It runs each arm via the CLI's `--analysis-file` (never `--question`), and by default **cycles the
+shard servers per topic** (bring up → run every arm on that topic → tear down) because Cottontail's
+posting cache is unbounded and never evicts (`src/simple_idx.h`), so leaving all shards up across a
+long batch would OOM the box:
 
 ```sh
-uv run --directory isj python -m isj_agent.run_topics \
+uv run --directory isj python scripts/run_topics.py \
   --run UWatMDS-gcl=configs/config-gcl-cover.toml \
   --run UWatMDS-mt=configs/config-multitext-tiered.toml \
   --topics topics.dev.tsv \

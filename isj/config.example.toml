@@ -113,7 +113,10 @@ llm = "default"
 # ---------------------------------------------------------------------------
 [loop]
 # nonrelevant_streak = 5        # stop descending after this many non-relevant docs in a row
-# relevant_grade_threshold = 1  # non-relevant-for-the-streak = grade < this (default: grade 0)
+# relevant_grade_threshold = 2  # non-relevant-for-the-streak = grade < this. Default 2: under the
+#                               # report rubric (TASK-44) grade 1 = relevant to the report but NOT to
+#                               # the Search Target, so only target-relevant docs (>=2) keep a query
+#                               # descending; grade-0/1 both count as non-relevant for the streak.
 # max_judgments = 1000          # RUN-TOTAL judgment budget, split evenly across intents
 # max_doc_chars = 50000         # truncate each judged document to this many chars
 # max_list_depth =              # optional per-query descent safety cap (unset = off)
