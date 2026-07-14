@@ -127,7 +127,8 @@ def test_unknown_tool_name_yields_none_query():
 
 def test_searcher_has_prompt_without_judging():
     assert "GCL" in Searcher.prompt
-    assert "do not judge" in Searcher.prompt.lower() or "you do not judge" in Searcher.prompt.lower()
+    # the searcher authors queries; a separate assessor grades (the searcher does not judge)
+    assert "assessor" in Searcher.prompt.lower()
 
 
 # --- TASK-37: bounded generation (max_tokens + per-call timeout) ---------------

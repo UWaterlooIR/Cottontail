@@ -34,6 +34,7 @@ from isj_agent.agents.search_coach import (
 )
 from isj_agent.agents.searcher import Searcher
 from isj_agent.engine.base import EngineError, SearchEngine
+from isj_agent.need import compose_need
 from collections.abc import Callable
 
 # Fixed feedback when a query matches NOTHING (stats.count == 0). The SearchCoach is
@@ -96,7 +97,7 @@ class Controller:
         fetch_k: int = 200,
         window: int = 75,
         nonrelevant_streak: int = 5,
-        relevant_grade_threshold: int = 1,
+        relevant_grade_threshold: int = 2,
         max_doc_chars: int = 50000,
         max_queries: int = 100,
         max_list_depth: int | None = None,
@@ -155,6 +156,9 @@ class Controller:
         self,
         intent: str,
         intent_budget: int,
+        *,
+        question: str | None = None,
+        interpretations: list[str] | None = None,
         observer: Callable[[TraceEvent | LiveMarker], None] | None = None,
     ) -> SearcherResult:
         """Drive the search/judge loop for one intent.
@@ -164,9 +168,19 @@ class Controller:
         (TASK-35). The full `events` list is still returned in the SearcherResult for
         run-output writing; with no observer, behavior is byte-identical to before.
         """
+        # `intent` is the CLEAN target interpretation (kept for output / RankedList); `need` is the
+        # composed per-intent context the agents actually see (request + analysis + Search Target,
+        # TASK-44). The composed need fills the SAME string slot the bare intent used to, so the
+        # Judger/Coach signatures are unchanged. A bare call (no question/interpretations, e.g. a
+        # unit test) degrades to a single-target need.
+        need = compose_need(
+            question if question is not None else intent,
+            interpretations if interpretations is not None else [intent],
+            intent,
+        )
         msgs: list[dict] = [
             {"role": "system", "content": self.searcher.system_prompt},
-            {"role": "user", "content": f"Question: {intent}"},
+            {"role": "user", "content": need},
         ]
         judged: dict[str, Verdict] = {}      # GLOBAL: docno -> verdict judged in ANY prior query
         recorded: list[RankedEntry] = []     # one entry per NEW judgment this intent
@@ -231,7 +245,7 @@ class Controller:
 
             emit("propose", time.time(), 0.0, query=pr.queryable.query_string())
             try:
-                outcome = self._descend(intent, pr.queryable, judged, recorded, events, emit, mark, intent_budget)
+                outcome = self._descend(need, pr.queryable, judged, recorded, events, emit, mark, intent_budget)
             except _JudgeFailure as jf:
                 emit("error", time.time(), 0.0, error_type="JudgeFailure",
                      message=str(jf), turn=queries, request=None, **last_usage)
@@ -256,7 +270,7 @@ class Controller:
                     self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
                     continue
                 # --- non-empty result set: coach it ---
-                ctx = CoachContext(intent=intent, stats=stats, results=descended)
+                ctx = CoachContext(intent=need, stats=stats, results=descended)
                 coach_is_llm = getattr(self.coach, "is_llm", False)
                 if coach_is_llm:
                     mark("await_coach")  # live: the coach's LLM call is starting
@@ -283,7 +297,7 @@ class Controller:
             ranked_list=self._compile(intent, recorded), events=events, error=run_error
         )
 
-    def _descend(self, intent, queryable, judged, recorded, events, emit, mark, intent_budget) -> dict:
+    def _descend(self, need, queryable, judged, recorded, events, emit, mark, intent_budget) -> dict:
         """Descend ONE query's true ranked list in waves; return the Searcher's history payload.
 
         Returns {"error": msg} on a malformed query (-> Searcher reformulates), otherwise the
@@ -341,7 +355,7 @@ class Controller:
             if new:
                 mark("await_judge", count=len(new))  # live: a judge wave (reads + LLM) is starting
             docs = [(h.summary, (self.engine.read(h.id) or "")[: self.max_doc_chars]) for h in new]
-            calls_by_id = {h.id: c for h, c in zip(new, self.judger.judge(intent, docs))}  # PARALLEL
+            calls_by_id = {h.id: c for h, c in zip(new, self.judger.judge(need, docs))}  # PARALLEL
             # Systemic guard (TASK-27): every call in the wave failed after retries
             # -> an outage, not a hiccup; abort with the partial result as before.
             if new and all(c.error or c.verdict is None for c in calls_by_id.values()):
