@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-15 22:12'
-updated_date: '2026-07-15 22:14'
+updated_date: '2026-07-15 22:40'
 labels: []
 dependencies: []
 ordinal: 67000
@@ -20,13 +20,17 @@ Remove the three diagnostic fields total_matches, unjudged_matches, and atom_cou
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 C++: CoverResponse no longer declares total_matches/unjudged_matches/atom_counts; the AtomCount struct and cover_leaves are removed; jsonl_json.cc no longer serializes any of the three; the tiered union counting pass is deleted; cover_ranking/parallel_cover_ranking no longer compute or return total/unjudged; jsonl_cover_search and jsonl_tiered_query_search no longer build atom_counts
-- [ ] #2 C++: the query-REWRITING atom machinery (stem_atom, resolve_family_atom, phrase_atoms, cover_rewrite) is UNCHANGED and all ranked queries still evaluate correctly
-- [ ] #3 Python: SearchResponse drops the three fields and AtomCount is removed; every engine adapter (http, multishard incl. _merge_atom_counts, fake, lucindri) is updated; controller stops tracking/emitting them and _compose_feedback reduces to query + coverage(count/relevant) + coach report; run_output trace line updated; the tiered tool descriptions in protocol/queryable.py are scrubbed
-- [ ] #4 Prompts: searcher.md, mt_tiered_searcher.md, and tiered_searcher.md have all total_matches/atom-count guidance removed while the 'cover IS the atom of retrieval' language is kept; search_coach.md is unchanged; stale 'atom-blind' comments in search_coach.py are tidied
-- [ ] #5 Over-constrained auto-coaching still fires on results-returned==0 (unchanged); a functional check confirms a 0-result query still returns the broaden-it feedback
-- [ ] #6 Build green (bazel build //... minus the known Boost-excluded apps:walk targets) and tests green: C++ (test/jsonl.cc, test/jsonl_server.cc, test/jsonl_cli.cc) and the Python isj suite (test_multishard, test_controller, test_search_coach, test_lucindri_engine, test_http_engine, test_engine, test_run_output, test_queryable, test_tiered_searcher, test_mt_tiered_searcher) updated for the removed fields and passing
+- [ ] #1 C++: the query-REWRITING atom machinery (stem_atom, resolve_family_atom, phrase_atoms, cover_rewrite) is UNCHANGED and all ranked queries still evaluate correctly
+- [ ] #2 Python: SearchResponse drops the three fields and AtomCount is removed; every engine adapter (http, multishard incl. _merge_atom_counts, fake, lucindri) is updated; controller stops tracking/emitting them and _compose_feedback reduces to query + coverage(count/relevant) + coach report; run_output trace line updated; the tiered tool descriptions in protocol/queryable.py are scrubbed
+- [ ] #3 Prompts: searcher.md, mt_tiered_searcher.md, and tiered_searcher.md have all total_matches/atom-count guidance removed while the 'cover IS the atom of retrieval' language is kept; search_coach.md is unchanged; stale 'atom-blind' comments in search_coach.py are tidied
+- [ ] #4 Over-constrained auto-coaching still fires on results-returned==0 (unchanged); a functional check confirms a 0-result query still returns the broaden-it feedback
+- [ ] #5 Build green (bazel build //... minus the known Boost-excluded apps:walk targets) and tests green: C++ (test/jsonl.cc, test/jsonl_server.cc, test/jsonl_cli.cc) and the Python isj suite (test_multishard, test_controller, test_search_coach, test_lucindri_engine, test_http_engine, test_engine, test_run_output, test_queryable, test_tiered_searcher, test_mt_tiered_searcher) updated for the removed fields and passing
+- [ ] #6 C++: CoverResponse no longer declares total_matches/unjudged_matches/atom_counts; the AtomCount struct is removed and jsonl_json.cc no longer serializes any of the three; the tiered union counting pass is deleted; cover_ranking/parallel_cover_ranking no longer compute/return total/unjudged; the two atom_counts build loops are removed -- but cover_leaves and idx->count are RETAINED (unused until TASK-47 consumes them for the posting-budget guard)
 <!-- AC:END -->
+
+
+
+
 
 ## Implementation Plan
 
@@ -95,4 +99,7 @@ Fresh feature branch off **main** (`claude/excise-diagnostic-counts`). NOT the `
 
 ### Commit / PR
 Branch -> PR against the fork: `gh pr create --repo UWaterlooIR/Cottontail --base main --head claude/excise-diagnostic-counts`. Never commit to main.
+
+### CORRECTION -- retain cover_leaves + idx->count (for TASK-47)
+Supersedes the "Delete cover_leaves" step above. TASK-47 (the posting-memory budget guard) enumerates a query's leaves via `cover_leaves` and reads each leaf's size via `idx->count` / the PstRecord header. So in THIS task: remove the atom_counts RESPONSE field + serialization + feedback + the two atom_counts CALL SITES (jsonl_core.cc:981-995 and 1109-1128) -- but KEEP the `cover_leaves` function (533-590) and the `idx->count` machinery. They go unused between TASK-46 and TASK-47, then TASK-47 wires them into admission control.
 <!-- SECTION:PLAN:END -->
