@@ -1,7 +1,7 @@
 #ifndef COTTONTAIL_SRC_SIMPLE_IDX_H_
 #define COTTONTAIL_SRC_SIMPLE_IDX_H_
 
-#define COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION 0
+#define COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION 1
 
 #include <condition_variable>
 #include <fstream>
@@ -63,7 +63,8 @@ private:
   addr stamp_ = 0;
   std::map<addr, addr> ages_;
   addr large_threshold_ = 1024;
-  addr large_limit_ = 1024 * 1024 * 1024;
+  addr large_limit_ = 3000000000L; // ~3e9 annotations ~= 24 GB at 8 B each
+                                   // (TASK-45; was 1024*1024*1024 ~= 8.6 GB)
   addr large_total_ = 0;
 #endif
 };
