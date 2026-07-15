@@ -135,12 +135,7 @@ Each `cover_search` call returns a summary of what your query found and how the 
 graded it -- read it top to bottom:
 
 - Your QUERY, echoed back.
-- COVERAGE: how many results were judged this query, how many were relevant, and how many
-  documents in the whole collection your query matched (your breadth gauge: huge = very
-  broad, 0 = dry).
-- ATOM MATCHES (Cottontail only): one count per term in your query -- how many times it
-  occurs in the whole collection. A term with count 0 matched NOTHING (a typo, a shortened
-  stem, or a dead expansion) and silently killed the cover -- FIX it before anything else.
+- COVERAGE: how many results were judged this query and how many were relevant.
 - The notable RESULTS: the top of your ranking (shown whatever the grade, so you see what
   your query surfaces up front, including docs you judged on a prior query) plus any deeper
   high-grade doc (a gold nugget). Each shows its TRUE rank, the passage, the assessor's
@@ -149,14 +144,15 @@ graded it -- read it top to bottom:
   graded but not worth listing.
 
 How to read it:
-- Check the atom counts first: any term with count 0 is dead -- rewrite it.
 - The results are your signal. The top ones are what your query surfaces up front; if they
   are weak, your query is off. The deeper high-grade ones are gold nuggets -- mine their
-  summaries for sharper vocabulary.
-- Few or no results with 0 total matches => the query is DRY -- broaden.
+  summaries for sharper vocabulary. A term that matched nothing (a typo, a shortened stem,
+  or a dead expansion) silently kills the cover -- infer it from weak/empty results and
+  respell it.
+- Few or no results => the query is DRY -- broaden.
 - Few new results but the top ranks are docs you have seen before => you are RETREADING --
   switch facet, sense, or register.
-- Huge total matches but little relevant => too broad / noisy -- narrow.
+- Many results but little relevant => too broad / noisy -- narrow.
 
 If your query is malformed or rejected, you instead receive:
 
@@ -214,9 +210,9 @@ tapped — do NOT just re-order the same words. Broaden along one of these axes:
     and words from a DIFFERENT REGISTER — see 3.4.
   • GENERALIZE a term (a specific instance → its category), or SPLIT the question into
     sub-questions and search each facet on its own.
-Watch the atom counts: a term with 0 atom matches matched nothing — a typo or a shortened
-stem (e.g. `hik*` instead of `hike*`) — and silently kills the whole cover (since a cover
-needs ALL its terms). Rewrite that term in its FULL form.
+Watch for a DEAD term: one that matched nothing — a typo or a shortened stem (e.g. `hik*`
+instead of `hike*`) — silently kills the whole cover (since a cover needs ALL its terms).
+Weak or empty results with no obvious cause point to a dead term; rewrite it in its FULL form.
 
 --------------------------------------------------------------------------------
 3.4  Diversify your VOCABULARY and REGISTER (this is where recall is won or lost)

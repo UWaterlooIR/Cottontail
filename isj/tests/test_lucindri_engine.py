@@ -34,7 +34,6 @@ def test_search_posts_contract_and_drops_excluded():
     assert [h.id for h in resp.results] == ["d1", "d3"]  # d2 dropped client-side
     assert [h.rank for h in resp.results] == [1, 2]      # re-ranked over survivors
     assert resp.results[0].score == -4.0                 # negative LM score preserved
-    assert resp.total_matches is None and resp.atom_counts is None  # omitted, not faked
 
 
 def test_malformed_query_400_raises_engine_error():

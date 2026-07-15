@@ -150,7 +150,7 @@ def test_agent_input_selection_limits_passages_shown():
 # --- novelty signal: revisit markers + RESULT NOVELTY line (rut detection) -----
 
 def test_agent_marks_revisits_and_reports_novelty():
-    # R1 new, R2 revisit, R3 new; total_matches=500.
+    # R1 new, R2 revisit, R3 new.
     res = [
         {"rank": 1, "id": "a", "score": 9.0, "grade": 3, "summary": "s1", "reason": "r1", "is_new": True},
         {"rank": 2, "id": "b", "score": 8.0, "grade": 2, "summary": "s2", "reason": "r2", "is_new": False},
@@ -158,7 +158,7 @@ def test_agent_marks_revisits_and_reports_novelty():
     ]
     client = StubClient(lambda kw: _response("ok"))
     SearchCoachAgent(client, "m").coach(
-        CoachContext(intent="q", stats={"count": 3, "relevant": 2, "total_matches": 500}, results=res))
+        CoachContext(intent="q", stats={"count": 3, "relevant": 2}, results=res))
     p = client.calls[0]["messages"][0]["content"]
     # per-passage revisit marker: only the revisit (R2) is marked
     assert "[R2] grade=2  (already judged on an earlier query)" in p
@@ -166,14 +166,3 @@ def test_agent_marks_revisits_and_reports_novelty():
     assert "already judged" not in r1_block  # a new passage carries no marker
     # RESULT NOVELTY summary line
     assert "3 result(s): 2 newly surfaced and 1 already judged on earlier queries" in p
-    assert "collection holds 500 document(s)" in p
-
-
-def test_novelty_line_omits_total_matches_when_none():
-    res = [{"rank": 1, "id": "a", "score": 9.0, "grade": 2, "summary": "s", "reason": "r", "is_new": False}]
-    client = StubClient(lambda kw: _response("ok"))
-    SearchCoachAgent(client, "m").coach(
-        CoachContext(intent="q", stats={"count": 1, "relevant": 1, "total_matches": None}, results=res))
-    p = client.calls[0]["messages"][0]["content"]
-    assert "1 result(s): 0 newly surfaced and 1 already judged on earlier queries" in p
-    assert "collection holds" not in p

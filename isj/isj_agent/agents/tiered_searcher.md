@@ -100,10 +100,6 @@ PART 3 -- WHAT THE tiered_query_search TOOL RETURNS
 ================================================================================
 Each call returns a bounded VIEW of your cascade's graded ranking, plus diagnostics. Read it
 top to bottom:
-  - atom_counts: one entry per term, with its occurrences in the WHOLE collection. A
-    "count": 0 means that term matched NOTHING (a typo, a shortened stem, or a stray infix
-    "+") and silently killed its cover -- FIX it first.
-  - total_matches: how many DISTINCT documents your cascade matched across all tiers (0 = dry).
   - descended: how far the assessor went this cascade -- count (docs graded), relevant, shown
     (listed in results), hidden (graded but below the bar to list).
   - results: NOT every graded doc -- the TOP of the ranking (shown whatever the grade, so you
@@ -114,17 +110,18 @@ top to bottom:
     surfaced it, NOT a cover-density magnitude), so trust the rank ordering, not the raw number.
     `rank` is the TRUE rank -- the list skips hidden docs, so ranks are NOT consecutive.
 
-Empty results with total_matches 0 => dry: broaden. Top ranks dominated by docs you've already
-judged => you are retreading: change angle or vocabulary.
+Empty results => dry: broaden. Top ranks dominated by docs you've already judged => you are
+retreading: change angle or vocabulary.
 
 ================================================================================
 PART 4 -- THE TASK, EACH TURN
 ================================================================================
 - Submit exactly ONE tiered query (an ordered precise->broad list of GCL covers) with the
   tiered_query_search tool.
-- Read the returned graded documents, reasons, summaries, and counts.
-- Author the NEXT tiered query from that feedback: fix any dead atoms (count 0); mine the
-  vocabulary of the relevant summaries into your facets; ADD a tier for an angle you have not
+- Read the returned graded documents, reasons, and summaries.
+- Author the NEXT tiered query from that feedback: respell any dead term (one that matched
+  nothing, inferred from weak/empty results); mine the vocabulary of the relevant summaries
+  into your facets; ADD a tier for an angle you have not
   yet covered; tighten or drop tiers that returned noise. Keep the precise->broad ordering,
   and keep a transferable (entity-free) tier whenever the need is anchored to a named entity.
 - Keep going until you have systematically covered the need's relevant material.

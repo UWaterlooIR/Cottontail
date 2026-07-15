@@ -8,7 +8,7 @@ from isj_agent.config import load_class
 from isj_agent.controller import Controller
 from isj_agent.engine.fake import FakeEngine
 from isj_agent.protocol.queryable import TieredQuery
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
+from isj_agent.protocol.search import Hit, SearchResponse, Verdict
 
 
 # --- a stub OpenAI client returning one scripted assistant message ---------
@@ -135,8 +135,6 @@ def test_real_tiered_searcher_runs_end_to_end_through_controller():
     client = StubClient(SimpleNamespace(content="", tool_calls=[_tool_call(tiers)]))
     searcher = TieredSearcher(client, "stub-model")
     resp = SearchResponse(
-        total_matches=2, unjudged_matches=2,
-        atom_counts=[AtomCount(term="bear*", count=9)],
         results=[Hit(rank=1, score=3000000.0, id="10", summary="s10"),
                  Hit(rank=2, score=2000000.0, id="20", summary="s20")],
     )

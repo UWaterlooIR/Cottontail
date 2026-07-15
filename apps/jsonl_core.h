@@ -117,19 +117,11 @@ struct CoverHit {
   std::string summary; // cover-biased extractive summary (replaces best_passage)
 };
 
-// Per query-leaf occurrence count (A2 populates atom_counts). count = total
-// OCCURRENCES of the resolved feature in the corpus (collection frequency).
-struct AtomCount {
-  std::string term;  // the atom AS WRITTEN (e.g. bear*), never the porter: form
-  long count = 0;
-};
-
 // The cover_search response aggregate (mirrors B1's SearchResponse, TASK-5.5).
-// A1 fills only `results`; A2 fills total_matches / unjudged_matches / atom_counts.
+// Ranked results only: the total_matches / unjudged_matches / atom_counts
+// diagnostics were removed (TASK-46) for a uniform, engine-agnostic feedback
+// surface (Lucindri reports none of them).
 struct CoverResponse {
-  long total_matches = 0;              // A2: documents matching the query in :item
-  long unjudged_matches = 0;           // A2: matches not in exclude_docids
-  std::vector<AtomCount> atom_counts;  // A2: per query-leaf occurrence counts
   std::vector<CoverHit> results;       // ranked documents (rank/score/docid/summary)
 };
 
@@ -150,19 +142,17 @@ struct CoverRanked {
 };
 
 // The cover_search/tiered ranking pass (TASK-25): rank `query` by ssr cover
-// density within :item, keeping the top `depth` containers, and count
-// total_matches / unjudged_matches (vs the read-only `exclude` cp set) as a
-// byproduct. threads > 1 splits the shard's token span into contiguous ranges
-// of at least `min_range_tokens` (a container belongs to the range holding its
-// cp, so scores and counts are exactly those of the sequential pass) and ranks
-// the ranges on warren->clone() workers; threads == 1 is the sequential pass;
-// threads == 0 means the allowed_threads cap. `min_range_tokens` is a parameter
-// only so unit tests can exercise the multi-range merge on a tiny fixture.
+// density within :item, keeping the top `depth` containers. threads > 1 splits
+// the shard's token span into contiguous ranges of at least `min_range_tokens`
+// (a container belongs to the range holding its cp, so scores are exactly those
+// of the sequential pass) and ranks the ranges on warren->clone() workers;
+// threads == 1 is the sequential pass; threads == 0 means the allowed_threads
+// cap. `min_range_tokens` is a parameter only so unit tests can exercise the
+// multi-range merge on a tiny fixture. The caller applies its own cp `exclude`
+// post-filter to the returned ranked list.
 bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
                             const std::string &query, size_t depth,
-                            const std::unordered_set<addr> &exclude,
                             std::vector<CoverRanked> *ranked,
-                            long *total_matches, long *unjudged_matches,
                             std::string *error, size_t threads = 1,
                             addr min_range_tokens = 1000000);
 
@@ -186,14 +176,12 @@ struct TieredSpec {
 
 // Run the tiers as a de-duplicated cascade and return the merged ranked list with,
 // per document, a summary built against the TIER THAT SURFACED IT (faithful
-// per-tier biasing). atom_counts is the UNION of every tier's leaves; total_matches
-// / unjudged_matches are the EXACT distinct union across tiers (0 iff every tier is
-// dry). The merged score is tier-monotonic so precise->broad order survives the
-// caller's later (grade, score) tiebreak; a single-tier cascade reduces exactly to
-// cover_search. Returns false (with *error, NAMING the offending tier) on a
-// malformed tier, or a word* tier against a burrow with no stemmed stream --
-// WHOLE-REQUEST-FAIL: one bad tier rejects the whole call (a count-0 atom does not,
-// it simply goes dry).
+// per-tier biasing). The merged score is tier-monotonic so precise->broad order
+// survives the caller's later (grade, score) tiebreak; a single-tier cascade
+// reduces exactly to cover_search. Returns false (with *error, NAMING the
+// offending tier) on a malformed tier, or a word* tier against a burrow with no
+// stemmed stream -- WHOLE-REQUEST-FAIL: one bad tier rejects the whole call (a
+// dry tier does not: it simply contributes nothing).
 bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
                                const TieredSpec &spec, CoverResponse *out,
                                std::string *error = nullptr);
@@ -205,8 +193,8 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
 // server-side with a fresh cottontail::Mt (gcl/mt.h; the statement walk mirrors
 // apps/mt-compile.cc, including tolerating a legacy numeric topic label after
 // @rank and skipping blank/#/;; lines); the compiled tier s-expressions feed the
-// SAME jsonl_tiered_query_search cascade above, so ranking, summaries, and
-// atom_counts behave identically to the JSON-tiers tool. Returns false on ANY
+// SAME jsonl_tiered_query_search cascade above, so ranking and summaries behave
+// identically to the JSON-tiers tool. Returns false on ANY
 // compile problem with *error carrying the per-statement diagnostics (one per
 // line, mt-compile style) -- the server returns them as the HTTP 400 body and
 // the agent controller bounces them to the model for self-correction.

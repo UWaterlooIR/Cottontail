@@ -3,12 +3,11 @@ import pytest
 from isj_agent.engine.base import EngineError, SearchEngine
 from isj_agent.engine.fake import FakeEngine
 from isj_agent.engine.multishard import MultiShardSearchEngine
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
+from isj_agent.protocol.search import Hit, SearchResponse
 
 
-def _resp(hits, total=None, unjudged=None, atoms=None):
+def _resp(hits):
     return SearchResponse(
-        total_matches=total, unjudged_matches=unjudged, atom_counts=atoms,
         results=[Hit(rank=i, score=s, id=d, summary=f"sum-{d}")
                  for i, (d, s) in enumerate(hits, 1)],
     )
@@ -25,23 +24,6 @@ def test_search_merges_shards_by_score_into_global_topk():
     assert [h.id for h in resp.results] == ["d0a", "d1a", "d0b"]
     assert [h.rank for h in resp.results] == [1, 2, 3]
     assert [h.score for h in resp.results] == [5.0, 4.0, 2.0]
-
-
-def test_counts_summed_across_shards():
-    s0 = FakeEngine([_resp([("d0", 5.0)], total=10, unjudged=8,
-                           atoms=[AtomCount(term="a", count=3), AtomCount(term="b", count=2)])])
-    s1 = FakeEngine([_resp([("d1", 4.0)], total=20, unjudged=15,
-                           atoms=[AtomCount(term="a", count=5), AtomCount(term="c", count=1)])])
-    resp = MultiShardSearchEngine([s0, s1]).search("(^ a)", top_k=10)
-    assert resp.total_matches == 30 and resp.unjudged_matches == 23
-    assert {a.term: a.count for a in resp.atom_counts} == {"a": 8, "b": 2, "c": 1}
-
-
-def test_absent_counts_stay_none():
-    s0 = FakeEngine([_resp([("d0", 5.0)])])  # no counts (Lucindri-style / Q3)
-    s1 = FakeEngine([_resp([("d1", 4.0)])])
-    resp = MultiShardSearchEngine([s0, s1]).search("(^ a)", top_k=10)
-    assert resp.total_matches is None and resp.atom_counts is None
 
 
 def test_same_exclude_fanned_to_every_shard():

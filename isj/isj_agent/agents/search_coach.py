@@ -10,10 +10,9 @@ Two implementations behind one protocol:
   plain listing.
 - an LLM `SearchCoachAgent` (a later phase) -- writes a free-text coaching report.
 
-The coach is **query-blind and atom-blind**: it never sees the query string or the atom
-counts, so the same coach serves every searcher (Cottontail cover / tiered / multitext,
-Lucindri). The Controller wraps the coach's report with the query echo, coverage stats,
-and (Cottontail only) atom counts. See docs/design/search-coach.md.
+The coach is **query-blind**: it never sees the query string, so the same coach serves
+every searcher (Cottontail cover / tiered / multitext, Lucindri). The Controller wraps
+the coach's report with the query echo and coverage stats. See docs/design/search-coach.md.
 """
 
 from __future__ import annotations
@@ -34,9 +33,9 @@ _HANDLE_RE = re.compile(r"(?<![A-Za-z0-9])R\d+(?![A-Za-z0-9])")
 
 @dataclass
 class CoachContext:
-    """What the coach sees -- query-blind, atom-blind.
+    """What the coach sees -- query-blind.
 
-    `stats` keys: count (docs judged this query), relevant, total_matches (int | None).
+    `stats` keys: count (docs judged this query), relevant.
     `results` is the query's judged descent IN RANK ORDER; each item is
     {rank, id, score, grade, summary, reason, is_new} (id is the docno; is_new is False
     for an already-judged revisit).
@@ -51,7 +50,7 @@ class CoachContext:
 class CoachOutput:
     """The coach's contribution to the Searcher feedback.
 
-    `report` is the text the Controller appends after its query/stats/atom header.
+    `report` is the text the Controller appends after its query/coverage header.
     `referenced` are the docnos the coach forwarded/cited (for logging). `usage` and
     `reasoning` are used by the LLM coach's trace event and are empty for the mechanical
     coach.
@@ -123,12 +122,8 @@ def _novelty_line(ctx: CoachContext) -> str:
         return "This query surfaced no results."
     seen = sum(1 for d in ctx.results if not d.get("is_new", True))
     new = total - seen
-    line = (f"This query judged {total} result(s): {new} newly surfaced and "
+    return (f"This query judged {total} result(s): {new} newly surfaced and "
             f"{seen} already judged on earlier queries (revisits).")
-    tm = ctx.stats.get("total_matches")
-    if tm is not None:
-        line += f" The collection holds {tm} document(s) matching this query."
-    return line
 
 
 class SearchCoachAgent:
@@ -136,8 +131,8 @@ class SearchCoachAgent:
     it writes a free-text coaching report (the v6 prompt: what's working / hurting / pursue
     next + a self-contained '## Cited passages' section reproducing the excerpts verbatim).
 
-    Query-blind and atom-blind: it sees only the need and the judged passages, so the same
-    coach serves every searcher. Free text -- NO guided decoding (that failed on
+    Query-blind: it sees only the need and the judged passages, so the same coach serves
+    every searcher. Free text -- NO guided decoding (that failed on
     gpt-oss-120b). Generation is bounded (max_tokens + per-call timeout, like the Judger);
     a runaway coach times out and the Controller falls back to the MechanicalSearchCoach.
     """

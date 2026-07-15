@@ -117,14 +117,6 @@ cottontail::addr cover_cp(std::shared_ptr<cottontail::Warren> w,
   return -1;
 }
 
-// The atom_counts entry for `term` (as written), or -1 if absent.
-long atom_count(const CoverResponse &r, const std::string &term) {
-  for (const auto &a : r.atom_counts)
-    if (a.term == term)
-      return a.count;
-  return -1;
-}
-
 // Fixtures for cover_search (TASK-5.1 / A1). Lowercase so case folding is not a
 // variable. c-1/c-4 have "bear"; c-2 has only "bears"; c-3 has "ox"; c-5 has the
 // adjacent phrase "black bears".
@@ -636,10 +628,11 @@ TEST(JsonlCover, SummaryWindowingAndGap) {
   w->end();
 }
 
-// --- cover_search enrichment: counts, exclusion, atom_counts, window (A2) --
+// --- cover_search enrichment: exclusion, window (A2) --
 
-// AC#1 / AC#2 / AC#5 / Q2: total/unjudged document counts and exclude (cp).
-TEST(JsonlCover, TotalAndUnjudgedMatchesAndExclude) {
+// AC#5: excluding a matching cp removes it from the results (cp post-filter),
+// while excluding a non-matching cp leaves the results unchanged.
+TEST(JsonlCover, ExcludeMatchingCpDropsFromResults) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("cover_counts", kCoverRows, "porter", &burrow, &error))
       << error;
@@ -650,28 +643,18 @@ TEST(JsonlCover, TotalAndUnjudgedMatchesAndExclude) {
   spec.query = "bear*"; // matches c-1, c-2, c-4, c-5 (not c-3)
 
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.total_matches, 4);
-  EXPECT_EQ(resp.unjudged_matches, 4); // no exclusion -> equal
+  size_t baseline = resp.results.size();
   // c-2's cp (a match) from this result; c-3's cp (a non-match) via an ox* search.
   cottontail::addr cp_c2 = cover_cp(w, resp.results, "camp");
   ASSERT_GE(cp_c2, 0);
 
-  // total_matches is independent of top_k.
-  spec.top_k = 1;
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.total_matches, 4);
-  spec.top_k = 10;
-
-  // Excluding a MATCHING cp drops unjudged by one; total is unchanged; the
-  // excluded cp is gone from the results (cp post-filter, AC#5).
+  // Excluding a MATCHING cp removes it from the results (cp post-filter, AC#5).
   spec.exclude = {cp_c2};
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.total_matches, 4);
-  EXPECT_EQ(resp.unjudged_matches, 3);
   EXPECT_FALSE(cover_has(w, resp.results, "camp")); // c-2 excluded
+  EXPECT_EQ(resp.results.size(), baseline - 1);
 
-  // Excluding a NON-matching cp (c-3 has no bear) leaves unjudged == total
-  // (unjudged = total - excluded-that-match, NOT total - |exclude|, Q2).
+  // Excluding a NON-matching cp (c-3 has no bear) leaves the results unchanged.
   CoverResponse ox;
   CoverSpec oxspec;
   oxspec.query = "ox*";
@@ -680,7 +663,7 @@ TEST(JsonlCover, TotalAndUnjudgedMatchesAndExclude) {
   ASSERT_GE(cp_c3, 0);
   spec.exclude = {cp_c3};
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.unjudged_matches, 4);
+  EXPECT_EQ(resp.results.size(), baseline); // non-matching exclude is a no-op
   w->end();
 }
 
@@ -722,42 +705,6 @@ TEST(JsonlCover, ExcludePromotesNextBestScoreInvariant) {
   w->end();
 }
 
-// AC#3 / AC#4 / Q4: atom_counts (occurrences, term-as-written, zero flags a dead
-// atom, word* family vs exact, dedup, phrase words as leaves).
-TEST(JsonlCover, AtomCounts) {
-  std::string error, burrow;
-  ASSERT_TRUE(build_rows("cover_atoms", kCoverRows, "porter", &burrow, &error))
-      << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  CoverResponse resp;
-  CoverSpec spec;
-  spec.query = "(^ black bear* zzz*)";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.atom_counts.size(), 3u);
-  EXPECT_GT(atom_count(resp, "black"), 0);
-  EXPECT_GT(atom_count(resp, "bear*"), 0);
-  EXPECT_EQ(atom_count(resp, "zzz*"), 0);       // dead atom -> 0 occurrences
-  EXPECT_EQ(atom_count(resp, "porter:bear"), -1); // never the porter: form
-
-  // ox* is unstemmable -> resolves to the exact feature and counts it (AC#4).
-  spec.query = "ox*";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.atom_counts.size(), 1u);
-  EXPECT_GT(atom_count(resp, "ox*"), 0);
-
-  // Phrase words are individual leaves; bare "bear" and family "bear*" are
-  // distinct leaves (family count >= exact count); dedup keeps one row per term.
-  spec.query = "(^ \"black bear\" bear*)";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.atom_counts.size(), 3u); // black, bear, bear*
-  EXPECT_GT(atom_count(resp, "black"), 0);
-  EXPECT_GT(atom_count(resp, "bear"), 0);
-  EXPECT_GT(atom_count(resp, "bear*"), 0);
-  EXPECT_GE(atom_count(resp, "bear*"), atom_count(resp, "bear"));
-  w->end();
-}
-
 // TASK-23: a star-containing quoted phrase whose NON-star word is hyphenated (the
 // utf8 tokenizer splits the hyphen) must still match. Before the fix it compiled to
 // the dead adjacency (>> (# 2) (... hi-tech porter:gear)) and returned 0, because
@@ -777,74 +724,19 @@ TEST(JsonlCover, StarPhraseTokenizesNonStarWords) {
   CoverSpec spec;
   spec.query = "\"hi-tech gear*\"";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_GT(resp.total_matches, 0);
+  EXPECT_FALSE(resp.results.empty());
 
   // Parity: the space-separated spelling compiles identically and matches the same.
   CoverResponse resp2;
   spec.query = "\"hi tech gear*\"";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp2, &error)) << error;
-  EXPECT_EQ(resp.total_matches, resp2.total_matches);
+  EXPECT_EQ(resp.results.size(), resp2.results.size());
 
   // Parity with the star-FREE hyphenated phrase (which already tokenized correctly).
   CoverResponse resp3;
   spec.query = "\"hi-tech gear\"";
   ASSERT_TRUE(jsonl_cover_search(w, spec, &resp3, &error)) << error;
-  EXPECT_GT(resp3.total_matches, 0);
-  w->end();
-}
-
-// TASK-21: a quoted phrase leaf is decomposed with the TOKENIZER (case-fold +
-// punctuation split), not whitespace-split-then-raw, so atom_counts reports the
-// resolved atom (never a spurious 0). Bare terms stay raw; word* stays "word*";
-// the porter: form is never a displayed term.
-TEST(JsonlCover, AtomCountsPhraseTokenized) {
-  const std::vector<std::string> rows = {
-      R"({"docid":"a-1","contents":"yellowstone national park in winter"})",
-      R"({"docid":"a-2","contents":"the hi-tech gear on the u.s.a. trip"})",
-      R"({"docid":"a-3","contents":"a dog sled race across the snow"})",
-  };
-  std::string error, burrow;
-  ASSERT_TRUE(build_rows("atoms_phrase", rows, "porter", &burrow, &error)) << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  CoverResponse resp;
-  CoverSpec spec;
-
-  // A capitalized phrase folds to its lowercased atom (was reported as 0).
-  spec.query = "\"Yellowstone\"";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_GT(atom_count(resp, "yellowstone"), 0);   // resolved (folded) atom, > 0
-  EXPECT_EQ(atom_count(resp, "Yellowstone"), -1);  // never the as-written form
-
-  // A hyphenated phrase word splits into its true tokens (both real, both > 0).
-  spec.query = "\"hi-tech\"";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(resp.atom_counts.size(), 2u);
-  EXPECT_GT(atom_count(resp, "hi"), 0);
-  EXPECT_GT(atom_count(resp, "tech"), 0);
-
-  // A period-punctuated phrase splits into single-letter tokens.
-  spec.query = "\"u.s.a.\"";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_GT(atom_count(resp, "u"), 0);
-  EXPECT_GT(atom_count(resp, "s"), 0);
-  EXPECT_GT(atom_count(resp, "a"), 0);
-
-  // A word* INSIDE a phrase stays the "sled*" marker (family count), plain word folds.
-  spec.query = "\"dog sled*\"";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_GT(atom_count(resp, "dog"), 0);
-  EXPECT_GT(atom_count(resp, "sled*"), 0);
-  EXPECT_EQ(atom_count(resp, "porter:sled"), -1); // never the porter: form
-
-  // A BARE capitalized term stays raw -> a genuinely dead atom still reports 0.
-  spec.query = "Yellowstone";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(atom_count(resp, "Yellowstone"), 0);
-
-  // No displayed term is ever the internal porter: form (across any query above).
-  for (const auto &a : resp.atom_counts)
-    EXPECT_EQ(a.term.rfind("porter:", 0), std::string::npos) << a.term;
+  EXPECT_FALSE(resp3.results.empty());
   w->end();
 }
 
@@ -1162,7 +1054,7 @@ const CoverHit *tier_hit(std::shared_ptr<cottontail::Warren> w,
 } // namespace
 
 // AC#8: a single-tier cascade is byte-for-byte the same as cover_search -- same
-// counts, atom_counts, and per-hit rank/cp/score/summary (the base case).
+// per-hit rank/cp/score/summary (the base case).
 TEST(JsonlTiered, SingleTierEqualsCoverSearch) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("tiered_base", kCoverRows, "porter", &burrow, &error))
@@ -1180,13 +1072,6 @@ TEST(JsonlTiered, SingleTierEqualsCoverSearch) {
   ts.tiers = {"(^ black bear*)"};
   ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &tiered, &error)) << error;
 
-  EXPECT_EQ(cover.total_matches, tiered.total_matches);
-  EXPECT_EQ(cover.unjudged_matches, tiered.unjudged_matches);
-  ASSERT_EQ(cover.atom_counts.size(), tiered.atom_counts.size());
-  for (size_t i = 0; i < cover.atom_counts.size(); i++) {
-    EXPECT_EQ(cover.atom_counts[i].term, tiered.atom_counts[i].term);
-    EXPECT_EQ(cover.atom_counts[i].count, tiered.atom_counts[i].count);
-  }
   ASSERT_EQ(cover.results.size(), tiered.results.size());
   for (size_t i = 0; i < cover.results.size(); i++) {
     EXPECT_EQ(cover.results[i].rank, tiered.results[i].rank);
@@ -1256,9 +1141,10 @@ TEST(JsonlTiered, ExcludeIsHonored) {
   w->end();
 }
 
-// AC#6: total/unjudged are the EXACT distinct union across tiers (not the per-tier
-// sum, which would double-count the overlap), and are 0 iff every tier is dry.
-TEST(JsonlTiered, ExactUnionCountsNotSum) {
+// AC#6: the cascade's results are the EXACT distinct union across tiers (not the
+// per-tier sum, which would double-count the overlap), and a dry cascade (every
+// tier dead) is not an error -- it just returns no results.
+TEST(JsonlTiered, DedupedUnionAndDryTiers) {
   std::string error, burrow;
   ASSERT_TRUE(build_rows("tiered_counts", kCoverRows, "porter", &burrow, &error))
       << error;
@@ -1271,28 +1157,22 @@ TEST(JsonlTiered, ExactUnionCountsNotSum) {
   ts.tiers = {"(^ black bear*)", "bear*"};
   CoverResponse r;
   ASSERT_TRUE(jsonl_tiered_query_search(w, ts, &r, &error)) << error;
-  EXPECT_EQ(r.total_matches, 4);
-  EXPECT_EQ(r.unjudged_matches, 4);
+  EXPECT_EQ(r.results.size(), 4u); // deduped union, not the per-tier sum (7)
 
-  // all tiers dry -> 0; a count-0 atom is NOT an error, it just goes dry.
+  // all tiers dry -> no results; a dead atom is NOT an error, it just goes dry.
   TieredSpec dry;
   dry.tiers = {"zzzznope", "qqqxxx"};
   CoverResponse rd;
   std::string derr;
   ASSERT_TRUE(jsonl_tiered_query_search(w, dry, &rd, &derr)) << derr;
-  EXPECT_EQ(rd.total_matches, 0);
-  EXPECT_EQ(rd.unjudged_matches, 0);
   EXPECT_TRUE(rd.results.empty());
-  ASSERT_EQ(rd.atom_counts.size(), 2u); // atoms present + deterministic ...
-  for (const auto &a : rd.atom_counts)
-    EXPECT_EQ(a.count, 0); // ... each 0 => a diagnosable dead atom
 
-  // one live tier among dead ones -> not dry (0 iff ALL dry).
+  // one live tier among dead ones -> not dry (empty iff ALL dry).
   TieredSpec mix;
   mix.tiers = {"zzzznope", "bear*"};
   CoverResponse rm;
   ASSERT_TRUE(jsonl_tiered_query_search(w, mix, &rm, &error)) << error;
-  EXPECT_GT(rm.total_matches, 0);
+  EXPECT_FALSE(rm.results.empty());
   w->end();
 }
 
@@ -1359,9 +1239,9 @@ TEST(JsonlTiered, MalformedTierFailsWholeRequestNamingTier) {
 // ---- TASK-25: parallel ranking parity ---------------------------------------
 // parallel_cover_ranking splits the shard's container span into ranges owned by
 // cp, so any thread count must return exactly the sequential pass's results:
-// same (cp, cq, score) list (deterministic: score desc, cp asc) and the same
-// match counters. min_range_tokens is tiny here to force a real multi-range
-// merge on a small fixture (production uses the 1M-token default).
+// same (cp, cq, score) list (deterministic: score desc, cp asc). min_range_tokens
+// is tiny here to force a real multi-range merge on a small fixture (production
+// uses the 1M-token default).
 
 namespace {
 // 24 rows with "wolf" at varying density (and some rows without it at all) so
@@ -1395,21 +1275,14 @@ TEST(JsonlParallel, CoverRankingParityAcrossThreads) {
   const cottontail::addr kTinyRange = 4; // force several ranges on ~300 tokens
 
   std::vector<CoverRanked> base;
-  long base_total = 0, base_unjudged = 0;
-  ASSERT_TRUE(parallel_cover_ranking(w, query, 100, {}, &base, &base_total,
-                                     &base_unjudged, &error, 1))
-      << error;
-  ASSERT_GT(base_total, 0);
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 100, &base, &error, 1)) << error;
   ASSERT_GT(base.size(), 4u); // enough matches to spread across ranges
 
   for (size_t threads : {2u, 3u, 5u, 8u}) {
     std::vector<CoverRanked> got;
-    long total = 0, unjudged = 0;
-    ASSERT_TRUE(parallel_cover_ranking(w, query, 100, {}, &got, &total,
-                                       &unjudged, &error, threads, kTinyRange))
+    ASSERT_TRUE(parallel_cover_ranking(w, query, 100, &got, &error, threads,
+                                       kTinyRange))
         << "threads=" << threads << ": " << error;
-    EXPECT_EQ(total, base_total) << "threads=" << threads;
-    EXPECT_EQ(unjudged, base_unjudged) << "threads=" << threads;
     ASSERT_EQ(got.size(), base.size()) << "threads=" << threads;
     for (size_t i = 0; i < base.size(); i++) {
       EXPECT_EQ(got[i].cp, base[i].cp) << "threads=" << threads << " i=" << i;
@@ -1422,11 +1295,8 @@ TEST(JsonlParallel, CoverRankingParityAcrossThreads) {
   // Top-k truncation parity: the merged parallel list must truncate to the
   // same best-3 as the sequential heap.
   std::vector<CoverRanked> seq3, par3;
-  long t3, u3;
-  ASSERT_TRUE(
-      parallel_cover_ranking(w, query, 3, {}, &seq3, &t3, &u3, &error, 1));
-  ASSERT_TRUE(parallel_cover_ranking(w, query, 3, {}, &par3, &t3, &u3, &error,
-                                     5, kTinyRange));
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 3, &seq3, &error, 1));
+  ASSERT_TRUE(parallel_cover_ranking(w, query, 3, &par3, &error, 5, kTinyRange));
   ASSERT_EQ(seq3.size(), 3u);
   ASSERT_EQ(par3.size(), 3u);
   for (size_t i = 0; i < 3; i++) {
@@ -1434,28 +1304,12 @@ TEST(JsonlParallel, CoverRankingParityAcrossThreads) {
     EXPECT_EQ(par3[i].score, seq3[i].score) << "i=" << i;
   }
 
-  // Exclude + count-only (depth 0) parity: unjudged drops by exactly the
-  // excluded matches in both modes, totals never change.
-  std::unordered_set<cottontail::addr> exclude = {base[0].cp, base[2].cp};
-  std::vector<CoverRanked> discard;
-  long ts, us, tp, up;
-  ASSERT_TRUE(parallel_cover_ranking(w, query, 0, exclude, &discard, &ts, &us,
-                                     &error, 1));
-  EXPECT_TRUE(discard.empty());
-  ASSERT_TRUE(parallel_cover_ranking(w, query, 0, exclude, &discard, &tp, &up,
-                                     &error, 4, kTinyRange));
-  EXPECT_TRUE(discard.empty());
-  EXPECT_EQ(ts, base_total);
-  EXPECT_EQ(tp, base_total);
-  EXPECT_EQ(us, base_unjudged - 2);
-  EXPECT_EQ(up, us);
-
   // A malformed query fails identically with any thread count.
+  std::vector<CoverRanked> discard;
   std::string e1, e4;
-  EXPECT_FALSE(parallel_cover_ranking(w, "(>> wolf)", 10, {}, &discard, &ts,
-                                      &us, &e1, 1));
-  EXPECT_FALSE(parallel_cover_ranking(w, "(>> wolf)", 10, {}, &discard, &ts,
-                                      &us, &e4, 4, kTinyRange));
+  EXPECT_FALSE(parallel_cover_ranking(w, "(>> wolf)", 10, &discard, &e1, 1));
+  EXPECT_FALSE(
+      parallel_cover_ranking(w, "(>> wolf)", 10, &discard, &e4, 4, kTinyRange));
   w->end();
 }
 
@@ -1505,8 +1359,6 @@ TEST(JsonlParallel, EndToEndParityAcrossRankThreads) {
   CoverSpec c4 = c1;
   c4.rank_threads = 4;
   ASSERT_TRUE(jsonl_cover_search(w, c4, &r4, &error)) << error;
-  EXPECT_EQ(r4.total_matches, r1.total_matches);
-  EXPECT_EQ(r4.unjudged_matches, r1.unjudged_matches);
   ASSERT_EQ(r4.results.size(), r1.results.size());
   for (size_t i = 0; i < r1.results.size(); i++) {
     EXPECT_EQ(r4.results[i].cp, r1.results[i].cp);
@@ -1521,52 +1373,11 @@ TEST(JsonlParallel, EndToEndParityAcrossRankThreads) {
   TieredSpec t4 = t1;
   t4.rank_threads = 4;
   ASSERT_TRUE(jsonl_tiered_query_search(w, t4, &tr4, &error)) << error;
-  EXPECT_EQ(tr4.total_matches, tr1.total_matches);
   ASSERT_EQ(tr4.results.size(), tr1.results.size());
   for (size_t i = 0; i < tr1.results.size(); i++) {
     EXPECT_EQ(tr4.results[i].cp, tr1.results[i].cp);
     EXPECT_EQ(tr4.results[i].score, tr1.results[i].score);
   }
-  w->end();
-}
-
-// The N of a (# N) width window is geometry, not a query term: it must NOT
-// appear in atom_counts (both searcher prompts teach the (>> (# N) (^ ...))
-// idiom, so before this fix every windowed query reported a bogus count for
-// its width). A standalone numeric TERM is a real leaf and keeps its count.
-TEST(JsonlCover, WidthOperandIsNotAnAtom) {
-  std::string error, burrow;
-  std::vector<std::string> rows = kCoverRows;
-  rows.push_back(R"({"docid":"c-6","contents":"the year 1984 saw a black bear attack"})");
-  ASSERT_TRUE(build_rows("cover_width", rows, "porter", &burrow, &error))
-      << error;
-  auto w = open_burrow(burrow, &error);
-  ASSERT_NE(w, nullptr) << error;
-  CoverResponse resp;
-  CoverSpec spec;
-  spec.query = "(>> (# 12) (^ black bear*))";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(atom_count(resp, "12"), -1); // width operand: absent, not counted
-  EXPECT_GT(atom_count(resp, "black"), 0);
-  EXPECT_GT(atom_count(resp, "bear*"), 0);
-
-  // A standalone numeric term is a genuine leaf.
-  spec.query = "(^ 1984 bear*)";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_GT(atom_count(resp, "1984"), 0);
-
-  // And the two compose: only the width operand disappears.
-  spec.query = "(>> (# 7) (^ 1984 bear*))";
-  ASSERT_TRUE(jsonl_cover_search(w, spec, &resp, &error)) << error;
-  EXPECT_EQ(atom_count(resp, "7"), -1);
-  EXPECT_GT(atom_count(resp, "1984"), 0);
-
-  // Same rule on the tiered path (per-tier leaf union).
-  TieredSpec tiered;
-  tiered.tiers = {"(>> (# 9) (^ black bear*))", "bear*"};
-  ASSERT_TRUE(jsonl_tiered_query_search(w, tiered, &resp, &error)) << error;
-  EXPECT_EQ(atom_count(resp, "9"), -1);
-  EXPECT_GT(atom_count(resp, "black"), 0);
   w->end();
 }
 
@@ -1605,17 +1416,12 @@ TEST(JsonlMultitext, ParityWithTieredCascade) {
   CoverResponse want;
   ASSERT_TRUE(jsonl_tiered_query_search(w, tiered, &want, &error)) << error;
 
-  EXPECT_EQ(got.total_matches, want.total_matches);
-  EXPECT_EQ(got.unjudged_matches, want.unjudged_matches);
   ASSERT_EQ(got.results.size(), want.results.size());
   for (size_t i = 0; i < want.results.size(); i++) {
     EXPECT_EQ(got.results[i].cp, want.results[i].cp);
     EXPECT_EQ(got.results[i].score, want.results[i].score);
     EXPECT_EQ(got.results[i].summary, want.results[i].summary);
   }
-  ASSERT_EQ(got.atom_counts.size(), want.atom_counts.size());
-  for (size_t i = 0; i < want.atom_counts.size(); i++)
-    EXPECT_EQ(got.atom_counts[i].term, want.atom_counts[i].term);
   w->end();
 }
 
@@ -1670,6 +1476,6 @@ TEST(JsonlMultitext, CompileDiagnostics) {
   mt.program = "# comment\n\na = \"bear*\"\n;; also a comment\n@rank 208 a\n";
   error.clear();
   EXPECT_TRUE(jsonl_multitext_tiered_search(w, mt, &resp, &error)) << error;
-  EXPECT_GT(resp.total_matches, 0);
+  EXPECT_FALSE(resp.results.empty());
   w->end();
 }

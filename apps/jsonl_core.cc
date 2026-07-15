@@ -201,8 +201,8 @@ bool build_match_gcl(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 
 // ---- cover_search helpers (TASK-5.1 / A1) ---------------------------------
 
-// The SINGLE place a word* marker becomes a feature atom (A2's atom_counts
-// reuses this). `word` is the bare word WITHOUT the trailing '*'. Resolves
+// The SINGLE place a word* marker becomes a feature atom (the cover rewrite
+// path uses this). `word` is the bare word WITHOUT the trailing '*'. Resolves
 // through the burrow's own Porter, so bear -> porter:bear (the symmetric stemmed
 // stream) and an unstemmable word -> the exact surface form (ox -> ox).
 std::string resolve_family_atom(std::shared_ptr<Stemmer> stemmer,
@@ -452,11 +452,9 @@ inline bool cover_order(const CoverRanked &a, const CoverRanked &b) {
 // One cp-native pass (doc-6 section 4): walk the query hopper and the :item
 // container hopper once over the PUBLIC Hopper API -- mirroring ssr's recurrence
 // (score += 1/(K + q - p), K = ssr's default 42) -- keeping the top `depth`
-// containers by score (over-fetched for the exclude cp post-filter), and counting
-// matches as a BYPRODUCT of the same pass: total_matches as each matching
-// container closes, unjudged_matches for those whose cp is not in `exclude`. Does
-// NOT call ssr_ranking and touches no src/ file. Ranked containers are returned
-// in score-descending order.
+// containers by score (over-fetched for the caller's exclude cp post-filter).
+// Does NOT call ssr_ranking and touches no src/ file. Ranked containers are
+// returned in score-descending order.
 //
 // [start, end) restricts the pass to containers whose START (cp) lies in the
 // range -- the same ownership rule as ssr_ranking's start/end -- so splitting the
@@ -464,14 +462,11 @@ inline bool cover_order(const CoverRanked &a, const CoverRanked &b) {
 // same score as one full pass (a container straddling `end` is scored in full
 // by the range that owns its cp). Defaults cover the whole shard.
 bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
-                   size_t depth, const std::unordered_set<addr> &exclude,
-                   std::vector<CoverRanked> *ranked, long *total_matches,
-                   long *unjudged_matches, std::string *error,
-                   addr start = minfinity + 1, addr end = maxfinity) {
+                   size_t depth, std::vector<CoverRanked> *ranked,
+                   std::string *error, addr start = minfinity + 1,
+                   addr end = maxfinity) {
   const double K = 42.0; // ssr default (smoothed 1/(K + q - p))
   ranked->clear();
-  *total_matches = 0;
-  *unjudged_matches = 0;
   if (start == minfinity)
     start++;
   if (start >= end)
@@ -490,9 +485,6 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
   auto close_container = [&](addr cp, addr cq, double score) {
     if (score <= 0.0)
       return; // not a matching container (no cover accumulated)
-    (*total_matches)++;
-    if (exclude.find(cp) == exclude.end())
-      (*unjudged_matches)++;
     if (depth == 0)
       return;
     if (heap.size() < depth) {
@@ -530,7 +522,10 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
 }
 
 
-// The query's content-term LEAVES for atom_counts, deduped first-seen. Operators /
+// The query's content-term LEAVES, deduped first-seen. RETAINED (TASK-46) for
+// TASK-47's posting-memory budget guard, which enumerates the terms a query will
+// materialize to size its working set; it has no caller in the interim (hence
+// [[maybe_unused]]). Operators /
 // parens / :tags are skipped. A BARE word (including a word* marker) is kept AS
 // WRITTEN; a QUOTED phrase is decomposed like the match path -- whitespace-split so a
 // trailing '*' survives, then PER WORD a word* marker is kept as-is, else the word is
@@ -545,8 +540,8 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
 // geometry, not a query term, and reporting the corpus count of the token "12"
 // is noise in the model's feedback. A digits-only token is skipped iff the
 // preceding token was '#'; a standalone numeric term ("1984") stays a real leaf.
-std::vector<std::string> cover_leaves(const std::string &gcl,
-                                      std::shared_ptr<Tokenizer> tokenizer) {
+[[maybe_unused]] std::vector<std::string>
+cover_leaves(const std::string &gcl, std::shared_ptr<Tokenizer> tokenizer) {
   std::vector<std::string> out;
   std::set<std::string> seen;
   bool after_width_op = false;
@@ -618,19 +613,14 @@ std::vector<std::string> cover_leaves(const std::string &gcl,
 // `threads` contiguous ranges (each at least min_range_tokens), rank each range
 // on its own warren->clone() worker (clones share the SimpleIdx posting cache,
 // so workers add cursors, not copies), then merge the per-range top-`depth`
-// lists and sum the counters. Ownership by cp makes both exact: every matching
-// container is counted and scored by exactly one worker, with the same score as
-// one sequential pass.
+// lists. Ownership by cp makes it exact: every matching container is scored by
+// exactly one worker, with the same score as one sequential pass.
 bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
                             const std::string &query, size_t depth,
-                            const std::unordered_set<addr> &exclude,
                             std::vector<CoverRanked> *ranked,
-                            long *total_matches, long *unjudged_matches,
                             std::string *error, size_t threads,
                             addr min_range_tokens) {
   ranked->clear();
-  *total_matches = 0;
-  *unjudged_matches = 0;
   // Validate the query up front (a malformed query must fail identically with
   // any thread count) and find the container span for range splitting.
   auto hopper = warren->hopper_from_gcl(query, error);
@@ -656,8 +646,7 @@ bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
       std::max<size_t>(1, static_cast<size_t>(span / min_range_tokens));
   threads = std::min(threads, range_threads);
   if (threads <= 1)
-    return cover_ranking(warren, query, depth, exclude, ranked, total_matches,
-                         unjudged_matches, error, start, z);
+    return cover_ranking(warren, query, depth, ranked, error, start, z);
 
   std::vector<std::pair<addr, addr>> ranges;
   ranges.reserve(threads);
@@ -671,7 +660,6 @@ bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
   }
 
   std::vector<std::vector<CoverRanked>> rankings(ranges.size());
-  std::vector<long> totals(ranges.size(), 0), unjudgeds(ranges.size(), 0);
   std::vector<std::string> errors(ranges.size());
   // NOT vector<bool>: that is a packed bitfield, and concurrent workers writing
   // adjacent elements race on the shared word (bits get clobbered, making a
@@ -687,8 +675,7 @@ bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
                     (errors[i].empty() ? "(no error reported)" : errors[i]);
         return;
       }
-      okay[i] = cover_ranking(local, query, depth, exclude, &rankings[i],
-                              &totals[i], &unjudgeds[i], &errors[i],
+      okay[i] = cover_ranking(local, query, depth, &rankings[i], &errors[i],
                               ranges[i].first, ranges[i].second);
       if (!okay[i] && errors[i].empty())
         errors[i] = "worker cover_ranking failed with no error reported";
@@ -702,8 +689,6 @@ bool parallel_cover_ranking(std::shared_ptr<Warren> warren,
                               : errors[i];
       return false;
     }
-    *total_matches += totals[i];
-    *unjudged_matches += unjudgeds[i];
     ranked->insert(ranked->end(), rankings[i].begin(), rankings[i].end());
   }
   std::sort(ranked->begin(), ranked->end(), cover_order);
@@ -955,9 +940,6 @@ bool jsonl_query(std::shared_ptr<Warren> warren, const QuerySpec &spec,
 bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
                         CoverResponse *out, std::string *error) {
   out->results.clear();
-  out->atom_counts.clear();
-  out->total_matches = 0;
-  out->unjudged_matches = 0;
   // word* needs a stemmed stream; fail loudly (no silent fallback to exact).
   std::shared_ptr<Stemmer> stemmer;
   if (spec.query.find('*') != std::string::npos) {
@@ -973,35 +955,17 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   if (!cover_rewrite(spec.query, stemmer, warren->tokenizer(), &rewritten, error))
     return false;
   if (rewritten.empty())
-    return true; // nothing to search -> no hits, zero counts, no atoms
+    return true; // nothing to search -> no hits
   // Validate up front so malformed GCL is a reported error, not a silent empty.
   auto check = warren->hopper_from_gcl(rewritten, error);
   if (check == nullptr)
     return false;
-  // atom_counts: per query leaf, total OCCURRENCES of the feature it resolves to
-  // (term shown AS WRITTEN; word* -> the family feature; bare -> exact). Q4.
-  for (const auto &leaf : cover_leaves(spec.query, warren->tokenizer())) {
-    std::string atom;
-    auto star = leaf.find('*');
-    if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
-        stemmer != nullptr)
-      atom = resolve_family_atom(stemmer, leaf.substr(0, star));
-    else
-      atom = leaf; // bare exact (validated: no mid-token '*')
-    AtomCount ac;
-    ac.term = leaf;
-    ac.count =
-        (long)warren->idx()->count(warren->featurizer()->featurize(atom));
-    out->atom_counts.push_back(std::move(ac));
-  }
   // ONE cp-native pass (doc-6 section 4): rank plain :item -- over-fetching
-  // depth = top_k + |exclude| so the exclude cp post-filter still fills top_k --
-  // and count total_matches / unjudged_matches as a byproduct of the same pass.
+  // depth = top_k + |exclude| so the exclude cp post-filter still fills top_k.
   std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
   std::vector<CoverRanked> ranked;
   if (!parallel_cover_ranking(warren, rewritten, spec.top_k + exclude.size(),
-                              exclude, &ranked, &out->total_matches,
-                              &out->unjudged_matches, error, spec.rank_threads))
+                              &ranked, error, spec.rank_threads))
     return false;
   // cp POST-FILTER: drop excluded hits, keep top_k survivors, build summaries.
   int rank = 1;
@@ -1049,19 +1013,14 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
 }
 
 // tiered_query_search: run an ordered list of cover tiers as a de-duplicated
-// cascade, reusing the cover_search helpers (cover_rewrite / cover_leaves /
-// cover_ranking / cover_summary) -- no new ranking math, no native src/ranking.cc
-// call. atom_counts is the UNION of every tier's leaves; total/unjudged are the
-// EXACT distinct union across tiers; each summary is built against the tier that
-// surfaced its document; the merged score is tier-monotonic. A single-tier cascade
-// reduces exactly to cover_search.
+// cascade, reusing the cover_search helpers (cover_rewrite / cover_ranking /
+// cover_summary) -- no new ranking math, no native src/ranking.cc call. Each
+// summary is built against the tier that surfaced its document; the merged score
+// is tier-monotonic. A single-tier cascade reduces exactly to cover_search.
 bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
                                const TieredSpec &spec, CoverResponse *out,
                                std::string *error) {
   out->results.clear();
-  out->atom_counts.clear();
-  out->total_matches = 0;
-  out->unjudged_matches = 0;
   if (spec.tiers.empty())
     return true; // no tiers -> empty response (parity with an empty cover query)
 
@@ -1085,8 +1044,8 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
 
   // WHOLE-REQUEST-FAIL: rewrite + validate EVERY tier up front. A GCL syntax error
   // (or a bad '*') in ANY tier rejects the whole request, NAMING the tier, so the
-  // agent fixes the right one. (A count-0 atom is NOT an error: it parses and the
-  // tier simply goes dry -- that is what atom_counts=0 diagnoses.)
+  // agent fixes the right one. (A tier that matches nothing is NOT an error: it
+  // parses and simply contributes no documents.)
   std::vector<std::string> rewritten(spec.tiers.size());
   for (size_t i = 0; i < spec.tiers.size(); i++) {
     std::string rw, inner;
@@ -1106,56 +1065,7 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     rewritten[i] = rw;
   }
 
-  // atom_counts: the UNION of every tier's content-term leaves, deduped by term
-  // (first-seen order), each with its corpus occurrence count. Present on every
-  // call regardless of results, so a count of 0 unambiguously means a dead atom.
-  std::set<std::string> seen_terms;
-  for (const auto &tier : spec.tiers) {
-    for (const auto &leaf : cover_leaves(tier, warren->tokenizer())) {
-      if (!seen_terms.insert(leaf).second)
-        continue;
-      std::string atom;
-      auto star = leaf.find('*');
-      if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
-          stemmer != nullptr)
-        atom = resolve_family_atom(stemmer, leaf.substr(0, star));
-      else
-        atom = leaf;
-      AtomCount ac;
-      ac.term = leaf;
-      ac.count =
-          (long)warren->idx()->count(warren->featurizer()->featurize(atom));
-      out->atom_counts.push_back(std::move(ac));
-    }
-  }
-
   std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
-
-  // total_matches / unjudged_matches = the EXACT distinct union across tiers: one
-  // depth=0 counting pass over the OR of the (non-empty) rewritten tiers. 0 iff
-  // every tier is dry. (Not the per-tier sum, which double-counts overlap.)
-  std::vector<std::string> nonempty;
-  for (const auto &rw : rewritten)
-    if (!rw.empty())
-      nonempty.push_back(rw);
-  if (!nonempty.empty()) {
-    std::string orq;
-    if (nonempty.size() == 1) {
-      orq = nonempty[0];
-    } else {
-      orq = "(+";
-      for (const auto &rw : nonempty)
-        orq += " " + rw;
-      orq += ")";
-    }
-    std::vector<CoverRanked> discard;
-    long tm = 0, um = 0;
-    if (!parallel_cover_ranking(warren, orq, 0, exclude, &discard, &tm, &um,
-                                error, spec.rank_threads))
-      return false;
-    out->total_matches = tm;
-    out->unjudged_matches = um;
-  }
 
   // The CASCADE: run each tier in order; drop cps in `exclude` and cross-tier
   // duplicates; keep the surfacing tier + that tier's own density per survivor.
@@ -1172,13 +1082,11 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     if (rw.empty())
       continue;
     // Over-fetch depth = top_k + |exclude| so the cp post-filter still fills top_k
-    // (parity with cover_search paging). Per-tier counts are discarded (the exact
-    // union counts were computed above). ALL tiers run every call -- the caller
-    // pages by re-invoking with a grown exclude, and atom_counts must stay complete.
+    // (parity with cover_search paging). ALL tiers run every call -- the caller
+    // pages by re-invoking with a grown exclude.
     std::vector<CoverRanked> ranked;
-    long tm = 0, um = 0;
-    if (!parallel_cover_ranking(warren, rw, spec.top_k + exclude.size(), exclude,
-                                &ranked, &tm, &um, error, spec.rank_threads))
+    if (!parallel_cover_ranking(warren, rw, spec.top_k + exclude.size(),
+                                &ranked, error, spec.rank_threads))
       return false;
     for (const auto &r : ranked) {
       if (exclude.find(r.cp) != exclude.end())

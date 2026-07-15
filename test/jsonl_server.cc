@@ -230,8 +230,8 @@ TEST(JsonlServer, CoverSearch) {
   const httplib::Headers auth = {
       {"Authorization", std::string("Bearer ") + kToken}};
 
-  // run* reaches doc-002 ("runs") via the word* family marker; the A2 fields are
-  // present and there are NO legacy fields (B1's SearchResponse is extra=forbid).
+  // run* reaches doc-002 ("runs") via the word* family marker; the response is
+  // ranked results only, with NO legacy or diagnostic fields (extra=forbid).
   long cp = -1;
   {
     auto r = cli.Post("/tools/cover_search", auth, R"({"query":"run*"})",
@@ -239,16 +239,11 @@ TEST(JsonlServer, CoverSearch) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["total_matches"], 1);
-    EXPECT_EQ(j["unjudged_matches"], 1);
-    ASSERT_TRUE(j.contains("atom_counts"));
-    for (const auto &a : j["atom_counts"]) {
-      EXPECT_TRUE(a.contains("term"));
-      EXPECT_TRUE(a.contains("count"));
-      EXPECT_FALSE(a.contains("stream")); // no stream field (A2 AC#3)
-    }
-    // exactly the four response keys -- no result_count/truncated/stemmed/query.
-    EXPECT_EQ(j.size(), 4u) << r->body;
+    // exactly one response key ("results") -- no diagnostics, no legacy fields.
+    EXPECT_EQ(j.size(), 1u) << r->body;
+    EXPECT_FALSE(j.contains("total_matches"));
+    EXPECT_FALSE(j.contains("unjudged_matches"));
+    EXPECT_FALSE(j.contains("atom_counts"));
     EXPECT_FALSE(j.contains("result_count"));
     EXPECT_FALSE(j.contains("truncated"));
     EXPECT_FALSE(j.contains("stemmed"));
@@ -267,8 +262,7 @@ TEST(JsonlServer, CoverSearch) {
     EXPECT_NE(json::parse(g->body)["text"].get<std::string>().find("runs"),
               std::string::npos);
   }
-  // exclude (the matched cp) carves doc-002 (the only run* match): unjudged 0,
-  // results empty, total unchanged.
+  // exclude (the matched cp) carves doc-002 (the only run* match): results empty.
   {
     auto r = cli.Post("/tools/cover_search", auth,
                       "{\"query\":\"run*\",\"exclude\":[" + std::to_string(cp) +
@@ -277,8 +271,6 @@ TEST(JsonlServer, CoverSearch) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["total_matches"], 1);
-    EXPECT_EQ(j["unjudged_matches"], 0);
     EXPECT_TRUE(j["results"].empty()) << r->body;
   }
   // Statelessness: a follow-up request with no exclusion sees doc-002 again
@@ -289,7 +281,6 @@ TEST(JsonlServer, CoverSearch) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["unjudged_matches"], 1);
     EXPECT_FALSE(j["results"].empty());
   }
   // A non-trailing '*' is a 400 with an error body.
@@ -423,7 +414,7 @@ TEST(JsonlServer, RankThreadsFlagAndStartupLog) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+    EXPECT_EQ(j["results"].size(), 2u) << r->body;
   }
   {
     auto r = cli.Post("/tools/tiered_query_search", auth,
@@ -432,7 +423,7 @@ TEST(JsonlServer, RankThreadsFlagAndStartupLog) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+    EXPECT_EQ(j["results"].size(), 2u) << r->body;
   }
   ::kill(pid, SIGTERM);
   int st;
@@ -495,7 +486,7 @@ TEST(JsonlServer, MultitextTieredSearch) {
     ASSERT_TRUE(r);
     ASSERT_EQ(r->status, 200) << r->body;
     json j = json::parse(r->body);
-    EXPECT_EQ(j["total_matches"].get<int>(), 2) << r->body;
+    EXPECT_EQ(j["results"].size(), 2u) << r->body;
     ASSERT_FALSE(j["results"].empty());
     EXPECT_TRUE(j["results"][0].contains("cp"));
     EXPECT_TRUE(j["results"][0].contains("summary"));

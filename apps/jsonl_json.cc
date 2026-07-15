@@ -68,19 +68,10 @@ json count_json(const QuerySpec &spec, long count) {
 }
 
 json cover_results_json(const CoverResponse &resp) {
-  // EXACTLY these four keys (B1's SearchResponse is extra="forbid"): no query
-  // echo, no elapsed_ms, no result_count/truncated.
+  // Ranked results only (TASK-46 removed total_matches / unjudged_matches /
+  // atom_counts). The Python SearchResponse is extra="forbid", so we must not
+  // emit keys it no longer declares.
   json o;
-  o["total_matches"] = resp.total_matches;
-  o["unjudged_matches"] = resp.unjudged_matches;
-  json atoms = json::array();
-  for (const auto &a : resp.atom_counts) {
-    json e;
-    e["term"] = a.term;
-    e["count"] = a.count;
-    atoms.push_back(e);
-  }
-  o["atom_counts"] = atoms;
   json arr = json::array();
   for (const auto &h : resp.results) {
     json r;

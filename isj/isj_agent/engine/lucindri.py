@@ -14,8 +14,7 @@ Wire contract (validated live 2026-07-10; see backlog TASK-33 WIRE CONTRACT):
 Lucindri has NO server-side exclude and NO cursor, so paging/exclude is CLIENT-side:
 each call re-requests count = |exclude| + top_k (deterministic ranking, so the top
 |exclude|+top_k contain the next top_k unseen), drops the consumed docnos, keeps top_k.
-Lucindri reports no total/atom counts, so the response omits them (SearchResponse
-leaves them None -- the controller then neither fakes nor surfaces them).
+The response is just the ranked results -- the uniform surface every engine presents.
 """
 
 from collections.abc import Sequence
@@ -101,7 +100,6 @@ class LucindriSearchEngine:
             )
             for i, h in enumerate(fresh, 1)
         ]
-        # counts omitted (Q3): Lucindri reports none, so leave them None.
         return SearchResponse(results=results)
 
     def read(self, id: str) -> str | None:

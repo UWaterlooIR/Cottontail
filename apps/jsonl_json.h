@@ -28,7 +28,7 @@ json get_json(addr cp, bool found, const std::string &text);
 json count_json(const QuerySpec &spec, long count);
 
 // cover_search results (TASK-5.1 / A1): {results:[{rank,score,docid,summary}]}.
-// A2 adds total_matches / unjudged_matches / atom_counts to the CoverResponse.
+// (TASK-46 removed total_matches / unjudged_matches / atom_counts.)
 json cover_results_json(const CoverResponse &resp);
 
 // The agent tool schema (OpenAI/Anthropic function shape) as a JSON array.

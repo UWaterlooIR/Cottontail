@@ -3,10 +3,10 @@ id: TASK-46
 title: >-
   Excise total_matches / unjudged_matches / atom_counts from the search stack
   (removes the tiered union pass)
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-07-15 22:12'
-updated_date: '2026-07-15 22:40'
+updated_date: '2026-07-15 22:55'
 labels: []
 dependencies: []
 ordinal: 67000
