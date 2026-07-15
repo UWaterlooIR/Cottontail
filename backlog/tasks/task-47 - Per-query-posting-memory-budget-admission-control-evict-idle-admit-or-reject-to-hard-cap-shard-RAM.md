@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-15 22:40'
+updated_date: '2026-07-15 22:47'
 labels: []
 dependencies:
   - TASK-46
@@ -28,7 +28,10 @@ The core memory-safety fix. Replace the lazy SimpleIdx cache cap (large_limit_) 
 - [ ] #5 The standalone lazy large_limit_/large_threshold_ cap is retired (or explicitly demoted to a cache-reuse bound subordinate to B), with the decision documented; there is ONE authoritative memory knob (B)
 - [ ] #6 Verified end-to-end: rag2026-2 mt completes with per-server RSS bounded under B+base (< 40 GB) -- queries that would have OOM'd are bounced and reformulated rather than crashing a shard; a within-budget gcl run is behavior-unchanged
 - [ ] #7 Concurrency: budget accounting is process-global (a shared reservation across the --threads workers so concurrent queries' W sum against B) OR documented as an MVP that is safe only because the workload is one-query-per-shard-at-a-time, with the shared-reservation version specified as the hardening follow-up
+- [ ] #8 Eviction is MINIMAL: reserve() evicts idle entries LRU only until the query fits (idle_remaining <= B - W), retaining the rest of the cache warm for reuse; it never evicts more than necessary and never evicts features the query needs
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
@@ -79,4 +82,11 @@ The multi-query process-global CV/wait hardening MAY ship as a follow-up if the 
 
 ### Commit / PR
 Fresh branch off main -> PR against the fork (UWaterlooIR/Cottontail). Never commit to main.
+
+### CLARIFICATION -- evict the MINIMUM; keep the cache warm
+reserve() must evict idle entries LRU (oldest-first) ONLY until the new query fits: stop as soon as `idle_remaining_bytes <= B - W` (free just enough headroom for W). Do NOT evict all idle cache -- retain the warmest (most-recently-used) idle features for cross-query reuse.
+- W < B: keep (B - W) worth of the warmest idle cache resident; evict just the coldest overflow.
+- W == B: all idle must go (unavoidable -- the query needs the whole budget).
+- W > B: reject (would not fit even with a fully cold cache).
+The "cold cache" in the reject test (W > B) is a FEASIBILITY hypothetical, not what we do on admit. On admit we evict the minimum.
 <!-- SECTION:PLAN:END -->
