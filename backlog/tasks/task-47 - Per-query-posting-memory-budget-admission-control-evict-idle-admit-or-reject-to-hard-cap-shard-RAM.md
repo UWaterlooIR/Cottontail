@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-15 22:47'
+updated_date: '2026-07-15 22:51'
 labels: []
 dependencies:
   - TASK-46
@@ -30,8 +30,6 @@ The core memory-safety fix. Replace the lazy SimpleIdx cache cap (large_limit_) 
 - [ ] #7 Concurrency: budget accounting is process-global (a shared reservation across the --threads workers so concurrent queries' W sum against B) OR documented as an MVP that is safe only because the workload is one-query-per-shard-at-a-time, with the shared-reservation version specified as the hardening follow-up
 - [ ] #8 Eviction is MINIMAL: reserve() evicts idle entries LRU only until the query fits (idle_remaining <= B - W), retaining the rest of the cache warm for reuse; it never evicts more than necessary and never evicts features the query needs
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -89,4 +87,10 @@ reserve() must evict idle entries LRU (oldest-first) ONLY until the new query fi
 - W == B: all idle must go (unavoidable -- the query needs the whole budget).
 - W > B: reject (would not fit even with a fully cold cache).
 The "cold cache" in the reject test (W > B) is a FEASIBILITY hypothetical, not what we do on admit. On admit we evict the minimum.
+
+### INVARIANT -- never evict a feature the query needs (can't evict X to make room for X)
+The eviction pool is STRICTLY `cache_ \ needed` -- cached features NOT referenced by this query. A needed feature is NEVER an eviction candidate, including:
+- one that is already cached (it counts toward W and stays), and
+- protecting each needed feature as ranking incrementally loads the rest -- a LATER needed load must never evict an EARLIER needed one.
+Feasibility is judged only on W = sum over `needed`: if evicting the ENTIRE idle pool (`cache_ \ needed`) still cannot free room for W, then W > B and we REJECT -- we do NOT start evicting needed features to appear to fit. So `reserve(needed, W, B)` = (a) if W > B reject; else (b) evict from the idle pool only, LRU, the minimum to fit. Practically it runs UP FRONT over the full `needed` set, marking/pinning those features for the query's duration so the lazy per-load path never evicts a needed feature mid-query.
 <!-- SECTION:PLAN:END -->
