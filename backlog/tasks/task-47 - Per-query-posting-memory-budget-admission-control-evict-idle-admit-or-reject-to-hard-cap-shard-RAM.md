@@ -6,7 +6,7 @@ title: >-
 status: To Do
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-15 22:51'
+updated_date: '2026-07-15 22:53'
 labels: []
 dependencies:
   - TASK-46
@@ -29,7 +29,10 @@ The core memory-safety fix. Replace the lazy SimpleIdx cache cap (large_limit_) 
 - [ ] #6 Verified end-to-end: rag2026-2 mt completes with per-server RSS bounded under B+base (< 40 GB) -- queries that would have OOM'd are bounced and reformulated rather than crashing a shard; a within-budget gcl run is behavior-unchanged
 - [ ] #7 Concurrency: budget accounting is process-global (a shared reservation across the --threads workers so concurrent queries' W sum against B) OR documented as an MVP that is safe only because the workload is one-query-per-shard-at-a-time, with the shared-reservation version specified as the hardening follow-up
 - [ ] #8 Eviction is MINIMAL: reserve() evicts idle entries LRU only until the query fits (idle_remaining <= B - W), retaining the rest of the cache warm for reuse; it never evicts more than necessary and never evicts features the query needs
+- [ ] #9 The over-budget bounce is a PROPER coaching message (not a bare error): it states the query cannot run (would exceed the per-query memory budget), NAMES the largest-posting-list terms sorted biggest-first (from the count_ data), and instructs the searcher to reduce the number of terms and ESPECIALLY drop/replace high-frequency 'stop-word'-like common terms that dominate the budget; searcher.md and mt_tiered_searcher.md carry matching proactive guidance
 <!-- AC:END -->
+
+
 
 ## Implementation Plan
 
@@ -93,4 +96,21 @@ The eviction pool is STRICTLY `cache_ \ needed` -- cached features NOT reference
 - one that is already cached (it counts toward W and stays), and
 - protecting each needed feature as ranking incrementally loads the rest -- a LATER needed load must never evict an EARLIER needed one.
 Feasibility is judged only on W = sum over `needed`: if evicting the ENTIRE idle pool (`cache_ \ needed`) still cannot free room for W, then W > B and we REJECT -- we do NOT start evicting needed features to appear to fit. So `reserve(needed, W, B)` = (a) if W > B reject; else (b) evict from the idle pool only, LRU, the minimum to fit. Practically it runs UP FRONT over the full `needed` set, marking/pinning those features for the query's duration so the lazy per-load path never evicts a needed feature mid-query.
+
+### Bounce message on reject (W > B) -- proper, actionable coaching
+The rejection is NOT a bare error. Because reserve() already has each needed term's posting size (from count_), the message names the offenders and tells the searcher how to fix it. Shape:
+
+  This query can't run: it would load ~<W> GB of posting lists, over the <B> GB per-query
+  memory budget. The largest contributors are: <term1>=<n1>, <term2>=<n2>, <term3>=<n3> ...
+  To fix:
+   1. Reduce the NUMBER of terms in the query.
+   2. Especially drop or replace high-frequency "stop-word"-like common words -- a few very
+      common terms (the, and, of, plus broad words like health/care/states) have enormous
+      posting lists that dominate the budget. Prefer distinctive, specific terms.
+   3. If you need broad coverage, split the facets across SEPARATE narrower queries rather
+      than one wide program.
+
+Sort the named terms by posting size (largest first) and list the top few so the searcher knows exactly what to cut. It bounces via the existing EngineError -> controller.py:328 path (same as a malformed-query bounce), so the searcher reformulates and retries.
+
+Prompt updates (proactive, not just reactive): searcher.md and mt_tiered_searcher.md gain a short note that each query has a memory budget, so avoid packing in many terms and avoid bare high-frequency/stop-word terms; on an OVER-BUDGET bounce, cut the named terms.
 <!-- SECTION:PLAN:END -->
