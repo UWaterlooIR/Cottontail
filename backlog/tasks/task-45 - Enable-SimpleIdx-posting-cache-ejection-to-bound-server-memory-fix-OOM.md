@@ -1,10 +1,10 @@
 ---
 id: TASK-45
 title: Enable SimpleIdx posting-cache ejection to bound server memory (fix OOM)
-status: In Progress
+status: Done
 assignee: []
 created_date: '2026-07-15 15:32'
-updated_date: '2026-07-15 17:38'
+updated_date: '2026-07-15 17:45'
 labels: []
 dependencies: []
 ordinal: 66000
