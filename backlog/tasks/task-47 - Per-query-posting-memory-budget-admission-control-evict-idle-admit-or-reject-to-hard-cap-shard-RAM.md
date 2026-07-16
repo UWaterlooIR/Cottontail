@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-16 03:54'
+updated_date: '2026-07-16 04:28'
 labels: []
 dependencies:
   - TASK-46
@@ -21,18 +21,16 @@ The core memory-safety fix. Replace the lazy SimpleIdx cache cap (large_limit_) 
 
 ## Acceptance Criteria
 <!-- AC:BEGIN -->
-- [ ] #1 A per-server posting-memory budget B is configurable via a server flag and enforced; for every ranked query (cover_search, tiered_query_search, multitext) the server computes W = sum of the distinct referenced leaves' decompressed posting bytes from count_ (header reads) BEFORE building any ranking hopper, using a conservative bytes/annotation factor
-- [ ] #2 Admission control: if W <= B the query runs after evicting idle (non-needed, LRU) cache to make room, and process posting memory stays <= B for the duration; if W > B the query is REJECTED before materializing any of its postings, with an error naming the largest offending term(s)
-- [ ] #3 The rejection propagates as an engine error through the existing controller bounce (controller.py) to the Searcher, which reformulates a narrower query; searcher.md and mt_tiered_searcher.md advise dropping the broadest terms on an over-budget bounce
-- [ ] #4 A SimpleIdx reserve/evict entry point evicts idle (LRU, not-in-this-query) cache entries to free room for W and reports infeasibility when W > B even with a fully cold cache; features the query needs are never evicted out from under it
-- [ ] #5 The standalone lazy large_limit_/large_threshold_ cap is retired (or explicitly demoted to a cache-reuse bound subordinate to B), with the decision documented; there is ONE authoritative memory knob (B)
+- [x] #1 A per-server posting-memory budget B is configurable via a server flag and enforced; for every ranked query (cover_search, tiered_query_search, multitext) the server computes W = sum of the distinct referenced leaves' decompressed posting bytes from count_ (header reads) BEFORE building any ranking hopper, using a conservative bytes/annotation factor
+- [x] #2 Admission control: if W <= B the query runs after evicting idle (non-needed, LRU) cache to make room, and process posting memory stays <= B for the duration; if W > B the query is REJECTED before materializing any of its postings, with an error naming the largest offending term(s)
+- [x] #3 The rejection propagates as an engine error through the existing controller bounce (controller.py) to the Searcher, which reformulates a narrower query; searcher.md and mt_tiered_searcher.md advise dropping the broadest terms on an over-budget bounce
+- [x] #4 A SimpleIdx reserve/evict entry point evicts idle (LRU, not-in-this-query) cache entries to free room for W and reports infeasibility when W > B even with a fully cold cache; features the query needs are never evicted out from under it
+- [x] #5 The standalone lazy large_limit_/large_threshold_ cap is retired (or explicitly demoted to a cache-reuse bound subordinate to B), with the decision documented; there is ONE authoritative memory knob (B)
 - [ ] #6 Verified end-to-end: rag2026-2 mt completes with per-server RSS bounded under B+base (< 40 GB) -- queries that would have OOM'd are bounced and reformulated rather than crashing a shard; a within-budget gcl run is behavior-unchanged
-- [ ] #7 Concurrency: budget accounting is process-global (a shared reservation across the --threads workers so concurrent queries' W sum against B) OR documented as an MVP that is safe only because the workload is one-query-per-shard-at-a-time, with the shared-reservation version specified as the hardening follow-up
-- [ ] #8 Eviction is MINIMAL: reserve() evicts idle entries LRU only until the query fits (idle_remaining <= B - W), retaining the rest of the cache warm for reuse; it never evicts more than necessary and never evicts features the query needs
-- [ ] #9 The over-budget bounce is a PROPER coaching message (not a bare error): it states the query cannot run (would exceed the per-query memory budget), NAMES the largest-posting-list terms sorted biggest-first (from the count_ data), and instructs the searcher to reduce the number of terms and ESPECIALLY drop/replace high-frequency 'stop-word'-like common terms that dominate the budget; searcher.md and mt_tiered_searcher.md carry matching proactive guidance
+- [x] #7 Concurrency: budget accounting is process-global (a shared reservation across the --threads workers so concurrent queries' W sum against B) OR documented as an MVP that is safe only because the workload is one-query-per-shard-at-a-time, with the shared-reservation version specified as the hardening follow-up
+- [x] #8 Eviction is MINIMAL: reserve() evicts idle entries LRU only until the query fits (idle_remaining <= B - W), retaining the rest of the cache warm for reuse; it never evicts more than necessary and never evicts features the query needs
+- [x] #9 The over-budget bounce is a PROPER coaching message (not a bare error): it states the query cannot run (would exceed the per-query memory budget), NAMES the largest-posting-list terms sorted biggest-first (from the count_ data), and instructs the searcher to reduce the number of terms and ESPECIALLY drop/replace high-frequency 'stop-word'-like common terms that dominate the budget; searcher.md and mt_tiered_searcher.md carry matching proactive guidance
 <!-- AC:END -->
-
-
 
 ## Implementation Plan
 
@@ -114,3 +112,9 @@ Sort the named terms by posting size (largest first) and list the top few so the
 
 Prompt updates (proactive, not just reactive): searcher.md and mt_tiered_searcher.md gain a short note that each query has a memory budget, so avoid packing in many terms and avoid bare high-frequency/stop-word terms; on an OVER-BUDGET bounce, cut the named terms.
 <!-- SECTION:PLAN:END -->
+
+## Implementation Notes
+
+<!-- SECTION:NOTES:BEGIN -->
+Implemented on branch claude/excise-diagnostic-counts (commit ddb94c2), stacked on TASK-46. Idx interface gains posting_bytes/posting_budget/set_posting_budget/reserve (no-op defaults). SimpleIdx: byte-based cache accounting (large_bytes_) + budget (budget_bytes_, default ~24 GB) replaces the annotation-count large_total_/large_limit_ lazy cap; the COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION compile guard is retired (unconditional). W is EXACT from the PstRecord header (n + qst/fst), not a conservative factor. reserve() evicts idle LARGE features LRU, protecting , down to needed_cached + (B - W) -- minimal eviction, never a needed feature; load_cache keeps a lazy byte backstop for non-reserving paths. Server flag --posting-budget-gb (default 24; 0 = off). Handlers (cover_search + tiered/multitext) call posting_budget_admit before ranking (tiered sizes the UNION of all tiers' leaves); over-budget -> OVER BUDGET bounce naming biggest terms (adaptive GB/MB). Prompts updated. Concurrency = per-query MVP (safe for the one-query-per-shard workload); process-global reservation is the documented hardening follow-up. Tests: //test:all 5/5 incl. new JsonlCover.PostingMemoryBudgetGuard (tight rejects / generous admits / 0 disables); Python isj 242 passed. End-to-end verified on Scrapheap/climbmix-100k-porter.burrow with a 0.5 MB budget: multi-term query rejected naming time/people/data, rare term admitted. AC#6 (full 8-shard rag2026-2 mt completing < 40 GB) is the remaining OPERATOR validation -- the guard mechanism is verified e2e here, but the heavy 8-server run is not runnable in this session.
+<!-- SECTION:NOTES:END -->
