@@ -6,7 +6,7 @@ title: >-
 status: In Progress
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-16 04:28'
+updated_date: '2026-07-16 04:45'
 labels: []
 dependencies:
   - TASK-46
@@ -117,4 +117,6 @@ Prompt updates (proactive, not just reactive): searcher.md and mt_tiered_searche
 
 <!-- SECTION:NOTES:BEGIN -->
 Implemented on branch claude/excise-diagnostic-counts (commit ddb94c2), stacked on TASK-46. Idx interface gains posting_bytes/posting_budget/set_posting_budget/reserve (no-op defaults). SimpleIdx: byte-based cache accounting (large_bytes_) + budget (budget_bytes_, default ~24 GB) replaces the annotation-count large_total_/large_limit_ lazy cap; the COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION compile guard is retired (unconditional). W is EXACT from the PstRecord header (n + qst/fst), not a conservative factor. reserve() evicts idle LARGE features LRU, protecting , down to needed_cached + (B - W) -- minimal eviction, never a needed feature; load_cache keeps a lazy byte backstop for non-reserving paths. Server flag --posting-budget-gb (default 24; 0 = off). Handlers (cover_search + tiered/multitext) call posting_budget_admit before ranking (tiered sizes the UNION of all tiers' leaves); over-budget -> OVER BUDGET bounce naming biggest terms (adaptive GB/MB). Prompts updated. Concurrency = per-query MVP (safe for the one-query-per-shard workload); process-global reservation is the documented hardening follow-up. Tests: //test:all 5/5 incl. new JsonlCover.PostingMemoryBudgetGuard (tight rejects / generous admits / 0 disables); Python isj 242 passed. End-to-end verified on Scrapheap/climbmix-100k-porter.burrow with a 0.5 MB budget: multi-term query rejected naming time/people/data, rare term admitted. AC#6 (full 8-shard rag2026-2 mt completing < 40 GB) is the remaining OPERATOR validation -- the guard mechanism is verified e2e here, but the heavy 8-server run is not runnable in this session.
+
+CONCURRENCY (AC#7) hardened beyond the MVP (commit 1f24c22): added a server-level g_ranking_mutex (semaphore of 1) held around every materializing endpoint (search_text/gcl, cover_search, tiered_query_search, multitext_tiered_search, count_matches), so at most ONE ranked query materializes at a time and the per-query budget holds even under concurrent clients; get_document/healthz are NOT serialized (reads + health checks stay concurrent). The working set is released (local hoppers destroyed) by the time provider.with returns and the lock drops -- no deadlock (verified: 3 concurrent cover_search serialize + return 200 while a mid-flight healthz answers in <1 ms). The finer byte-level global reservation (allow overlap up to B via a shared reserved_bytes_ + condition_variable) remains an optional future refinement; the semaphore is a complete correctness solution for the one-materializing-query-at-a-time invariant.
 <!-- SECTION:NOTES:END -->
