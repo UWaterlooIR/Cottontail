@@ -94,6 +94,17 @@ bool is_loopback(const std::string &host) {
 // into every spec here -- deliberately NOT readable from the request JSON.
 size_t g_rank_threads = 1;
 
+// TASK-47 (concurrency safety net for the per-query posting-memory budget). The
+// budget is enforced PER query; reserve() does not account for two ranked queries
+// materializing their working sets at the same time. This mutex serializes the
+// ranked/materializing endpoints so at most ONE is in flight per server, keeping
+// the resident working set within the budget even if clients send concurrent
+// requests. The ISJ driver already issues one query per shard at a time, so this
+// is essentially never contended -- it makes the sequential assumption ENFORCED
+// rather than merely assumed. Non-materializing endpoints (get_document, healthz)
+// are deliberately NOT serialized, so the judger's document reads stay concurrent.
+std::mutex g_ranking_mutex;
+
 QuerySpec spec_from(const json &b, bool is_gcl) {
   QuerySpec s;
   s.is_gcl = is_gcl;
@@ -381,6 +392,8 @@ int main(int argc, char **argv) {
       std::vector<Hit> hits;
       std::string e;
       cottontail::addr t0 = cottontail::now();
+      // Serialize ranked/materializing queries (one working set at a time).
+      std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
       bool ok = provider.with([&](std::shared_ptr<cottontail::Warren> &w) {
         return cottontail::jsonl::jsonl_query(w, spec, &hits, &e);
       });
@@ -412,6 +425,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_cover_search(w, spec, &resp,
@@ -440,6 +454,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_tiered_query_search(w, spec,
@@ -472,6 +487,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_multitext_tiered_search(
@@ -527,6 +543,9 @@ int main(int argc, char **argv) {
              }
              long n = 0;
              std::string e;
+             // count_matches builds + walks a query hopper (materializes the
+             // referenced terms), so it shares the ranking serialization.
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_count(w, spec, &n, &e);
