@@ -13,6 +13,10 @@
 #                 With N shard servers on one box, set this deliberately: the per-server
 #                 auto-budget does NOT know about sibling shard servers, so the real ceiling
 #                 is N x THREADS x RANK_THREADS. 4 is a modest per-shard default.
+#   POSTING_BUDGET_GB  --posting-budget-gb: per-query posting-memory budget per server
+#                 (TASK-47). A ranked query whose posting working set would exceed this is
+#                 rejected (bounced to the searcher) instead of materializing and risking an
+#                 OOM; idle cache is evicted to fit one that won't. Default 24; 0 = unlimited.
 #
 # Stop them with:  scripts/launch-full-shard-servers.sh stop
 #
@@ -23,6 +27,7 @@ IDXPARENT=${IDXPARENT:-/share/indexes/climbmix_full_shards}
 BASE_PORT=${BASE_PORT:-7000}
 THREADS=${THREADS:-8}
 RANK_THREADS=${RANK_THREADS:-4}
+POSTING_BUDGET_GB=${POSTING_BUDGET_GB:-24}
 SERVER_BIN="bazel-bin/apps/cottontail-jsonl-server"
 LOGDIR="$IDXPARENT/logs"
 
@@ -42,13 +47,14 @@ mapfile -t BURROWS < <(ls -d "$IDXPARENT"/part*.burrow 2>/dev/null | sort)
   exit 1
 }
 
-echo ">> launching ${#BURROWS[@]} servers from port $BASE_PORT (threads=$THREADS rank-threads=$RANK_THREADS)" >&2
+echo ">> launching ${#BURROWS[@]} servers from port $BASE_PORT (threads=$THREADS rank-threads=$RANK_THREADS posting-budget-gb=$POSTING_BUDGET_GB)" >&2
 i=0
 for burrow in "${BURROWS[@]}"; do
   port=$((BASE_PORT + i))
   log="$LOGDIR/server-$port.log"
   setsid "$SERVER_BIN" --burrow "$burrow" --host 127.0.0.1 --port "$port" \
-    --threads "$THREADS" --rank-threads "$RANK_THREADS" --no-auth > "$log" 2>&1 < /dev/null &
+    --threads "$THREADS" --rank-threads "$RANK_THREADS" \
+    --posting-budget-gb "$POSTING_BUDGET_GB" --no-auth > "$log" 2>&1 < /dev/null &
   echo "  port $port <- $(basename "$burrow")  (pid $!, log $log)" >&2
   i=$((i + 1))
 done
