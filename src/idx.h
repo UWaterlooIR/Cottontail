@@ -2,6 +2,7 @@
 #define COTTONTAIL_SRC_IDX_H_
 
 #include <memory>
+#include <set>
 #include <string>
 
 #include "src/core.h"
@@ -28,6 +29,19 @@ public:
   inline addr vocab() { return vocab_(); }
   inline void reset(){reset_();};
 
+  // Posting-memory budget (TASK-47). posting_bytes returns the decompressed byte
+  // cost of materializing `feature` (0 for a non-cache Idx). posting_budget is the
+  // per-query byte ceiling this Idx enforces (0 = unbounded / no guard).
+  // set_posting_budget sets it. reserve(needed) evicts idle (not-in-`needed`) cache
+  // to make room for `needed`'s working set, or fails (with *error) if that set
+  // alone would exceed the budget; a non-cache Idx accepts everything.
+  inline addr posting_bytes(addr feature) { return posting_bytes_(feature); }
+  inline addr posting_budget() { return posting_budget_(); }
+  inline void set_posting_budget(addr bytes) { set_posting_budget_(bytes); }
+  inline bool reserve(const std::set<addr> &needed, std::string *error = nullptr) {
+    return reserve_(needed, error);
+  }
+
   virtual ~Idx(){};
   Idx(const Idx &) = delete;
   Idx &operator=(const Idx &) = delete;
@@ -44,6 +58,14 @@ private:
   virtual addr count_(addr feature);
   virtual addr vocab_() = 0;
   virtual void reset_(){};
+  // Budget hooks default to "no budget": a plain Idx materializes nothing extra,
+  // reports an unbounded budget, and admits every reservation.
+  virtual addr posting_bytes_(addr /*feature*/) { return 0; }
+  virtual addr posting_budget_() { return 0; }
+  virtual void set_posting_budget_(addr /*bytes*/) {}
+  virtual bool reserve_(const std::set<addr> & /*needed*/, std::string * /*error*/) {
+    return true;
+  }
   std::string name_ = "";
 };
 } // namespace cottontail

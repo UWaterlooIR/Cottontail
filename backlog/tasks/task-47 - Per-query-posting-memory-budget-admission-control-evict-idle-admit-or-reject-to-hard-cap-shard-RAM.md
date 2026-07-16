@@ -3,10 +3,10 @@ id: TASK-47
 title: >-
   Per-query posting-memory budget: admission control (evict-idle ->
   admit-or-reject) to hard-cap shard RAM
-status: To Do
+status: In Progress
 assignee: []
 created_date: '2026-07-15 22:37'
-updated_date: '2026-07-15 22:53'
+updated_date: '2026-07-16 03:54'
 labels: []
 dependencies:
   - TASK-46

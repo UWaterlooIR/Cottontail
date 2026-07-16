@@ -175,6 +175,11 @@ void usage(const char *prog) {
             << "                  default 0 = auto-budget: allowed hardware\n"
             << "                  threads / --threads, so handlers x rank-threads\n"
             << "                  never exceeds the hardware cap\n"
+            << "  --posting-budget-gb <g>  per-query posting-memory budget in GB\n"
+            << "                  (TASK-47): a ranked query whose posting working\n"
+            << "                  set would exceed this is rejected (bounced to the\n"
+            << "                  searcher); idle cache is evicted to fit one that\n"
+            << "                  won't. Default 24; 0 = unlimited (no guard)\n"
             << "  --token <t>     bearer token (prefer env COTTONTAIL_API_TOKEN)\n"
             << "  --no-auth       disable auth (loopback dev only)\n";
 }
@@ -185,6 +190,7 @@ int main(int argc, char **argv) {
   int port = 8080;
   int threads = 4;
   size_t rank_threads = 0; // 0 = auto-budget (see usage)
+  double posting_budget_gb = 24.0; // per-query posting-memory budget; 0 = unlimited
   bool no_auth = false;
 
   for (int i = 1; i < argc; i++) {
@@ -206,6 +212,8 @@ int main(int argc, char **argv) {
       threads = std::stoi(next());
     else if (a == "--rank-threads")
       rank_threads = std::stoul(next());
+    else if (a == "--posting-budget-gb")
+      posting_budget_gb = std::stod(next());
     else if (a == "--token")
       flag_token = next();
     else if (a == "--no-auth")
@@ -258,6 +266,13 @@ int main(int argc, char **argv) {
     std::cerr << "could not open burrow: " << error << "\n";
     return 2;
   }
+  // Per-query posting-memory budget (TASK-47): the search handlers reject a query
+  // whose posting working set would exceed this and evict idle cache to fit one
+  // that won't. Set on the shared Idx before cloning (clones share it). 0 =
+  // unlimited (no guard).
+  if (warren->idx() != nullptr)
+    warren->idx()->set_posting_budget(
+        static_cast<cottontail::addr>(posting_budget_gb * 1e9));
   // Fixed pool of read handles: the original + (threads-1) clones, built once at
   // startup, single-threaded (clone() auto-starts a started parent). Each clone
   // shares the idx cache but gets its own Txt fstream; see the threadpool spec.
@@ -525,6 +540,7 @@ int main(int argc, char **argv) {
   std::cerr << "cottontail-jsonl-server listening on " << host << ":" << port
             << " burrow=" << burrow << " threads=" << threads
             << " rank_threads=" << rank_threads << (rank_auto ? " (auto)" : "")
+            << " posting_budget_gb=" << posting_budget_gb
             << (auth_required ? " (auth on)" : " (NO AUTH)") << "\n";
   if (!svr.listen(host, port)) {
     std::cerr << "bind failed on " << host << ":" << port << "\n";

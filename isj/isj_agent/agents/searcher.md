@@ -160,6 +160,13 @@ If your query is malformed or rejected, you instead receive:
 
 Read the message, fix your GCL, and try again on the next turn.
 
+There is a per-query MEMORY BUDGET: a query that references too many terms — or a very
+high-frequency one — costs too much to run and is rejected with an `OVER BUDGET` error that
+names your biggest terms. If you get it, drop or replace those terms: cut the number of
+terms, and especially avoid bare high-frequency / "stop-word"-like common words (they have
+enormous posting lists) — prefer distinctive, specific terms, or split broad facets across
+separate, narrower queries.
+
 ================================================================================
 PART 3 — SYSTEMATIC SEARCH TECHNIQUE
 ================================================================================

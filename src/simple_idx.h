@@ -1,13 +1,12 @@
 #ifndef COTTONTAIL_SRC_SIMPLE_IDX_H_
 #define COTTONTAIL_SRC_SIMPLE_IDX_H_
 
-#define COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION 1
-
 #include <condition_variable>
 #include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -44,7 +43,17 @@ private:
   addr count_(addr feature) final;
   addr vocab_() final;
   void reset_();
+  addr posting_bytes_(addr feature) final;
+  addr posting_budget_() final;
+  void set_posting_budget_(addr bytes) final;
+  bool reserve_(const std::set<addr> &needed, std::string *error) final;
   std::shared_ptr<CacheRecord> load_cache(addr feature);
+  // Bytes a feature will occupy if materialized, counted toward the budget only
+  // when it is "large" (n > large_threshold_); 0 otherwise. Caller holds cache_lock_.
+  addr feature_bytes_locked(addr feature);
+  // Evict idle large features (in ages_, NOT in `protect`), oldest-first, until
+  // large_bytes_ <= target_bytes. Caller holds cache_lock_.
+  void evict_idle_locked(addr target_bytes, const std::set<addr> &protect);
   bool multithreaded_ = true;
   std::string posting_compressor_name_;
   std::string posting_compressor_recipe_;
@@ -59,14 +68,17 @@ private:
   std::mutex cache_lock_;
   std::map<addr, std::shared_ptr<CacheRecord>> cache_;
   std::map<addr, addr> counts_;
-#if COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION
+  // Posting-memory budget + LRU cache management (TASK-45 + TASK-47). Only "large"
+  // features (n > large_threshold_) are tracked/evicted; small ones are negligible
+  // and always kept. large_bytes_ is the total decompressed byte cost of the cached
+  // large features; budget_bytes_ is the per-query ceiling (set from the server flag;
+  // default ~24 GB). reserve() enforces it as admission control; load_cache keeps a
+  // lazy byte backstop for any path that doesn't reserve.
   addr stamp_ = 0;
-  std::map<addr, addr> ages_;
-  addr large_threshold_ = 1024;
-  addr large_limit_ = 3000000000L; // ~3e9 annotations ~= 24 GB at 8 B each
-                                   // (TASK-45; was 1024*1024*1024 ~= 8.6 GB)
-  addr large_total_ = 0;
-#endif
+  std::map<addr, addr> ages_;              // LRU access stamp per cached large feature
+  addr large_threshold_ = 1024;            // n <= this is "small": never tracked/evicted
+  addr large_bytes_ = 0;                    // resident bytes of cached large features
+  addr budget_bytes_ = 24000000000L;        // ~24 GB; set_posting_budget() overrides
 };
 
 bool interpret_simple_idx_recipe(const std::string &recipe,

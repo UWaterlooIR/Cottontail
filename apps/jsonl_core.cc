@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iterator>
 #include <set>
 #include <sstream>
@@ -522,10 +523,8 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
 }
 
 
-// The query's content-term LEAVES, deduped first-seen. RETAINED (TASK-46) for
-// TASK-47's posting-memory budget guard, which enumerates the terms a query will
-// materialize to size its working set; it has no caller in the interim (hence
-// [[maybe_unused]]). Operators /
+// The query's content-term LEAVES, deduped first-seen. Used by the posting-memory
+// budget guard (TASK-47) to enumerate the terms a query will materialize. Operators /
 // parens / :tags are skipped. A BARE word (including a word* marker) is kept AS
 // WRITTEN; a QUOTED phrase is decomposed like the match path -- whitespace-split so a
 // trailing '*' survives, then PER WORD a word* marker is kept as-is, else the word is
@@ -540,8 +539,8 @@ bool cover_ranking(std::shared_ptr<Warren> warren, const std::string &query,
 // geometry, not a query term, and reporting the corpus count of the token "12"
 // is noise in the model's feedback. A digits-only token is skipped iff the
 // preceding token was '#'; a standalone numeric term ("1984") stays a real leaf.
-[[maybe_unused]] std::vector<std::string>
-cover_leaves(const std::string &gcl, std::shared_ptr<Tokenizer> tokenizer) {
+std::vector<std::string> cover_leaves(const std::string &gcl,
+                                      std::shared_ptr<Tokenizer> tokenizer) {
   std::vector<std::string> out;
   std::set<std::string> seen;
   bool after_width_op = false;
@@ -604,6 +603,73 @@ cover_leaves(const std::string &gcl, std::shared_ptr<Tokenizer> tokenizer) {
   if (!in_phrase)
     add(tok);
   return out;
+}
+
+// Posting-memory admission control (TASK-47). Given a query's content-term leaves,
+// size the working set W = sum over the DISTINCT features of the decompressed
+// posting bytes each will occupy (cheap: PstRecord header reads, no
+// materialization). If W fits the Idx's per-query budget, evict idle cache to make
+// room and admit (true). If W alone exceeds the budget, reject (false) with a
+// coaching *error naming the biggest terms, which the controller bounces back to
+// the searcher. A 0 budget (or a non-cache Idx) admits everything.
+bool posting_budget_admit(std::shared_ptr<Warren> warren,
+                          const std::vector<std::string> &leaves,
+                          std::shared_ptr<Stemmer> stemmer, std::string *error) {
+  auto idx = warren->idx();
+  if (idx == nullptr)
+    return true;
+  addr budget = idx->posting_budget();
+  if (budget <= 0)
+    return true; // no guard
+  auto featurizer = warren->featurizer();
+  std::set<addr> needed;
+  std::vector<std::pair<std::string, addr>> sizes; // (term as written, bytes)
+  addr W = 0;
+  for (const auto &leaf : leaves) {
+    std::string atom;
+    auto star = leaf.find('*');
+    if (star != std::string::npos && star == leaf.size() - 1 && star > 0 &&
+        stemmer != nullptr)
+      atom = resolve_family_atom(stemmer, leaf.substr(0, star));
+    else
+      atom = leaf;
+    addr feature = featurizer->featurize(atom);
+    if (!needed.insert(feature).second)
+      continue; // a duplicate term resolves to a feature we already counted
+    addr b = idx->posting_bytes(feature);
+    W += b;
+    sizes.emplace_back(leaf, b);
+  }
+  if (W <= budget)
+    return idx->reserve(needed, error); // make room; cannot fail (W <= budget)
+  // Over budget: build an actionable bounce naming the biggest terms.
+  std::sort(sizes.begin(), sizes.end(),
+            [](const std::pair<std::string, addr> &a,
+               const std::pair<std::string, addr> &b) {
+              return a.second > b.second;
+            });
+  auto human = [](addr bytes) {
+    std::ostringstream os;
+    os << std::fixed << std::setprecision(1);
+    if (bytes >= 1000000000L)
+      os << (double)bytes / 1e9 << " GB";
+    else
+      os << (double)bytes / 1e6 << " MB";
+    return os.str();
+  };
+  std::string biggest;
+  for (size_t i = 0; i < sizes.size() && i < 4; i++)
+    biggest += (i ? ", " : "") + sizes[i].first + "=" + human(sizes[i].second);
+  safe_error(error) =
+      "OVER BUDGET: this query would load ~" + human(W) +
+      " of posting lists, over the " + human(budget) +
+      " per-query memory budget, so it cannot run. Largest terms: " + biggest +
+      ". To fix: (1) reduce the NUMBER of terms; (2) especially drop or replace "
+      "high-frequency \"stop-word\"-like common words -- a few very common terms "
+      "dominate the budget; prefer distinctive, specific terms; (3) if you need "
+      "broad coverage, split the facets across SEPARATE narrower queries instead "
+      "of one wide query.";
+  return false;
 }
 
 } // namespace
@@ -960,6 +1026,12 @@ bool jsonl_cover_search(std::shared_ptr<Warren> warren, const CoverSpec &spec,
   auto check = warren->hopper_from_gcl(rewritten, error);
   if (check == nullptr)
     return false;
+  // Posting-memory admission (TASK-47): reject an over-budget query (the controller
+  // bounces it to the searcher) and evict idle cache to fit one that does, before
+  // materializing any postings.
+  if (!posting_budget_admit(warren, cover_leaves(spec.query, warren->tokenizer()),
+                            stemmer, error))
+    return false;
   // ONE cp-native pass (doc-6 section 4): rank plain :item -- over-fetching
   // depth = top_k + |exclude| so the exclude cp post-filter still fills top_k.
   std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
@@ -1064,6 +1136,16 @@ bool jsonl_tiered_query_search(std::shared_ptr<Warren> warren,
     }
     rewritten[i] = rw;
   }
+
+  // Posting-memory admission (TASK-47): size the working set over the UNION of all
+  // tiers' leaves (the peak a tiered program materializes) and reject/evict before
+  // materializing.
+  std::vector<std::string> all_leaves;
+  for (const auto &tier : spec.tiers)
+    for (const auto &leaf : cover_leaves(tier, warren->tokenizer()))
+      all_leaves.push_back(leaf);
+  if (!posting_budget_admit(warren, all_leaves, stemmer, error))
+    return false;
 
   std::unordered_set<addr> exclude(spec.exclude.begin(), spec.exclude.end());
 

@@ -441,6 +441,42 @@ TEST(JsonlCover, FamilyRecallVsBareExact) {
   w->end();
 }
 
+// TASK-47: the per-query posting-memory budget. A byte-tight budget rejects a
+// query BEFORE ranking with an OVER BUDGET bounce; a generous budget admits it;
+// a 0 budget disables the guard. (Eviction under a real large working set is
+// exercised by the rag2026-2 end-to-end run, not this tiny fixture.)
+TEST(JsonlCover, PostingMemoryBudgetGuard) {
+  std::string error, burrow;
+  ASSERT_TRUE(build_rows("cover_budget", kCoverRows, "porter", &burrow, &error))
+      << error;
+  auto w = open_burrow(burrow, &error);
+  ASSERT_NE(w, nullptr) << error;
+  CoverSpec q;
+  q.query = "bear";
+  q.top_k = 5;
+
+  // Generous budget: admitted, returns hits.
+  w->idx()->set_posting_budget(1000000000L); // 1 GB
+  CoverResponse ok;
+  ASSERT_TRUE(jsonl_cover_search(w, q, &ok, &error)) << error;
+  EXPECT_FALSE(ok.results.empty());
+
+  // Byte-tight budget: rejected before ranking, with an OVER BUDGET message.
+  w->idx()->set_posting_budget(1); // 1 byte -- any term's postings exceed it
+  CoverResponse rej;
+  std::string rej_err;
+  EXPECT_FALSE(jsonl_cover_search(w, q, &rej, &rej_err));
+  EXPECT_NE(rej_err.find("OVER BUDGET"), std::string::npos) << rej_err;
+  EXPECT_TRUE(rej.results.empty());
+
+  // Budget 0 disables the guard: admitted again.
+  w->idx()->set_posting_budget(0);
+  CoverResponse off;
+  ASSERT_TRUE(jsonl_cover_search(w, q, &off, &error)) << error;
+  EXPECT_FALSE(off.results.empty());
+  w->end();
+}
+
 // AC#2 (second clause): a burrow built without a stemmer is unaffected, and a
 // word* query against it is a hard error (no silent fallback) -- AC#7.
 TEST(JsonlCover, NoStemmedStreamIsAnError) {

@@ -1,8 +1,6 @@
 #include "src/simple_idx.h"
 
-#if COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION
 #include <algorithm>
-#endif
 #include <cassert>
 #include <fstream>
 #include <memory>
@@ -248,11 +246,9 @@ void SimpleIdx::reset_() {
   assert(pst_map_size == pst_map_.size());
   pst_ = working_->reader(PST_NAME);
   assert(pst_ != nullptr);
-#if COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION
   stamp_ = 0;
   ages_.clear();
-  large_total_ = 0;
-#endif
+  large_bytes_ = 0;
   cache_.clear();
   counts_.clear();
   cache_lock_.unlock();
@@ -310,10 +306,8 @@ std::shared_ptr<CacheRecord> SimpleIdx::load_cache(addr feature) {
   std::map<addr, std::shared_ptr<CacheRecord>>::iterator cached;
   if ((cached = cache_.find(feature)) != cache_.end()) {
     std::shared_ptr<CacheRecord> c = cached->second;
-#if COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION
     if (c->n > large_threshold_)
       ages_[feature] = stamp_++;
-#endif
     cache_lock_.unlock();
     return c;
   }
@@ -336,30 +330,26 @@ std::shared_ptr<CacheRecord> SimpleIdx::load_cache(addr feature) {
   pst_->read(buffer, where, amount);
   PstRecord *pstp = reinterpret_cast<PstRecord *>(buffer);
   c->n = pstp->n;
+  // Decompressed byte cost, read from the header BEFORE the decompress thread
+  // consumes `storage`: postings (always) + qostings (unless aliased, qst==0) +
+  // fostings (iff the feature carries values, fst>0). addr and fval are both 8 B.
+  c->bytes = pstp->n * (addr)sizeof(addr) +
+             (pstp->qst > 0 ? pstp->n * (addr)sizeof(addr) : 0) +
+             (pstp->fst > 0 ? pstp->n * (addr)sizeof(fval) : 0);
+  addr feat_bytes = c->bytes;
   std::thread t(decompress_cache, std::move(storage), posting_compressor_,
                 fvalue_compressor_, c);
   t.detach();
-#if COTTONTAIL_SIMPLE_IDX_CACHE_EJECTION
   if (c->n > large_threshold_) {
-    if (large_total_ > large_limit_) {
-      std::vector<addr> old;
-      for (auto &a : ages_)
-        old.push_back(a.first);
-      std::sort(old.begin(), old.end(),
-                [&](const auto &a, const auto &b) -> bool {
-                  return ages_[a] < ages_[b];
-                });
-      for (size_t i = 0; large_total_ > large_limit_; i++) {
-        counts_[old[i]] = cache_[old[i]]->n;
-        large_total_ -= cache_[old[i]]->n;
-        ages_.erase(old[i]);
-        cache_.erase(old[i]);
-      }
-    }
-    large_total_ += c->n;
+    // Lazy byte backstop for any caller that did NOT reserve(): keep resident
+    // large-feature bytes under budget by evicting the oldest idle features. A
+    // reserved query has already made room, so this is a no-op there.
+    if (budget_bytes_ > 0 && large_bytes_ + feat_bytes > budget_bytes_)
+      evict_idle_locked(
+          budget_bytes_ > feat_bytes ? budget_bytes_ - feat_bytes : 0, {});
+    large_bytes_ += feat_bytes;
     ages_[feature] = stamp_++;
   }
-#endif
   cache_[feature] = c;
   cache_lock_.unlock();
   return c;
@@ -414,6 +404,113 @@ addr SimpleIdx::count_(addr feature) {
   counts_[feature] = pstp.n;
   cache_lock_.unlock();
   return pstp.n;
+}
+
+addr SimpleIdx::feature_bytes_locked(addr feature) {
+  // Caller holds cache_lock_. Decompressed byte cost IF the feature is "large"
+  // (n > large_threshold_), else 0 -- consistent with what large_bytes_ tracks.
+  // Prefer the cached record; otherwise read just the PstRecord header.
+  auto it = cache_.find(feature);
+  if (it != cache_.end())
+    return it->second->n > large_threshold_ ? it->second->bytes : 0;
+  IdxRecord *map = pst_map_.data();
+  IdxRecord *irp = locate(feature, map, pst_map_.size());
+  if (irp == nullptr)
+    return 0;
+  addr where = (irp == map) ? 0 : (irp - 1)->end;
+  PstRecord pstp;
+  pst_->read(reinterpret_cast<char *>(&pstp), where, sizeof(PstRecord));
+  if (pstp.n <= large_threshold_)
+    return 0;
+  return pstp.n * (addr)sizeof(addr) +
+         (pstp.qst > 0 ? pstp.n * (addr)sizeof(addr) : 0) +
+         (pstp.fst > 0 ? pstp.n * (addr)sizeof(fval) : 0);
+}
+
+addr SimpleIdx::posting_bytes_(addr feature) {
+  // The FULL decompressed byte cost (not zeroed for small features): a caller uses
+  // it to size a query's working set and to name the biggest terms in a bounce.
+  std::lock_guard<std::mutex> lock(cache_lock_);
+  auto it = cache_.find(feature);
+  if (it != cache_.end())
+    return it->second->bytes;
+  IdxRecord *map = pst_map_.data();
+  IdxRecord *irp = locate(feature, map, pst_map_.size());
+  if (irp == nullptr)
+    return 0;
+  addr where = (irp == map) ? 0 : (irp - 1)->end;
+  PstRecord pstp;
+  pst_->read(reinterpret_cast<char *>(&pstp), where, sizeof(PstRecord));
+  return pstp.n * (addr)sizeof(addr) +
+         (pstp.qst > 0 ? pstp.n * (addr)sizeof(addr) : 0) +
+         (pstp.fst > 0 ? pstp.n * (addr)sizeof(fval) : 0);
+}
+
+addr SimpleIdx::posting_budget_() {
+  std::lock_guard<std::mutex> lock(cache_lock_);
+  return budget_bytes_;
+}
+
+void SimpleIdx::set_posting_budget_(addr bytes) {
+  std::lock_guard<std::mutex> lock(cache_lock_);
+  budget_bytes_ = bytes;
+}
+
+void SimpleIdx::evict_idle_locked(addr target_bytes,
+                                  const std::set<addr> &protect) {
+  // Caller holds cache_lock_. Evict idle large features (tracked in ages_, NOT in
+  // `protect`), oldest access first, until large_bytes_ <= target_bytes or none
+  // remain. Eviction only drops the cache_ map's reference; memory an in-flight
+  // hopper still holds is freed when that hopper releases.
+  if (large_bytes_ <= target_bytes)
+    return;
+  std::vector<addr> old;
+  old.reserve(ages_.size());
+  for (auto &a : ages_)
+    if (protect.find(a.first) == protect.end())
+      old.push_back(a.first);
+  std::sort(old.begin(), old.end(),
+            [&](addr x, addr y) { return ages_[x] < ages_[y]; });
+  for (size_t i = 0; i < old.size() && large_bytes_ > target_bytes; i++) {
+    auto it = cache_.find(old[i]);
+    if (it == cache_.end()) {
+      ages_.erase(old[i]);
+      continue;
+    }
+    counts_[old[i]] = it->second->n; // preserve the count for count_()
+    large_bytes_ -= it->second->bytes;
+    ages_.erase(old[i]);
+    cache_.erase(it);
+  }
+}
+
+bool SimpleIdx::reserve_(const std::set<addr> &needed, std::string *error) {
+  std::lock_guard<std::mutex> lock(cache_lock_);
+  if (budget_bytes_ <= 0)
+    return true; // no budget -> admit everything
+  // W = working-set bytes of the NEEDED large features (small ones are negligible
+  // and untracked). A needed feature is NEVER an eviction candidate.
+  addr W = 0;
+  for (addr f : needed)
+    W += feature_bytes_locked(f);
+  if (W > budget_bytes_) {
+    safe_error(error) = "query working set (" + std::to_string(W) +
+                        " B of postings) exceeds the per-query posting-memory "
+                        "budget (" +
+                        std::to_string(budget_bytes_) + " B)";
+    return false;
+  }
+  // Bytes of the needed set already resident (they stay). Evict idle (non-needed)
+  // features, oldest first, so that after loading the rest of `needed` the total
+  // large-feature bytes stay <= budget: keep idle only up to (budget - W).
+  addr needed_cached = 0;
+  for (addr f : needed) {
+    auto it = cache_.find(f);
+    if (it != cache_.end() && it->second->n > large_threshold_)
+      needed_cached += it->second->bytes;
+  }
+  evict_idle_locked(needed_cached + (budget_bytes_ - W), needed);
+  return true;
 }
 
 addr SimpleIdx::vocab_() {

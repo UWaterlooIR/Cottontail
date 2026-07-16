@@ -20,7 +20,11 @@ ranking: the TOP of the ranking (with a short summary each, shown whatever the g
 see what your tiers surface up top, including docs judged on a prior turn), PLUS any deeper doc
 graded high (a gold nugget); each shown doc keeps its TRUE rank. It also returns a `descended`
 coverage aggregate. If the program fails to compile you get the compiler errors back -- fix
-them and resubmit.
+them and resubmit. There is also a per-query MEMORY BUDGET: a program that references too many
+terms across its tiers -- or a very high-frequency one -- is rejected with an `OVER BUDGET`
+error naming your biggest terms. If you get it, cut the number of terms and especially drop
+bare high-frequency / "stop-word"-like common words (they have enormous posting lists); prefer
+distinctive, specific terms, or split facets across separate, narrower programs.
 
 USE THE FEEDBACK: a term that matched nothing is dead -- infer it from weak/empty results and
 respell it; summaries teach you the collection's actual vocabulary (fold new synonyms and
