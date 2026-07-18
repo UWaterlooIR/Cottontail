@@ -341,12 +341,16 @@ std::shared_ptr<CacheRecord> SimpleIdx::load_cache(addr feature) {
                 fvalue_compressor_, c);
   t.detach();
   if (c->n > large_threshold_) {
-    // Lazy byte backstop for any caller that did NOT reserve(): keep resident
-    // large-feature bytes under budget by evicting the oldest idle features. A
-    // reserved query has already made room, so this is a no-op there.
-    if (budget_bytes_ > 0 && large_bytes_ + feat_bytes > budget_bytes_)
-      evict_idle_locked(
-          budget_bytes_ > feat_bytes ? budget_bytes_ - feat_bytes : 0, {});
+    // Track this large feature for LRU budget accounting. We deliberately do NOT
+    // evict here. Admission control (reserve()) has already trimmed the cache to
+    // fit the query's working set, and a ranking pass fans out parallel workers
+    // that each hold a hopper on the same big features; evicting from load_cache
+    // could drop a CacheRecord those workers still reference -- which frees nothing
+    // (the hopper keeps it alive) but decrements large_bytes_, so the feature is
+    // reloaded as a duplicate copy and RSS balloons far past the budget. Eviction
+    // therefore lives only in reserve(), which protects the needed set and runs
+    // between queries (serialized) when nothing is pinned. See
+    // docs/investigations/task47-budget-overshoot/.
     large_bytes_ += feat_bytes;
     ages_[feature] = stamp_++;
   }
