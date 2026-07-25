@@ -111,9 +111,18 @@ server. After query B, `large_bytes_ = 31.0 GB`, **not** ~62 GB — so `reserve(
 correctly evicted query A's working set before admitting B. The explosion is
 entirely *within* a single query, not accumulation across queries.
 
-## Recommended fix (proposed — needs approval before coding)
+## Fix (applied — commit `39a080d`)
 
-Two independent defects, in priority order:
+The primary fix was applied: **the lazy backstop's eviction was removed from
+`load_cache`; only the LRU accounting (`large_bytes_`, `ages_`) remains.**
+Eviction now lives solely in `reserve()` (admission control), which protects the
+needed set and runs between queries — serialized by the ranking mutex — when
+nothing is pinned, so it can never evict a pinned feature. Re-running the exact
+scenario after the fix: peak VmHWM **39.65 GB** at budget 32 / `--rank-threads 4`
+(query A + a disjoint query B, both correct); the 97.6 GB → 39.65 GB collapse
+confirms the backstop was the sole cause. All four test suites pass.
+
+The two defects the analysis identified, in priority order:
 
 1. **The lazy backstop must never evict a pinned (in-use) feature.** This is the
    bug. Preferred: **remove the lazy backstop in `load_cache` entirely** — every
@@ -137,6 +146,32 @@ With fix (1) alone, the worst case for this query on this shard is the intrinsic
 required, admission should bounce this query (its true set is ~32.5 GB) — i.e.
 the `OVER BUDGET` message telling the searcher to drop high-frequency common
 words is the right behaviour, and the margin in fix (2) makes it fire.
+
+## Production validation (full 119-topic run, 2026-07-19 → 07-24)
+
+The fix was validated on the real 8-shard ClimbMix stack under the ISJ Searcher,
+budget **36 GB/server**, with a standalone RSS guard armed to abort any server at
+48 GB. A full **119-topic gcl run** (`config-gcl-cover.toml`) completed over ~5
+days:
+
+- **No OOM, no crash, no guard abort.** Peak busiest server **42.7 GB** — under
+  the 44 GB warning and the 48 GB abort — across ~90k RSS samples. Peak all-8
+  total 339 GB (box is 503 GB).
+- **All 119 topics completed** with output and a `DONE` marker; no `errors.log`,
+  no engine timeouts, no tracebacks. ~1,540 judged passages/topic (median),
+  174,754 total.
+- **The admission guard worked exactly as designed:** exactly **2 `OVER BUDGET`
+  bounces** in the whole run (both on rag2026-13's / rag2026-89's stop-word-heavy
+  programs, e.g. `the`=14.8, `to`=7.5, `of`=7.5, `a`=6.4 GB), each returning the
+  drop-stop-words coaching; both topics still completed. No other query breached.
+- Notably, **rag2026-13 — the topic whose COO program produced the original field
+  breach — completed cleanly** on the fixed build.
+
+The bounded ~few-GB overshoot over `B` (fix 2, un-budgeted small features +
+transient decompression scratch) showed up as the 42.7 GB peak against the 36 GB
+budget; the operator accepted it as out of scope. Memory behaviour is now
+production-validated: admission bounds the working set, the budget prevents OOM,
+and full topic runs complete.
 
 ## Instrumentation (temporary, reverted)
 
