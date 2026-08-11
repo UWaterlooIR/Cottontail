@@ -219,20 +219,15 @@ TEST(JsonlCli, CoverWindowAndExcludeFlags) {
                         &code);
   ASSERT_EQ(code, 0) << out;
   json j = json::parse(out);
-  EXPECT_TRUE(j.contains("total_matches"));
-  EXPECT_TRUE(j.contains("atom_counts"));
   ASSERT_FALSE(j["results"].empty()) << out;
   long cp = j["results"][0]["cp"].get<long>();
 
-  // --exclude <cp> carves doc-002 (the only run* match): unjudged 0, results
-  // empty, total unchanged.
+  // --exclude <cp> carves doc-002 (the only run* match): results empty.
   out = run(std::string(kQueryBin) + " --burrow " + b + " --cover \"run*\" --exclude " +
                 std::to_string(cp) + " --format jsonl",
             &code);
   ASSERT_EQ(code, 0) << out;
   j = json::parse(out);
-  EXPECT_EQ(j["total_matches"], 1);
-  EXPECT_EQ(j["unjudged_matches"], 0);
   EXPECT_TRUE(j["results"].empty()) << out;
 }
 

@@ -14,6 +14,8 @@ namespace cottontail {
 
 struct CacheRecord {
   addr n;
+  addr bytes = 0; // decompressed size (postings + qostings + fostings), for the
+                  // SimpleIdx posting-memory budget accounting (TASK-47)
   std::shared_ptr<addr> postings;
   std::shared_ptr<addr> qostings;
   std::shared_ptr<fval> fostings;

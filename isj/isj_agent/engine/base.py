@@ -56,9 +56,9 @@ class SearchEngine(Protocol):
     ) -> SearchResponse:
         """Run an ordered cascade of GCL cover tiers (tiered_query_search).
 
-        The cascade itself -- per-tier ranking, cross-tier de-duplication, per-tier
-        summaries, the union `atom_counts`, and the exact distinct match count -- runs
-        server-side; this returns the merged, cover_search-shaped `SearchResponse`.
+        The cascade itself -- per-tier ranking, cross-tier de-duplication, and per-tier
+        summaries -- runs server-side; this returns the merged, cover_search-shaped
+        `SearchResponse` (just the ranked results).
         `exclude` is the per-query consumed set as docno strings (the engine is stateless).
         MAY raise EngineError on any engine-side failure -- notably a malformed tier,
         which fails the WHOLE request (naming the offending tier).

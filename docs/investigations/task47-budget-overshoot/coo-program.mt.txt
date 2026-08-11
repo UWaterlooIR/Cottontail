@@ -1,0 +1,14 @@
+coo = "chief operating officer" + "coo" + "head of operations"
+stage = "seed" + "series a" + ("early" ^ "stage")
+sector = "saas"
+founderburn = ("founder" ^ "burnout") + ("founder" ^ "overload")
+oper = ("operational" ^ "relief") + ("process" ^ "improvement") + ("scaling" ^ "operations")
+culture = ("culture" ^ "fit") + ("culture" ^ "impact")
+proscons = ("pros and cons" + "benefit*" + "advantage*" + "drawback*" + "disadvantage*" + "con*")
+guide = ("when to hire a coo" + "coo hiring guide" + "coo advice" + "coo pros and cons")
+source = ("first round review" + "saastr" + "a16z" + "y combinator" + "harvard business review" + "techcrunch" + "medium")
+
+t0 = coo ^ stage ^ sector ^ proscons ^ (oper + culture) ^ source
+t1 = coo ^ stage ^ sector ^ guide ^ (oper + culture) ^ source
+t2 = coo ^ stage ^ sector ^ founderburn ^ (oper + culture) ^ source
+@rank t0 t1 t2

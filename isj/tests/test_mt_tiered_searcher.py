@@ -12,7 +12,7 @@ from isj_agent.controller import Controller
 from isj_agent.engine.base import EngineError
 from isj_agent.engine.fake import FakeEngine
 from isj_agent.protocol.queryable import MultiTextProgram
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
+from isj_agent.protocol.search import Hit, SearchResponse, Verdict
 
 PROGRAM = 'b0 = "black" <> "bear*"\nb1 = "bear*"\nq0 = b0 ^ b1\n@rank q0 b1\n'
 
@@ -108,8 +108,6 @@ def test_real_searcher_runs_end_to_end_through_controller():
     client = StubClient([SimpleNamespace(content="", tool_calls=[_tool_call(PROGRAM)])])
     searcher = MultiTextTieredSearcher(client, "stub-model")
     resp = SearchResponse(
-        total_matches=2, unjudged_matches=2,
-        atom_counts=[AtomCount(term="bear*", count=9)],
         results=[Hit(rank=1, score=3.0, id="10", summary="s10"),
                  Hit(rank=2, score=2.0, id="20", summary="s20")],
     )
@@ -132,9 +130,7 @@ def test_compile_error_bounces_diagnostics_to_the_next_turn():
     good_call = SimpleNamespace(content="", tool_calls=[_tool_call(PROGRAM, "c2")])
     client = StubClient([bad_call, good_call])
     searcher = MultiTextTieredSearcher(client, "stub-model")
-    ok = SearchResponse(total_matches=1, unjudged_matches=1,
-                        atom_counts=[AtomCount(term="bear*", count=9)],
-                        results=[Hit(rank=1, score=1.0, id="10", summary="s10")])
+    ok = SearchResponse(results=[Hit(rank=1, score=1.0, id="10", summary="s10")])
     engine = FakeEngine([EngineError(diagnostics), ok], {"10": "body-10"})
     ctl = Controller(searcher, _StubJudger(), engine, nonrelevant_streak=9, max_queries=2)
     result = ctl.run("black bear safety", intent_budget=100)

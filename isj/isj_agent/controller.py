@@ -256,15 +256,14 @@ class Controller:
             else:  # build the Searcher feedback via the coach
                 descended = outcome["descended"]
                 stats = {"count": len(descended),
-                         "relevant": sum(1 for d in descended if self._relevant(d["grade"])),
-                         "total_matches": outcome["total_matches"]}
+                         "relevant": sum(1 for d in descended if self._relevant(d["grade"]))}
                 if stats["count"] == 0:
                     # Nothing matched -> the query is over-constrained. Skip the (query-blind)
                     # coach and feed back deterministic broaden-it guidance instead.
                     emit("over_constrained", time.time(), 0.0,
                          query=pr.queryable.query_string())
                     content = self._compose_feedback(
-                        pr.queryable, outcome["atom_counts"], stats,
+                        pr.queryable, stats,
                         CoachOutput(report=OVER_CONSTRAINED_FEEDBACK))
                     self._tool(msgs, pr.tool_call_id, content)
                     self._maybe_compact(msgs, pr.usage.get("prompt_tokens"), shrunk, emit)
@@ -285,7 +284,7 @@ class Controller:
                     if coach_is_llm:  # a real LLM call happened; the mechanical coach is silent
                         emit("llm_call", c0, (time.time() - c0) * 1000.0, purpose="coach",
                              referenced=out.referenced, content=out.reasoning, **(out.usage or {}))
-                content = self._compose_feedback(pr.queryable, outcome["atom_counts"], stats, out)
+                content = self._compose_feedback(pr.queryable, stats, out)
                 self._tool(msgs, pr.tool_call_id, content)
 
             # Bound the cumulative context before the next propose (TASK-40.3). Trigger on the
@@ -312,8 +311,6 @@ class Controller:
                                     # already-judged): {rank(=global depth), id, score, grade,
                                     # summary, reason, is_new} -> the Searcher feedback selection
         buffer: list = []
-        total_matches = None
-        atom_counts: list | None = None   # per query-leaf corpus counts (None if the engine omits them)
         exhausted = False
 
         while not exhausted and len(recorded) < intent_budget:
@@ -329,22 +326,8 @@ class Controller:
                     emit("bounce", time.time(), 0.0, kind="engine_error", query=qs, message=str(e))
                     return {"error": str(e)}
                 eng_ms = (time.time() - ts) * 1000.0
-                if resp.total_matches is not None:
-                    total_matches = resp.total_matches
-                fetch_atoms = ([a.model_dump() for a in resp.atom_counts]
-                               if resp.atom_counts is not None else None)
-                if atom_counts is None and fetch_atoms is not None:  # representative = the query's first fetch
-                    atom_counts = fetch_atoms
-                # OPTIONAL diagnostics (Q3): only emit the counts an engine actually reports.
-                diag = {}
-                if resp.total_matches is not None:
-                    diag["total_matches"] = resp.total_matches
-                if resp.unjudged_matches is not None:
-                    diag["unjudged_matches"] = resp.unjudged_matches
-                if fetch_atoms is not None:
-                    diag["atom_counts"] = fetch_atoms
                 emit("search", ts, eng_ms, query=qs, returned=len(resp.results),
-                     results=[h.model_dump() for h in resp.results], **diag)
+                     results=[h.model_dump() for h in resp.results])
                 if not resp.results:  # dry / list exhausted
                     break
                 buffer = list(resp.results)
@@ -416,22 +399,17 @@ class Controller:
             if self.max_list_depth and depth >= self.max_list_depth:
                 break
 
-        # Return the raw descent + diagnostics; run() builds the Searcher feedback via the
-        # coach. (A malformed-query bounce still returns {"error": msg} above.)
-        return {"descended": descended, "atom_counts": atom_counts, "total_matches": total_matches}
+        # Return the raw descent; run() builds the Searcher feedback via the coach.
+        # (A malformed-query bounce still returns {"error": msg} above.)
+        return {"descended": descended}
 
-    def _compose_feedback(self, queryable, atom_counts, stats: dict, out) -> str:
+    def _compose_feedback(self, queryable, stats: dict, out) -> str:
         """Assemble the Searcher's feedback string: the query echo + coverage stats +
-        (Cottontail only, iff the engine returned them) atom counts + the coach's report.
-        The coach is query-blind/atom-blind, so the Controller owns the first three parts."""
+        the coach's report. The coach is query-blind, so the Controller owns the echo
+        and the coverage line."""
         cov = (f"Coverage: judged {stats['count']} results this query, "
                f"{stats['relevant']} relevant")
-        if stats["total_matches"] is not None:
-            cov += f"; {stats['total_matches']} total corpus matches"
         lines = [f"Your query: {queryable.query_string()}", cov + "."]
-        if atom_counts is not None:  # engine-provided per-term corpus counts (Cottontail only)
-            lines.append("Atom matches: " + ", ".join(
-                f"{a['term']}={a['count']}" for a in atom_counts))
         return "\n".join(lines) + "\n\n" + out.report
 
     @staticmethod

@@ -82,9 +82,7 @@ class FakeEngine:
     def _next(self, exclude: set[str]) -> SearchResponse:
         if self._i >= len(self._script):
             # Script exhausted: a dry response so the agent loop terminates.
-            return SearchResponse(
-                total_matches=0, unjudged_matches=0, atom_counts=[], results=[]
-            )
+            return SearchResponse(results=[])
         entry = self._script[self._i]
         self._i += 1
         if isinstance(entry, EngineError):
@@ -97,17 +95,9 @@ class FakeEngine:
 
 def _apply_exclude(resp: SearchResponse, exclude: set[str]) -> SearchResponse:
     """Mirror the engine's post-filter on a scripted batch: drop Hits whose id
-    is excluded, decrement unjudged_matches by the number removed (total_matches is
-    corpus-wide breadth and is unchanged), and re-rank the survivors 1..N."""
+    is excluded and re-rank the survivors 1..N."""
     if not exclude:
         return resp
     survivors = [h for h in resp.results if h.id not in exclude]
-    removed = len(resp.results) - len(survivors)
     reranked = [h.model_copy(update={"rank": i}) for i, h in enumerate(survivors, 1)]
-    return resp.model_copy(
-        update={
-            "results": reranked,
-            "unjudged_matches": (resp.unjudged_matches - removed)
-            if resp.unjudged_matches is not None else None,
-        }
-    )
+    return resp.model_copy(update={"results": reranked})

@@ -18,16 +18,19 @@ write anything outside the tool call -- no preamble, no explanation, no restatin
 The engine runs your tiers as a precise->broad CASCADE and returns a bounded VIEW of the graded
 ranking: the TOP of the ranking (with a short summary each, shown whatever the grade -- so you
 see what your tiers surface up top, including docs judged on a prior turn), PLUS any deeper doc
-graded high (a gold nugget); each shown doc keeps its TRUE rank. It also returns the count of
-documents matching across all tiers, a `descended` coverage aggregate, and per-term occurrence
-counts (atom_counts). If the program fails to compile you get the compiler errors back -- fix
-them and resubmit.
+graded high (a gold nugget); each shown doc keeps its TRUE rank. It also returns a `descended`
+coverage aggregate. If the program fails to compile you get the compiler errors back -- fix
+them and resubmit. There is also a per-query MEMORY BUDGET: a program that references too many
+terms across its tiers -- or a very high-frequency one -- is rejected with an `OVER BUDGET`
+error naming your biggest terms. If you get it, cut the number of terms and especially drop
+bare high-frequency / "stop-word"-like common words (they have enormous posting lists); prefer
+distinctive, specific terms, or split facets across separate, narrower programs.
 
-USE THE FEEDBACK: a term with atom count 0 is dead (drop or respell it); summaries teach you
-the collection's actual vocabulary (fold new synonyms and phrasings into your next facets);
-if matches are scarce, broaden (fewer ^ facets, more + variants); if plentiful but off-target,
-tighten (add a discriminating facet or use <> / < [N] proximity). Each turn's program should
-ADAPT -- do not resubmit the same program.
+USE THE FEEDBACK: a term that matched nothing is dead -- infer it from weak/empty results and
+respell it; summaries teach you the collection's actual vocabulary (fold new synonyms and
+phrasings into your next facets); if results are scarce, broaden (fewer ^ facets, more +
+variants); if plentiful but off-target, tighten (add a discriminating facet or use <> / < [N]
+proximity). Each turn's program should ADAPT -- do not resubmit the same program.
 
 PROGRAM FORMAT
   - One definition per line:  name = expression

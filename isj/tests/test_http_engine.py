@@ -9,9 +9,6 @@ from isj_agent.engine.http import HttpSearchEngine
 from isj_agent.protocol.search import SearchResponse
 
 _COVER_JSON = {
-    "total_matches": 3,
-    "unjudged_matches": 3,
-    "atom_counts": [{"term": "bear*", "count": 9}],
     "results": [
         {"rank": 1, "score": 12.3, "cp": 100, "summary": "black bear attacks are rare"},
     ],
@@ -46,7 +43,7 @@ def test_search_posts_body_and_auth_header():
         "query": "(^ black bear*)", "top_k": 5, "exclude": [100, 200], "window": 50,
     }
     assert isinstance(resp, SearchResponse)
-    assert resp.total_matches == 3 and resp.results[0].id == "100"
+    assert resp.results[0].id == "100"
 
 
 def test_no_auth_header_without_token():
@@ -99,7 +96,7 @@ def test_tiered_search_posts_tiers_body_and_auth_header():
     }
     # the response is the SAME cover_search shape (reused CoverResponse/SearchResponse)
     assert isinstance(resp, SearchResponse)
-    assert resp.total_matches == 3 and resp.results[0].id == "100"
+    assert resp.results[0].id == "100"
 
 
 def test_tiered_search_non_2xx_raises_engine_error_with_server_message():
@@ -156,7 +153,6 @@ def test_live_cover_search_round_trip():
     # A word* cover query needs a --stem porter burrow.
     resp = eng.search("(^ machine* learning*)", top_k=5)
     assert isinstance(resp, SearchResponse)
-    assert resp.total_matches >= 0
     if resp.results:
         body = eng.read(resp.results[0].id)
         assert body is None or isinstance(body, str)

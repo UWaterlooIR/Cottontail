@@ -8,7 +8,7 @@ from isj_agent.protocol.queryable import (
     Queryable,
     TieredQuery,
 )
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
+from isj_agent.protocol.search import Hit, SearchResponse
 
 
 def test_cover_is_a_queryable():
@@ -42,15 +42,13 @@ def test_cover_trace_and_string_forms_are_distinct():
 
 def test_cover_execute_forwards_args_and_returns_engine_response():
     resp = SearchResponse(
-        total_matches=3, unjudged_matches=3,
-        atom_counts=[AtomCount(term="a", count=5)],
         results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
     out = CoverQuery("(^ a b)").execute(eng, top_k=7, exclude=[], window=50)
     # execute() passes (gcl, top_k, exclude, window) straight through to engine.search
     assert eng.calls[0] == {"query": "(^ a b)", "top_k": 7, "exclude": [], "window": 50}
-    assert out.total_matches == 3 and out.results[0].id == "10"
+    assert out.results[0].id == "10"
 
 
 # --- TieredQuery (TASK-19) -------------------------------------------------
@@ -99,8 +97,6 @@ def test_tiered_trace_and_string_forms_are_distinct():
 
 def test_tiered_execute_forwards_tiers_to_engine_tiered_search():
     resp = SearchResponse(
-        total_matches=4, unjudged_matches=4,
-        atom_counts=[AtomCount(term="a", count=5)],
         results=[Hit(rank=1, score=2.0, id="11", summary="s")],
     )
     eng = FakeEngine([resp])
@@ -108,13 +104,13 @@ def test_tiered_execute_forwards_tiers_to_engine_tiered_search():
     # execute() forwards the tiers (as a list) + paging args to engine.tiered_search;
     # the recorded call carries a `tiers` key (not `query`), proving the tiered path.
     assert eng.calls[0] == {"tiers": ["(^ a b)", "(^ a)"], "top_k": 7, "exclude": ["1"], "window": 50}
-    assert out.total_matches == 4 and out.results[0].id == "11"
+    assert out.results[0].id == "11"
 
 
 def test_tiered_single_tier_execute_still_uses_tiered_search():
     # a single-tier TieredQuery is the base case; it still routes through tiered_search
     # (the C++ handler makes it behave like cover_search; the Python side stays uniform).
-    resp = SearchResponse(total_matches=1, unjudged_matches=1, atom_counts=[], results=[])
+    resp = SearchResponse(results=[])
     eng = FakeEngine([resp])
     TieredQuery(("(^ a b)",)).execute(eng, top_k=3, exclude=[], window=75)
     assert eng.calls[0] == {"tiers": ["(^ a b)"], "top_k": 3, "exclude": [], "window": 75}
@@ -161,8 +157,6 @@ def test_multitext_trace_and_string_forms():
 
 def test_multitext_execute_forwards_program_to_engine_multitext_search():
     resp = SearchResponse(
-        total_matches=2, unjudged_matches=2,
-        atom_counts=[AtomCount(term="bear*", count=9)],
         results=[Hit(rank=1, score=1.0, id="10", summary="s")],
     )
     eng = FakeEngine([resp])
@@ -189,13 +183,12 @@ def test_lucindri_from_tool_arguments_validates():
 
 
 def test_lucindri_execute_forwards_query_to_engine_search():
-    # A Lucindri response omits the optional counts (Q3) and carries negative scores.
+    # A Lucindri response carries negative scores.
     resp = SearchResponse(results=[Hit(rank=1, score=-4.5, id="shard_0_1", summary="s")])
     eng = FakeEngine([resp])
     out = LucindriQuery('#combine("weather")').execute(eng, top_k=5, exclude=["x"], window=75)
     assert eng.calls[0] == {"query": '#combine("weather")', "top_k": 5, "exclude": ["x"], "window": 75}
     assert out.results[0].id == "shard_0_1" and out.results[0].score == -4.5
-    assert out.total_matches is None and out.atom_counts is None  # omitted, not faked
 
 
 def test_lucindri_trace_and_string_forms():

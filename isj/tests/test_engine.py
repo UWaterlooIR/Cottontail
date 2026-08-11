@@ -3,20 +3,15 @@ from pydantic import ValidationError
 
 from isj_agent.engine.base import EngineError, SearchEngine
 from isj_agent.engine.fake import FakeEngine
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
+from isj_agent.protocol.search import Hit, SearchResponse, Verdict
 
 
-def _resp(cps, total=None, unjudged=None, atoms=None):
+def _resp(cps):
     results = [
         Hit(rank=i, score=10.0 - i, id=str(cp), summary=f"summary-{cp}")
         for i, cp in enumerate(cps, 1)
     ]
-    return SearchResponse(
-        total_matches=total if total is not None else len(cps),
-        unjudged_matches=unjudged if unjudged is not None else len(cps),
-        atom_counts=atoms or [AtomCount(term="bear*", count=9)],
-        results=results,
-    )
+    return SearchResponse(results=results)
 
 
 # --- type validation -------------------------------------------------------
@@ -57,7 +52,7 @@ def test_batches_in_order_then_dry():
     assert [h.id for h in eng.search("q1").results] == ["1", "2"]
     assert [h.id for h in eng.search("q2").results] == ["3"]
     dry = eng.search("q3")
-    assert dry.results == [] and dry.total_matches == 0 and dry.unjudged_matches == 0
+    assert dry.results == []
 
 
 def test_scripted_engine_error_raises_and_records():
@@ -68,13 +63,11 @@ def test_scripted_engine_error_raises_and_records():
     assert eng.calls[0]["query"] == "(^ bad"
 
 
-def test_exclude_drops_decrements_and_reranks():
-    eng = FakeEngine([_resp([10, 20, 30], total=3, unjudged=3)])
+def test_exclude_drops_and_reranks():
+    eng = FakeEngine([_resp([10, 20, 30])])
     resp = eng.search("q", exclude=["20"])
     assert [h.id for h in resp.results] == ["10", "30"]
     assert [h.rank for h in resp.results] == [1, 2]  # re-ranked 1..N
-    assert resp.unjudged_matches == 2  # decremented by 1 removed
-    assert resp.total_matches == 3  # corpus breadth unchanged
 
 
 def test_records_each_call_args():

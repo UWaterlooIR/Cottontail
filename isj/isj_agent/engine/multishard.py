@@ -5,9 +5,8 @@ its own cottontail-jsonl-server. This engine runs the query on all N shards IN P
 merges by score into the global top_k. It is exact because the cover-density / SSR ranker is
 STATS-FREE (score = sum over covers of 1/(K + q-p), fixed K, no corpus IDF/df): a document's
 score is the same on its shard as on the whole corpus, so cross-shard scores are directly
-comparable and the top_k of the union is the TRUE global top_k. total_matches /
-unjudged_matches / atom_counts are additive across shards. (GUARD: this holds only while the
-ranker stays stats-free -- a BM25/IDF ranker would break cross-shard comparability.)
+comparable and the top_k of the union is the TRUE global top_k. (GUARD: this holds only while
+the ranker stays stats-free -- a BM25/IDF ranker would break cross-shard comparability.)
 
 Docno on the wire (TASK-33): each shard engine (HttpSearchEngine) already returns globally
 unique docnos (it owns its burrow's cp<->docno map), and the corpus is partitioned, so the
@@ -24,7 +23,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 
 from isj_agent.engine.base import EngineError
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
+from isj_agent.protocol.search import Hit, SearchResponse
 
 
 class MultiShardSearchEngine:
@@ -73,12 +72,7 @@ class MultiShardSearchEngine:
         # higher cover-density score = better; stable sort keeps shard/rank order on ties.
         hits.sort(key=lambda h: h.score, reverse=True)
         merged = [h.model_copy(update={"rank": r}) for r, h in enumerate(hits[:top_k], 1)]
-        return SearchResponse(
-            total_matches=_sum_opt(r.total_matches for r in responses),
-            unjudged_matches=_sum_opt(r.unjudged_matches for r in responses),
-            atom_counts=_merge_atom_counts(responses),
-            results=merged,
-        )
+        return SearchResponse(results=merged)
 
     # -- SearchEngine Protocol --------------------------------------------------
 
@@ -111,25 +105,3 @@ class MultiShardSearchEngine:
             if body is not None:
                 return body
         return None
-
-
-def _sum_opt(values):
-    """Sum the non-None values; None if every value is None (Q3-consistent)."""
-    present = [v for v in values if v is not None]
-    return sum(present) if present else None
-
-
-def _merge_atom_counts(responses):
-    """Sum per-term atom counts across shards BY TERM (first-seen order); None if no shard
-    reports atom_counts."""
-    if not any(r.atom_counts is not None for r in responses):
-        return None
-    order: list[str] = []
-    totals: dict[str, int] = {}
-    for r in responses:
-        for ac in r.atom_counts or []:
-            if ac.term not in totals:
-                order.append(ac.term)
-                totals[ac.term] = 0
-            totals[ac.term] += ac.count
-    return [AtomCount(term=t, count=totals[t]) for t in order]

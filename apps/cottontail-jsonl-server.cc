@@ -94,6 +94,17 @@ bool is_loopback(const std::string &host) {
 // into every spec here -- deliberately NOT readable from the request JSON.
 size_t g_rank_threads = 1;
 
+// TASK-47 (concurrency safety net for the per-query posting-memory budget). The
+// budget is enforced PER query; reserve() does not account for two ranked queries
+// materializing their working sets at the same time. This mutex serializes the
+// ranked/materializing endpoints so at most ONE is in flight per server, keeping
+// the resident working set within the budget even if clients send concurrent
+// requests. The ISJ driver already issues one query per shard at a time, so this
+// is essentially never contended -- it makes the sequential assumption ENFORCED
+// rather than merely assumed. Non-materializing endpoints (get_document, healthz)
+// are deliberately NOT serialized, so the judger's document reads stay concurrent.
+std::mutex g_ranking_mutex;
+
 QuerySpec spec_from(const json &b, bool is_gcl) {
   QuerySpec s;
   s.is_gcl = is_gcl;
@@ -175,6 +186,11 @@ void usage(const char *prog) {
             << "                  default 0 = auto-budget: allowed hardware\n"
             << "                  threads / --threads, so handlers x rank-threads\n"
             << "                  never exceeds the hardware cap\n"
+            << "  --posting-budget-gb <g>  per-query posting-memory budget in GB\n"
+            << "                  (TASK-47): a ranked query whose posting working\n"
+            << "                  set would exceed this is rejected (bounced to the\n"
+            << "                  searcher); idle cache is evicted to fit one that\n"
+            << "                  won't. Default 24; 0 = unlimited (no guard)\n"
             << "  --token <t>     bearer token (prefer env COTTONTAIL_API_TOKEN)\n"
             << "  --no-auth       disable auth (loopback dev only)\n";
 }
@@ -185,6 +201,7 @@ int main(int argc, char **argv) {
   int port = 8080;
   int threads = 4;
   size_t rank_threads = 0; // 0 = auto-budget (see usage)
+  double posting_budget_gb = 24.0; // per-query posting-memory budget; 0 = unlimited
   bool no_auth = false;
 
   for (int i = 1; i < argc; i++) {
@@ -206,6 +223,8 @@ int main(int argc, char **argv) {
       threads = std::stoi(next());
     else if (a == "--rank-threads")
       rank_threads = std::stoul(next());
+    else if (a == "--posting-budget-gb")
+      posting_budget_gb = std::stod(next());
     else if (a == "--token")
       flag_token = next();
     else if (a == "--no-auth")
@@ -258,6 +277,13 @@ int main(int argc, char **argv) {
     std::cerr << "could not open burrow: " << error << "\n";
     return 2;
   }
+  // Per-query posting-memory budget (TASK-47): the search handlers reject a query
+  // whose posting working set would exceed this and evict idle cache to fit one
+  // that won't. Set on the shared Idx before cloning (clones share it). 0 =
+  // unlimited (no guard).
+  if (warren->idx() != nullptr)
+    warren->idx()->set_posting_budget(
+        static_cast<cottontail::addr>(posting_budget_gb * 1e9));
   // Fixed pool of read handles: the original + (threads-1) clones, built once at
   // startup, single-threaded (clone() auto-starts a started parent). Each clone
   // shares the idx cache but gets its own Txt fstream; see the threadpool spec.
@@ -366,6 +392,8 @@ int main(int argc, char **argv) {
       std::vector<Hit> hits;
       std::string e;
       cottontail::addr t0 = cottontail::now();
+      // Serialize ranked/materializing queries (one working set at a time).
+      std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
       bool ok = provider.with([&](std::shared_ptr<cottontail::Warren> &w) {
         return cottontail::jsonl::jsonl_query(w, spec, &hits, &e);
       });
@@ -397,6 +425,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_cover_search(w, spec, &resp,
@@ -425,6 +454,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_tiered_query_search(w, spec,
@@ -457,6 +487,7 @@ int main(int argc, char **argv) {
              }
              CoverResponse resp;
              std::string e;
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_multitext_tiered_search(
@@ -512,6 +543,9 @@ int main(int argc, char **argv) {
              }
              long n = 0;
              std::string e;
+             // count_matches builds + walks a query hopper (materializes the
+             // referenced terms), so it shares the ranking serialization.
+             std::lock_guard<std::mutex> rank_lock(g_ranking_mutex);
              bool ok = provider.with(
                  [&](std::shared_ptr<cottontail::Warren> &w) {
                    return cottontail::jsonl::jsonl_count(w, spec, &n, &e);
@@ -525,6 +559,7 @@ int main(int argc, char **argv) {
   std::cerr << "cottontail-jsonl-server listening on " << host << ":" << port
             << " burrow=" << burrow << " threads=" << threads
             << " rank_threads=" << rank_threads << (rank_auto ? " (auto)" : "")
+            << " posting_budget_gb=" << posting_budget_gb
             << (auth_required ? " (auth on)" : " (NO AUTH)") << "\n";
   if (!svr.listen(host, port)) {
     std::cerr << "bind failed on " << host << ":" << port << "\n";

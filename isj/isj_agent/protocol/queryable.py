@@ -120,8 +120,8 @@ class TieredQuery(Queryable):
     """An ordered precise->broad cascade of GCL cover tiers (TASK-19).
 
     Thin over the server's `tiered_query_search` tool: the cascade itself -- per-tier
-    ranking, cross-tier de-duplication, per-tier summaries, the union `atom_counts`,
-    and the exact distinct match count -- runs in the C++ handler. This class only
+    ranking, cross-tier de-duplication, and per-tier summaries -- runs in the C++
+    handler. This class only
     carries the tiers, exposes the tool schema + trace forms, and forwards `execute`
     to `engine.tiered_search`. `tiers` is a tuple so the dataclass stays frozen and
     hashable (parity with CoverQuery); the trace/JSON forms re-expose it as a list.
@@ -142,8 +142,8 @@ class TieredQuery(Queryable):
                     "found by an earlier (tighter) tier is never re-listed by a later "
                     "(looser) one, and tighter tiers outrank broader ones. Returns the NEW "
                     "documents the cascade surfaces, each already graded (0-3) with a reason "
-                    "and a summary from the tier that surfaced it, plus the union atom_counts "
-                    "and the count of distinct documents matched across all tiers."
+                    "and a summary from the tier that surfaced it, plus a count of results "
+                    "at those ranks that were already judged by earlier queries."
                 ),
                 "parameters": {
                     "type": "object",
@@ -216,8 +216,8 @@ class MultiTextProgram(Queryable):
                     "compiled server-side; compile errors are returned as the tool "
                     "result for you to fix. Returns the NEW documents the tier "
                     "cascade surfaces, each already graded (0-3) with a reason and a "
-                    "summary from the tier that surfaced it, plus per-term "
-                    "atom_counts and the count of distinct documents matched."
+                    "summary from the tier that surfaced it, plus a count of results "
+                    "at those ranks that were already judged by earlier queries."
                 ),
                 "parameters": {
                     "type": "object",

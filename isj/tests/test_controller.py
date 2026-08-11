@@ -8,28 +8,23 @@ from isj_agent.controller import Controller
 from isj_agent.engine.base import EngineError
 from isj_agent.engine.fake import FakeEngine
 from isj_agent.protocol.queryable import CoverQuery, TieredQuery
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse, Verdict
+from isj_agent.protocol.search import Hit, SearchResponse, Verdict
 
 
 # --- builders: a SearchResponse from (cp, grade) pairs + the matching docs map ----
 # The Judger grade for a cp is encoded in that cp's document body ("[[G:n]]"), so the
 # StubJudger is a pure function of its input and order-alignment is observable.
 
-def build(cp_grades, total=None):
+def build(cp_grades):
     hits = [Hit(rank=i, score=100.0 - i, id=str(cp), summary=f"sum-{cp}")
             for i, (cp, _) in enumerate(cp_grades, 1)]
-    resp = SearchResponse(
-        total_matches=total if total is not None else len(hits),
-        unjudged_matches=len(hits),
-        atom_counts=[AtomCount(term="x", count=1)],
-        results=hits,
-    )
+    resp = SearchResponse(results=hits)
     docs = {str(cp): f"body-{cp} [[G:{g}]]" for cp, g in cp_grades}
     return resp, docs
 
 
 def dry():
-    return SearchResponse(total_matches=0, unjudged_matches=0, atom_counts=[], results=[])
+    return SearchResponse(results=[])
 
 
 class StubSearcher:
@@ -321,15 +316,14 @@ def test_whole_wave_failure_aborts_with_partial_result():
     assert result.ranked_list.entries == []
 
 
-def test_result_payload_has_atom_counts_and_ordered_fields():
-    resp, docs = build([(10, 2), (20, 1)])  # build() gives atom_counts=[{term:x,count:1}]
+def test_result_payload_has_query_echo_and_ordered_fields():
+    resp, docs = build([(10, 2), (20, 1)])
     ctl = _ctl(["(^ q1)"], [resp], docs, nonrelevant_streak=9, max_queries=2)
     ctl.run("intent", intent_budget=100)
     payload = ctl.searcher.tool_results[-1]  # query 1's feedback STRING, captured at query 2's propose
-    # the Controller wraps the coach report with the query echo, coverage, and atom counts
+    # the Controller wraps the coach report with the query echo and coverage
     assert "Your query: (^ q1)" in payload
     assert "Coverage: judged 2 results this query" in payload
-    assert "Atom matches: x=1" in payload
     # the shown docs appear (grade 2 and grade 1, with their assessor reasons)
     assert "grade=2" in payload and "grade=1" in payload and "assessor:" in payload
 

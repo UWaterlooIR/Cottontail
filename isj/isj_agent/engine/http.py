@@ -23,7 +23,7 @@ import httpx
 
 from isj_agent.docno_map import DocnoMap
 from isj_agent.engine.base import EngineError
-from isj_agent.protocol.search import AtomCount, Hit, SearchResponse
+from isj_agent.protocol.search import Hit, SearchResponse
 
 
 def _server_error(r: httpx.Response) -> str:
@@ -117,7 +117,7 @@ class HttpSearchEngine:
 
     def _hydrate(self, raw: dict) -> SearchResponse:
         """Build the agent-facing (docno-keyed) SearchResponse from the C++ server's
-        cp-keyed JSON: map every hit's cp -> docno; pass the diagnostics through."""
+        cp-keyed JSON: map every hit's cp -> docno."""
         results = [
             Hit(
                 rank=h["rank"],
@@ -127,13 +127,7 @@ class HttpSearchEngine:
             )
             for h in raw.get("results", [])
         ]
-        atoms = raw.get("atom_counts")
-        return SearchResponse(
-            total_matches=raw.get("total_matches"),
-            unjudged_matches=raw.get("unjudged_matches"),
-            atom_counts=[AtomCount(**a) for a in atoms] if atoms is not None else None,
-            results=results,
-        )
+        return SearchResponse(results=results)
 
     def _post(self, path: str, body: dict, what: str) -> dict:
         try:

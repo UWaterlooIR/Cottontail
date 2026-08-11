@@ -182,7 +182,7 @@ def _activity_lines(ev: TraceEvent | LiveMarker) -> list[str]:
         out.append(f"  {ts}  -> request: {d['query']!r} (exclude={len(d.get('exclude', []))})")
     elif t == "search":
         out.append(
-            f"  {ts}  search {d['query']!r}: total={d.get('total_matches')} "
+            f"  {ts}  search {d['query']!r}: "
             f"returned={len(d.get('results', []))} ({d['duration_ms']:.0f} ms)"
         )
     elif t == "judge":

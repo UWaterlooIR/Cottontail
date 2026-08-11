@@ -19,13 +19,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class AtomCount(BaseModel):
-    """Per query-leaf occurrence count (cover_search atom_counts, A2)."""
-
-    term: str
-    count: int  # total OCCURRENCES of the resolved feature in the corpus
-
-
 class Hit(BaseModel):
     """One ranked document in a cover_search response (A1)."""
 
@@ -36,22 +29,20 @@ class Hit(BaseModel):
 
 
 class SearchResponse(BaseModel):
-    """The cover_search response aggregate (A1 + A2, the enriched shape).
+    """The cover_search response aggregate: the ranked results (A1).
 
     extra="forbid": a server that adds an unexpected field fails LOUDLY (catches
     contract drift) rather than silently dropping it. The tradeoff is strictness
     over forward-compatibility -- chosen deliberately for the engine response so
     the Python contract and the C++ server stay in lock-step.
+
+    Every engine presents a UNIFORM surface -- just the ranked results. The
+    controller derives all Searcher feedback (coverage, grades) from these plus
+    the Judger's verdicts.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    # These three are OPTIONAL diagnostics: an engine that does not report them
-    # (e.g. Lucindri) omits them (None), and the controller neither fakes nor
-    # surfaces them. Cottontail's cover_search always fills all three.
-    total_matches: int | None = None  # documents matching the query (ignores exclude)
-    unjudged_matches: int | None = None  # matches not in the exclude set
-    atom_counts: list[AtomCount] | None = None
     results: list[Hit]
 
 
